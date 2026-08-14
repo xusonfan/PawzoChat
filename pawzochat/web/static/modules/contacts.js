@@ -81,7 +81,7 @@ async function renderContacts() {
   </div>`;
 
   const listHtml = state.personas.map(p => {
-    const sub = [p.llm_provider, p.llm_model].filter(Boolean).join(" · ") || "未配置";
+    const sub = p.signature?.trim() || "这个人很神秘，什么都没写";
     const avUrl = personaAvatarUrl(p);
     return `<div class="card-row persona-row" onclick="PawzoChat.pushPage('personaDetail',{personaId:'${p.id}'})">
       ${avatarHtml(p.name, "", avUrl)}
@@ -465,7 +465,7 @@ async function renderPersonaEdit(data) {
   // pawzochat/transport/models.py:PROACTIVE_DEFAULTS (the Python side is the
   // source of truth; duplicated here only so the new-persona form can render
   // before any API call).
-  let p = { id: "", name: "", llm_provider: "", llm_model: "", temperature: 1.0, max_tokens: 2000,
+  let p = { id: "", name: "", signature: "", llm_provider: "", llm_model: "", temperature: 1.0, max_tokens: 2000,
             character_prompt: "", output_examples: "", system_instructions: "",
             emoji_enabled: false, emoji_send_probability: 25, emoji_group: "", has_avatar: false,
             memory: { enabled: true, max_memories: 50, include_in_prompt: true, trigger_rounds: 10 }, memory_count: 0,
@@ -595,6 +595,7 @@ async function renderPersonaEdit(data) {
         </div>
       </div>
       <div class="form-group"><div class="form-row"><label>角色名称</label><input id="pe-name" value="${esc(p.name)}" placeholder="输入角色名称"></div></div>
+      <div class="form-group"><div class="form-row"><label>人物签名</label><input id="pe-signature" value="${esc(p.signature || "")}" maxlength="100" placeholder="展示在通讯录中的一句话"></div></div>
     </div>
     <div class="sub-tabs" role="tablist">
       <button type="button" class="sub-tab active" data-petab="detail" onclick="PawzoChat.switchPersonaEditTab('detail')">角色详情</button>
@@ -1012,6 +1013,7 @@ export async function savePersona(isNew) {
 
   const body = {
     name,
+    signature: $("pe-signature").value.trim(),
     llm_provider: $("pe-provider").value,
     llm_model: $("pe-model").value,
     temperature: parseFloat($("pe-temp").value),

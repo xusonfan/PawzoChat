@@ -400,6 +400,7 @@ class ConfigManager:
             result[pid] = Persona(
                 id=pid,
                 name=name,
+                signature=str(pdata.get("signature", "") or ""),
                 character_prompt=character,
                 output_examples=examples,
                 system_instructions=system,

@@ -103,6 +103,13 @@ def _validate_persona_name(name: str) -> str | None:
     return None
 
 
+def _validate_signature(value: object) -> tuple[str, str | None]:
+    signature = str(value or "").strip()
+    if len(signature) > 100:
+        return "", "人物签名过长（最多 100 个字符）"
+    return signature, None
+
+
 def _avatar_path(persona_id: str) -> str:
     return str(CHATS_DIR / persona_id / "avatar.png")
 
@@ -215,6 +222,7 @@ def list_personas():
         result.append({
             "id": pid,
             "name": p.name,
+            "signature": p.signature,
             "llm_provider": p.llm_provider,
             "llm_model": p.llm_model,
             "temperature": p.temperature,
@@ -247,6 +255,7 @@ def get_persona(persona_id: str):
     return jsonify({
         "id": p.id,
         "name": p.name,
+        "signature": p.signature,
         "llm_provider": p.llm_provider,
         "llm_model": p.llm_model,
         "temperature": p.temperature,
@@ -279,6 +288,9 @@ def create_persona():
     err = _validate_persona_name(name)
     if err:
         return jsonify({"error": err}), 400
+    signature, signature_err = _validate_signature(data.get("signature", ""))
+    if signature_err:
+        return jsonify({"error": signature_err}), 400
 
     with app.config.lock:
         personas_cfg = app.config.get("personas", default={})
@@ -348,6 +360,7 @@ def create_persona():
 
         personas_cfg[persona_id] = {
             "name": name,
+            "signature": signature,
             "llm_provider": data.get("llm_provider", ""),
             "llm_model": data.get("llm_model", ""),
             "temperature": float(data.get("temperature", 1.0)),
@@ -391,8 +404,16 @@ def update_persona(persona_id: str):
             if _name_exists(personas_cfg, new_name, exclude_id=persona_id):
                 return jsonify({"error": f"角色名称「{new_name}」已存在"}), 409
 
+        signature = cfg.get("signature", "")
+        if "signature" in data:
+            signature, signature_err = _validate_signature(data["signature"])
+            if signature_err:
+                return jsonify({"error": signature_err}), 400
+
         if "name" in data:
             cfg["name"] = new_name
+        if "signature" in data:
+            cfg["signature"] = signature
         if "llm_provider" in data:
             cfg["llm_provider"] = data["llm_provider"]
         if "llm_model" in data:

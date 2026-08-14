@@ -286,6 +286,7 @@ class Account:
 class Persona:
     id: str = ""
     name: str = ""
+    signature: str = ""
     character_prompt: str = ""
     output_examples: str = ""
     system_instructions: str = ""
