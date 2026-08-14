@@ -20,6 +20,26 @@ import { state, $, content, sidebar, topTitle, topBack, topActions } from "./sta
 const tabRenderers = {};
 const pageRenderers = {};
 
+const _historySession = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const _historyKey = "pawzoNavigation";
+let _historyIndex = 0;
+
+function _browserRoute() {
+  return {
+    session: _historySession,
+    index: _historyIndex,
+    tab: state.currentTab,
+    depth: state.pageStack.length,
+  };
+}
+
+function _writeBrowserRoute(mode) {
+  if (isDesktop()) return;
+  if (mode === "push") _historyIndex += 1;
+  const browserState = { ...(history.state || {}), [_historyKey]: _browserRoute() };
+  history[mode === "push" ? "pushState" : "replaceState"](browserState, "", location.href);
+}
+
 export function registerTabRenderer(tab, fn) {
   tabRenderers[tab] = fn;
 }
@@ -239,6 +259,7 @@ export function switchTab(tab) {
       renderCurrentTab();
       content().scrollTop = state.tabScrollPos[tab] || 0;
     }
+    _writeBrowserRoute("replace");
   }
 }
 
@@ -256,11 +277,11 @@ export function pushPage(name, data) {
     state.pageStack.push({ name, data, scrollTop: content().scrollTop });
     $("tab-bar").classList.add("hide");
     renderPage(name, data);
+    _writeBrowserRoute("push");
   }
 }
 
-export function goBack() {
-  if (state.pageStack.length === 0) return;
+function _renderPreviousPage() {
   state.pageStack.pop();
   if (state.pageStack.length === 0) {
     if (isDesktop()) {
@@ -278,6 +299,36 @@ export function goBack() {
     renderPage(prev.name, prev.data);
   }
 }
+
+export function goBack() {
+  if (state.pageStack.length === 0) return;
+  const route = history.state?.[_historyKey];
+  if (!isDesktop() && route?.session === _historySession) {
+    history.back();
+    return;
+  }
+  _renderPreviousPage();
+}
+
+window.addEventListener("popstate", event => {
+  if (isDesktop() || state.pageStack.length === 0) return;
+
+  const route = event.state?.[_historyKey];
+  const targetIndex = route?.session === _historySession
+    ? route.index
+    : Math.max(0, _historyIndex - 1);
+  const steps = Math.max(1, _historyIndex - targetIndex);
+  for (let i = 0; i < steps && state.pageStack.length > 0; i += 1) {
+    _renderPreviousPage();
+  }
+  _historyIndex = targetIndex;
+
+  if (route?.session !== _historySession) {
+    // The root entry may predate this module. Keep the user inside the app for
+    // the first Android back action, then let a later back leave from the root.
+    _writeBrowserRoute("replace");
+  }
+});
 
 /* ---- Layout change handler (desktop ↔ mobile transition) ---- */
 
