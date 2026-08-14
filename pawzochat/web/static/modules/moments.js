@@ -22,6 +22,8 @@ import { api } from "./api.js";
 import { state, $, content } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
 import { setTopBar, goBack, pushPage, registerPageRenderer } from "./navigation.js";
+import { renderTextMedia } from "./message_content.js";
+import { buildMomentActionsPopHtml, buildMomentMetaHtml } from "./moments_item_chrome.js";
 
 const BASE = () => window.PAWZOCHAT_BASE || "";
 
@@ -106,6 +108,16 @@ function _avatarBlock(author, label) {
 
 function _imageUrl(momentId, filename) {
   return `${BASE()}/api/moments/images/${encodeURIComponent(momentId)}/${encodeURIComponent(filename)}`;
+}
+
+/** Reply/comment body: shared image parser + lightbox; small thumbs via CSS. */
+function _replyTextHtml(text) {
+  return renderTextMedia(text, {
+    imageClass: "moments-reply-image",
+    inline: true,
+    preserveNewlines: true,
+    stopPropagation: true,
+  });
 }
 
 /* ---- List page ---- */
@@ -300,7 +312,7 @@ function _momentHtml(m) {
           ? `<button class="moments-reply-more" title="操作" onclick="event.stopPropagation();PawzoChat.momentsReplyMenu(event,'${esc(m.id)}','${rid}')">${iconHtml("ri-more-fill")}</button>`
           : "";
         return `<div class="moments-reply${activeCls}" data-rid="${rid}" onclick="event.stopPropagation();PawzoChat.momentsReplyTo('${esc(m.id)}','${rid}')">
-          <span class="moments-reply-body"><span class="moments-reply-author">${prefix}</span><span class="moments-reply-sep">：</span><span class="moments-reply-text">${esc(r.text || "")}</span></span>
+          <span class="moments-reply-body"><span class="moments-reply-author">${prefix}</span><span class="moments-reply-sep">：</span><span class="moments-reply-text">${_replyTextHtml(r.text || "")}</span></span>
           ${ownerActions}
         </div>`;
       }).join("")}
@@ -324,12 +336,7 @@ function _momentHtml(m) {
         <div class="moments-author">${esc(label)}</div>
         ${textHtml}
         ${imgsHtml}
-        <div class="moments-meta">
-          <span class="moments-time">${esc(time)}</span>
-          <button class="moments-more" title="操作" onclick="event.stopPropagation();PawzoChat.momentsItemMenu(event, '${esc(m.id)}')">
-            ${iconHtml("ri-more-fill")}
-          </button>
-        </div>
+        ${buildMomentMetaHtml(m.id, time, { canDelete: m.can_delete === true })}
         ${interactBlockHtml}
         ${composerHtml}
       </div>
@@ -391,33 +398,15 @@ export function momentsItemMenu(event, mid) {
   const moment = _list.items.find(m => m.id === mid);
   if (!moment) return;
   const liked = !!(moment.likes || []).find(l => l.author === "user");
-  const ownerActions = `
-    ${moment.can_edit === true ? `
-      <span class="map-divider"></span>
-      <button class="map-btn" onclick="PawzoChat.momentsEdit('${esc(mid)}')">
-        ${iconHtml("ri-edit-line")}<span>编辑</span>
-      </button>` : ""}
-    ${moment.can_delete === true ? `
-      <span class="map-divider"></span>
-      <button class="map-btn map-btn-danger" onclick="PawzoChat.momentsDelete('${esc(mid)}')">
-        ${iconHtml("ri-delete-bin-line")}<span>删除</span>
-      </button>` : ""}
-  `;
 
   const el = document.createElement("div");
   el.className = "moments-actions-pop";
   el.setAttribute("data-mid", mid);
   el.addEventListener("click", e => e.stopPropagation());
-  el.innerHTML = `
-    <button class="map-btn" onclick="PawzoChat.momentsLikeToggle('${esc(mid)}')">
-      ${iconHtml(liked ? "ri-heart-fill" : "ri-heart-line")}<span>${liked ? "已赞" : "赞"}</span>
-    </button>
-    <span class="map-divider"></span>
-    <button class="map-btn" onclick="PawzoChat.momentsOpenComposer('${esc(mid)}')">
-      ${iconHtml("ri-chat-3-line")}<span>评论</span>
-    </button>
-    ${ownerActions}
-  `;
+  el.innerHTML = buildMomentActionsPopHtml(mid, {
+    canEdit: moment.can_edit === true,
+    liked,
+  });
   document.body.appendChild(el);
 
   // Prefer placing the pill to the left of the "..." button — moments live

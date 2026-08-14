@@ -17,9 +17,10 @@ data/plugins/*/cache/**
 data/plugins/*/logs/
 data/plugins/*/logs/**
 key/
-# Local scratch under tests/ stays ignored; formal unit tests (test_*.py) are tracked.
+# Local scratch under tests/ stays ignored; formal unit tests (test_*.py / test_*.mjs) are tracked.
 tests/*
 !tests/test_*.py
+!tests/test_*.mjs
 test/
 scripts/
 *.b64

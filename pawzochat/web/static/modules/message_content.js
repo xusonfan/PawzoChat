@@ -151,21 +151,45 @@ export function summarizeConversationMessage(message, maxLength = 60) {
   return summary.slice(0, maxLength);
 }
 
-export function renderTextMedia(text, { textClass, imageClass }) {
+/**
+ * Render parseTextMedia segments to safe HTML.
+ *
+ * Options (all optional; defaults keep chat/history-edit behaviour):
+ * - textClass / imageClass: wrapper classes
+ * - inline: no text wrappers; images use <span> (for moments comments)
+ * - preserveNewlines: convert \n to <br> in text segments
+ * - stopPropagation: stop click bubbling before openImagePreview / fallback link
+ */
+export function renderTextMedia(text, {
+  textClass,
+  imageClass,
+  inline = false,
+  preserveNewlines = false,
+  stopPropagation = false,
+} = {}) {
+  const clickPrefix = stopPropagation ? "event.stopPropagation();" : "";
+  const fallbackClick = stopPropagation
+    ? ` onclick="event.stopPropagation()"`
+    : "";
+  const wrapTag = inline ? "span" : "div";
+
   return parseTextMedia(text).map(segment => {
     if (segment.type === "text") {
+      let body = esc(segment.text);
+      if (preserveNewlines) body = body.replace(/\n/g, "<br>");
+      if (inline) return body;
       return segment.text.trim()
-        ? `<div class="${textClass}">${esc(segment.text)}</div>`
+        ? `<div class="${textClass}">${body}</div>`
         : "";
     }
 
     const url = escAttr(segment.url);
     const alt = escAttr(segment.alt || "图片");
-    return `<div class="${imageClass} linked-image">
+    return `<${wrapTag} class="${imageClass} linked-image">
       <img src="${url}" alt="${alt}" loading="lazy" data-message-media
-        onclick="PawzoChat.openImagePreview(this.src)"
+        onclick="${clickPrefix}PawzoChat.openImagePreview(this.src)"
         onerror="this.hidden=true;this.nextElementSibling.hidden=false">
-      <a class="linked-image-fallback" href="${url}" target="_blank" rel="noopener noreferrer" hidden>图片加载失败，打开原链接</a>
-    </div>`;
+      <a class="linked-image-fallback" href="${url}" target="_blank" rel="noopener noreferrer" hidden${fallbackClick}>图片加载失败，打开原链接</a>
+    </${wrapTag}>`;
   }).join("");
 }

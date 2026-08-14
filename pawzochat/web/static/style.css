@@ -2702,10 +2702,52 @@ select.qs-field-input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-top: 10px;
 }
-.moments-time { font-size: 12px; color: var(--text-3); }
+.moments-meta-start {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.moments-time {
+  font-size: 12px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+/* Small trash next to timestamp (owner only); keeps body text free of action clutter */
+.moments-delete {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 6px;
+  opacity: 0.85;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.moments-delete:hover,
+.moments-delete:focus-visible {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text-2);
+  outline: none;
+}
+.moments-delete .ui-icon {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
 .moments-more {
+  flex: 0 0 auto;
   border: none;
   background: transparent;
   color: var(--text-3);
@@ -2713,7 +2755,12 @@ select.qs-field-input {
   padding: 4px 6px;
   border-radius: 6px;
 }
-.moments-more:hover { background: var(--bg-hover); color: var(--text-2); }
+.moments-more:hover,
+.moments-more:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-2);
+  outline: none;
+}
 .moments-more .ui-icon { width: 18px; height: 18px; fill: currentColor; }
 
 .moments-interact {
@@ -2738,6 +2785,30 @@ select.qs-field-input {
 .moments-reply-author { color: var(--primary-dark, var(--primary)); font-weight: 500; }
 .moments-reply-sep { color: var(--text-3); }
 .moments-reply-text { color: var(--text-1); }
+/* Comment/reply inline images (emoji-style URLs, markdown images, etc.) */
+.moments-reply-image {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: min(96px, 100%);
+  margin: 2px 0;
+}
+.moments-reply-image img {
+  display: block;
+  max-width: min(96px, 100%);
+  max-height: 96px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--bg-hover);
+}
+.moments-reply-image .linked-image-fallback {
+  max-width: min(120px, 100%);
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
 .moments-reply-more {
   flex: 0 0 auto;
   width: 20px; height: 20px;
