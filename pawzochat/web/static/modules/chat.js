@@ -30,6 +30,11 @@ let _pendingImages = [];
 let _pendingFiles = [];
 let _pendingQuote = "";
 
+let _mobileViewportReady = false;
+let _viewportSyncFrame = 0;
+let _pinBottomForKeyboard = false;
+let _keyboardBlurTimer = 0;
+
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
 const _MSG_FRAGMENT = "lxdxywi";
@@ -336,15 +341,71 @@ function _pinBottomAfterMediaLoad(el) {
 }
 
 function _scrollAfterInsert(el) {
-  el.scrollTop = el.scrollHeight;
+  const pin = () => { el.scrollTop = el.scrollHeight; };
+  pin();
+  requestAnimationFrame(() => {
+    pin();
+    requestAnimationFrame(pin);
+  });
+
   const lastRow = el.lastElementChild;
   if (!lastRow) return;
   for (const img of lastRow.querySelectorAll("img")) {
     if (!img.complete) {
-      img.addEventListener("load", () => { el.scrollTop = el.scrollHeight; }, { once: true });
-      img.addEventListener("error", () => { el.scrollTop = el.scrollHeight; }, { once: true });
+      img.addEventListener("load", pin, { once: true });
+      img.addEventListener("error", pin, { once: true });
     }
   }
+}
+
+function _syncMobileViewport() {
+  if (_viewportSyncFrame) cancelAnimationFrame(_viewportSyncFrame);
+  _viewportSyncFrame = requestAnimationFrame(() => {
+    _viewportSyncFrame = 0;
+    if (isDesktop()) {
+      document.documentElement.style.removeProperty("--app-viewport-height");
+      return;
+    }
+
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    document.documentElement.style.setProperty(
+      "--app-viewport-height",
+      `${Math.round(viewportHeight)}px`,
+    );
+
+    if (_pinBottomForKeyboard && document.activeElement === $("chat-input")) {
+      const msgsEl = $("chat-msgs");
+      if (msgsEl) _scrollAfterInsert(msgsEl);
+    }
+  });
+}
+
+function _setupMobileChatViewport(chatInput) {
+  if (!_mobileViewportReady) {
+    _mobileViewportReady = true;
+    window.addEventListener("resize", _syncMobileViewport, { passive: true });
+    window.visualViewport?.addEventListener("resize", _syncMobileViewport, { passive: true });
+    window.visualViewport?.addEventListener("scroll", _syncMobileViewport, { passive: true });
+  }
+
+  chatInput.addEventListener("focus", () => {
+    if (isDesktop()) return;
+    if (_keyboardBlurTimer) clearTimeout(_keyboardBlurTimer);
+    _pinBottomForKeyboard = true;
+    _syncMobileViewport();
+    const msgsEl = $("chat-msgs");
+    if (msgsEl) _scrollAfterInsert(msgsEl);
+  });
+
+  chatInput.addEventListener("blur", () => {
+    if (_keyboardBlurTimer) clearTimeout(_keyboardBlurTimer);
+    _keyboardBlurTimer = window.setTimeout(() => {
+      _pinBottomForKeyboard = false;
+      _syncMobileViewport();
+    }, 200);
+  });
+
+  _syncMobileViewport();
 }
 
 /* ---- Quoted-message bubble + long-press quote ---- */
@@ -607,6 +668,7 @@ async function renderChatWindow(data) {
 
   const chatInput = $("chat-input");
   if (chatInput) {
+    _setupMobileChatViewport(chatInput);
     chatInput.addEventListener("paste", (e) => {
       const items = e.clipboardData?.items;
       if (!items) return;
@@ -713,6 +775,10 @@ export function onChatInput() {
   inp.style.height = "auto";
   inp.style.height = Math.min(inp.scrollHeight, 100) + "px";
   btn.classList.toggle("active", inp.value.trim().length > 0 || _pendingImages.length > 0 || _pendingFiles.length > 0);
+  if (_pinBottomForKeyboard && document.activeElement === inp) {
+    const msgsEl = $("chat-msgs");
+    if (msgsEl) requestAnimationFrame(() => _scrollAfterInsert(msgsEl));
+  }
 }
 
 export function onChatKey(e) {
@@ -829,9 +895,8 @@ export async function sendChat() {
     </div>`;
   }
   const quoteToSend = _pendingQuote;
-  const wasAtBottom = _isNearBottom(msgsEl);
   msgsEl.insertAdjacentHTML("beforeend", `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div>${userBubble}${renderQuoteBox(quoteToSend)}</div></div>`);
-  if (wasAtBottom) _scrollAfterInsert(msgsEl);
+  _scrollAfterInsert(msgsEl);
 
   const imagesToSend = [..._pendingImages];
   const filesToSend = [..._pendingFiles];
@@ -1091,12 +1156,11 @@ export async function sendSticker(stickerUrl) {
   const _uName = state.profile?.name || "我";
   const _uAvUrl = state.profile?.has_avatar ? `${_base}/api/profile/avatar` : "";
 
-  const wasAtBottom = _isNearBottom(msgsEl);
   const imgSrc = _base + stickerUrl;
   msgsEl.insertAdjacentHTML("beforeend",
     `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div><div class="msg-image"><img src="${esc(imgSrc)}" alt="sticker" onclick="PawzoChat.openImagePreview(this.src)"></div></div></div>`
   );
-  if (wasAtBottom) _scrollAfterInsert(msgsEl);
+  _scrollAfterInsert(msgsEl);
 
   try {
     const res = await api.post(`/api/conversations/${chatPersonaId}/messages`, { sticker_url: stickerUrl });
