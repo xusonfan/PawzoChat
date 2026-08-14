@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 import { avatarHtml, personaAvatarUrl, profileAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
-import { renderTextMedia } from "./message_content.js";
+import { renderTextMedia, summarizeConversationMessage } from "./message_content.js";
 import { api } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
@@ -35,6 +35,14 @@ let _mobileViewportReady = false;
 let _viewportSyncFrame = 0;
 let _pinBottomForKeyboard = false;
 let _keyboardBlurTimer = 0;
+
+const _chatScrollState = {
+  el: null,
+  followBottom: true,
+  suppressScroll: false,
+  mediaEpoch: 0,
+  alignFrame: 0,
+};
 
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
@@ -146,7 +154,7 @@ async function renderChatList() {
     const pname = c.persona_name || c.persona_id;
     const persona = state.personas.find(pp => pp.id === c.persona_id);
     const avUrl = personaAvatarUrl(persona);
-    const preview = c.last_message ? c.last_message.text : "";
+    const preview = summarizeConversationMessage(c.last_message);
     const time = c.last_message ? formatTime(c.last_message.timestamp) : "";
     const wechatBadge = c.wechat_linked
       ? `<span class="wechat-badge"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg></span>` : "";
@@ -234,7 +242,7 @@ function renderContentBlocks(content, renderLinkedImages = false) {
   if (emojiBlocks.length > 0) {
     const base = window.PAWZOCHAT_BASE || "";
     return emojiBlocks
-      .map(b => `<div class="msg-emoji"><img src="${esc(base + b.url)}" alt="emoji" onclick="PawzoChat.openImagePreview(this.src)"></div>`)
+      .map(b => `<div class="msg-emoji"><img src="${esc(base + b.url)}" alt="emoji" data-message-media onclick="PawzoChat.openImagePreview(this.src)"></div>`)
       .join("");
   }
   const base = window.PAWZOCHAT_BASE || "";
@@ -249,7 +257,13 @@ function renderContentBlocks(content, renderLinkedImages = false) {
         src = base + "/api/images/" + chatPersonaId + "/" + filename;
       }
       if (src) {
-        parts += `<div class="msg-image"><img src="${esc(src)}" alt="image" loading="lazy" onclick="PawzoChat.openImagePreview(this.src)"></div>`;
+        const safeSrc = escAttr(src);
+        parts += `<div class="msg-image linked-image">
+          <img src="${safeSrc}" alt="image" loading="lazy" data-message-media
+            onclick="PawzoChat.openImagePreview(this.src)"
+            onerror="this.hidden=true;this.nextElementSibling.hidden=false">
+          <a class="linked-image-fallback" href="${safeSrc}" target="_blank" rel="noopener noreferrer" hidden>图片加载失败，打开原链接</a>
+        </div>`;
       }
     } else if (b.type === "file") {
       const diskName = (b.path || "").split(/[\\/]/).pop() || "";
@@ -330,37 +344,57 @@ function _isNearBottom(el) {
   return el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
 }
 
-// After a full re-render, images (message images/emoji) that haven't finished
-// loading have height 0 before load; a single scrollTop=scrollHeight lands at
-// the bottom of the "collapsed list". Once the images load and push the
-// content taller, the viewport ends up stuck above the real bottom (appears
-// stuck at the previous message). So attach a one-shot load/error listener to
-// each unfinished image and re-pin to the bottom when it finishes loading.
-function _pinBottomAfterMediaLoad(el) {
-  for (const img of el.querySelectorAll("img")) {
-    if (img.complete) continue;
-    const repin = () => { el.scrollTop = el.scrollHeight; };
-    img.addEventListener("load", repin, { once: true });
-    img.addEventListener("error", repin, { once: true });
+function _bindChatScroll(el) {
+  if (_chatScrollState.alignFrame) {
+    cancelAnimationFrame(_chatScrollState.alignFrame);
+    _chatScrollState.alignFrame = 0;
+  }
+  _chatScrollState.el = el;
+  _chatScrollState.followBottom = true;
+  _chatScrollState.suppressScroll = false;
+  _chatScrollState.mediaEpoch += 1;
+  el.addEventListener("scroll", () => {
+    if (_chatScrollState.el !== el || _chatScrollState.suppressScroll) return;
+    _chatScrollState.followBottom = _isNearBottom(el);
+  }, { passive: true });
+}
+
+function _alignChatBottom(el) {
+  if (_chatScrollState.el !== el || !_chatScrollState.followBottom) return;
+  el.scrollTop = el.scrollHeight;
+}
+
+function _scheduleChatBottom(el) {
+  if (_chatScrollState.el !== el || !_chatScrollState.followBottom || _chatScrollState.alignFrame) return;
+  _chatScrollState.alignFrame = requestAnimationFrame(() => {
+    _chatScrollState.alignFrame = 0;
+    _alignChatBottom(el);
+  });
+}
+
+// Message renderers mark layout-affecting images with data-message-media. The
+// chat layer owns the follow decision: each image gets bounded one-shot
+// listeners, while cached images are settled on the next frame as well.
+function _watchMessageMedia(root, el, epoch = _chatScrollState.mediaEpoch) {
+  for (const img of root.querySelectorAll("img[data-message-media]")) {
+    const settled = () => {
+      if (_chatScrollState.el === el && _chatScrollState.mediaEpoch === epoch) {
+        _scheduleChatBottom(el);
+      }
+    };
+    if (img.complete) {
+      requestAnimationFrame(settled);
+    } else {
+      img.addEventListener("load", settled, { once: true });
+      img.addEventListener("error", settled, { once: true });
+    }
   }
 }
 
-function _scrollAfterInsert(el) {
-  const pin = () => { el.scrollTop = el.scrollHeight; };
-  pin();
-  requestAnimationFrame(() => {
-    pin();
-    requestAnimationFrame(pin);
-  });
-
-  const lastRow = el.lastElementChild;
-  if (!lastRow) return;
-  for (const img of lastRow.querySelectorAll("img")) {
-    if (!img.complete) {
-      img.addEventListener("load", pin, { once: true });
-      img.addEventListener("error", pin, { once: true });
-    }
-  }
+function _scrollAfterInsert(el, insertedRoot = el.lastElementChild) {
+  _alignChatBottom(el);
+  requestAnimationFrame(() => _scheduleChatBottom(el));
+  if (insertedRoot) _watchMessageMedia(insertedRoot, el);
 }
 
 function _syncMobileViewport() {
@@ -674,6 +708,9 @@ async function renderChatWindow(data) {
 
   content().style.overflow = "hidden";
 
+  const messagesEl = $("chat-msgs");
+  if (messagesEl) _bindChatScroll(messagesEl);
+
   const chatInput = $("chat-input");
   if (chatInput) {
     _setupMobileChatViewport(chatInput);
@@ -746,8 +783,18 @@ function renderMessages(messages) {
   if (!el) return;
   _closeQuotePop();  // a full in-place re-render (e.g. SSE refresh) detaches the popup anchor
 
+  const followBottom = _chatScrollState.el !== el || _chatScrollState.followBottom;
+  const previousScrollTop = el.scrollTop;
+  const mediaEpoch = ++_chatScrollState.mediaEpoch;
+  _chatScrollState.suppressScroll = true;
+
   if (messages.length === 0) {
     el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="empty-text">开始对话吧</div></div>`;
+    requestAnimationFrame(() => {
+      if (_chatScrollState.el === el && _chatScrollState.mediaEpoch === mediaEpoch) {
+        _chatScrollState.suppressScroll = false;
+      }
+    });
     return;
   }
 
@@ -785,8 +832,15 @@ function renderMessages(messages) {
   }
   el.innerHTML = html;
   requestAnimationFrame(() => {
-    el.scrollTop = el.scrollHeight;
-    _pinBottomAfterMediaLoad(el);
+    if (_chatScrollState.el !== el || _chatScrollState.mediaEpoch !== mediaEpoch) return;
+    _chatScrollState.followBottom = followBottom;
+    _chatScrollState.suppressScroll = false;
+    if (followBottom) {
+      _alignChatBottom(el);
+    } else {
+      el.scrollTop = previousScrollTop;
+    }
+    _watchMessageMedia(el, el, mediaEpoch);
   });
 }
 
@@ -977,7 +1031,9 @@ export function appendAssistantMessage(message, isLast) {
   const msgsEl = $("chat-msgs");
   if (!msgsEl) return;
 
-  const wasAtBottom = _isNearBottom(msgsEl);
+  const wasAtBottom = _chatScrollState.el === msgsEl
+    ? _chatScrollState.followBottom
+    : _isNearBottom(msgsEl);
 
   const persona = state.personas.find(p => p.id === chatPersonaId);
   const pname = persona?.name || chatPersonaId;

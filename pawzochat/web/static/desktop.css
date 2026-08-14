@@ -175,7 +175,9 @@
 
   /* Wider chat bubbles */
   .msg-row > div:not(.avatar) { max-width: 65%; }
-  .chat-messages { padding: 12px 24px 16px; }
+  .chat-messages {
+    padding: 12px var(--chat-horizontal-padding) 16px;
+  }
   .chat-input-bar { padding: 8px 20px; min-height: var(--bar-h-bottom); }
 
   /* ================================================================

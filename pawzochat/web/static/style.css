@@ -427,11 +427,13 @@ body {
   min-height: 0;
 }
 .chat-messages {
+  --chat-horizontal-padding: 6px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
   overscroll-behavior-y: contain;
-  padding: 10px 16px 12px;
+  padding: 10px var(--chat-horizontal-padding) 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;

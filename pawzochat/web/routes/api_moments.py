@@ -48,8 +48,16 @@ MAX_PUBLISH_IMAGE_BYTES = 10 * 1024 * 1024
 _MOMENT_ID_RE = re.compile(r"^mom_[0-9a-fA-F]{12}$")
 _REPLY_ID_RE = re.compile(r"^rep_[0-9a-fA-F]{12}$")
 
+# Moments uses a stable domain identity for the person operating this
+# single-user web panel.  Display names are deliberately not ownership keys.
+_CURRENT_USER_AUTHOR = "user"
+
 
 # ----- helpers -----
+
+def _owned_by_current_user(item: dict) -> bool:
+    """Return whether a stored moment/reply belongs to the web-panel user."""
+    return item.get("author") == _CURRENT_USER_AUTHOR
 
 def _valid_moment_id(mid: str) -> bool:
     return bool(mid and _MOMENT_ID_RE.match(mid))
@@ -117,6 +125,8 @@ def _serialize_moment(app, m: dict) -> dict:
             "text": r.get("text", ""),
             "reply_to": rt,
             "reply_to_label": _author_label(app, rt_author) if rt_author else None,
+            "can_edit": _owned_by_current_user(r),
+            "can_delete": _owned_by_current_user(r),
         })
     likes = [
         {"author": w, "author_label": _author_label(app, w)}
@@ -131,6 +141,8 @@ def _serialize_moment(app, m: dict) -> dict:
         "images": list(m.get("images", []) or []),
         "likes": likes,
         "replies": replies,
+        "can_edit": _owned_by_current_user(m),
+        "can_delete": _owned_by_current_user(m),
     }
 
 
@@ -215,6 +227,11 @@ def delete_moment(moment_id: str):
     app = get_app()
     if not _valid_moment_id(moment_id):
         return jsonify({"error": "invalid id"}), 400
+    existing = app.moments_store.get_moment(moment_id)
+    if existing is None:
+        return jsonify({"error": "not found"}), 404
+    if not _owned_by_current_user(existing):
+        return jsonify({"error": "只能删除自己发布的朋友圈"}), 403
     ok = app.moments_service.delete_moment(moment_id)
     if not ok:
         return jsonify({"error": "not found"}), 404
@@ -226,6 +243,11 @@ def edit_moment(moment_id: str):
     app = get_app()
     if not _valid_moment_id(moment_id):
         return jsonify({"error": "invalid id"}), 400
+    existing = app.moments_store.get_moment(moment_id)
+    if existing is None:
+        return jsonify({"error": "not found"}), 404
+    if not _owned_by_current_user(existing):
+        return jsonify({"error": "只能编辑自己发布的朋友圈"}), 403
     body = request.get_json(force=True, silent=True) or {}
     if "text" not in body:
         return jsonify({"error": "缺少 text 字段"}), 400
@@ -236,9 +258,6 @@ def edit_moment(moment_id: str):
     if len(text) > MAX_POST_TEXT:
         return jsonify({"error": "文案过长"}), 400
     # A pure-text moment cannot be emptied — same constraint as publish.
-    existing = app.moments_store.get_moment(moment_id)
-    if existing is None:
-        return jsonify({"error": "not found"}), 404
     if not text and not (existing.get("images") or []):
         return jsonify({"error": "文案与图片不能同时为空"}), 400
     ok = app.moments_service.update_moment_text(moment_id, text=text)
@@ -303,6 +322,14 @@ def delete_reply(moment_id: str, reply_id: str):
         return jsonify({"error": "invalid id"}), 400
     if not _REPLY_ID_RE.match(reply_id):
         return jsonify({"error": "invalid reply_id"}), 400
+    moment = app.moments_store.get_moment(moment_id)
+    if moment is None:
+        return jsonify({"error": "moment not found"}), 404
+    reply = app.moments_store.get_reply(moment_id, reply_id)
+    if reply is None:
+        return jsonify({"error": "reply not found"}), 404
+    if not _owned_by_current_user(reply):
+        return jsonify({"error": "只能删除自己的评论"}), 403
     result = app.moments_service.delete_reply(moment_id, reply_id)
     if result is None:
         return jsonify({"error": "moment not found"}), 404
@@ -318,6 +345,14 @@ def edit_reply(moment_id: str, reply_id: str):
         return jsonify({"error": "invalid id"}), 400
     if not _REPLY_ID_RE.match(reply_id):
         return jsonify({"error": "invalid reply_id"}), 400
+    moment = app.moments_store.get_moment(moment_id)
+    if moment is None:
+        return jsonify({"error": "moment not found"}), 404
+    reply = app.moments_store.get_reply(moment_id, reply_id)
+    if reply is None:
+        return jsonify({"error": "reply not found"}), 404
+    if not _owned_by_current_user(reply):
+        return jsonify({"error": "只能编辑自己的评论"}), 403
     body = request.get_json(force=True, silent=True) or {}
     if "text" not in body:
         return jsonify({"error": "缺少 text 字段"}), 400

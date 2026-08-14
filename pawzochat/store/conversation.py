@@ -231,7 +231,13 @@ class ConversationStore:
                         text = first.get("text", "") or ""
                 last_msg = {
                     "role": m.get("role", ""),
-                    "text": text[:60],
+                    # Keep the full first text block so the frontend can classify
+                    # an image reference before applying the 60-character preview cap.
+                    "text": text,
+                    "has_image": any(
+                        isinstance(block, dict) and block.get("type") == "image"
+                        for block in content
+                    ) if isinstance(content, list) else False,
                     "source": m.get("source", ""),
                     "timestamp": m.get("timestamp", ""),
                 }

@@ -294,9 +294,12 @@ function _momentHtml(m) {
           ? `${author} 回复 ${esc(r.reply_to_label)}`
           : author;
         const activeCls = (_composer.mid === m.id && _composer.activeRid === r.id) ? " is-active" : "";
+        const ownerActions = (r.can_edit === true || r.can_delete === true)
+          ? `<button class="moments-reply-more" title="操作" onclick="event.stopPropagation();PawzoChat.momentsReplyMenu(event,'${esc(m.id)}','${rid}')">${iconHtml("ri-more-fill")}</button>`
+          : "";
         return `<div class="moments-reply${activeCls}" data-rid="${rid}" onclick="event.stopPropagation();PawzoChat.momentsReplyTo('${esc(m.id)}','${rid}')">
           <span class="moments-reply-body"><span class="moments-reply-author">${prefix}</span><span class="moments-reply-sep">：</span><span class="moments-reply-text">${esc(r.text || "")}</span></span>
-          <button class="moments-reply-more" title="操作" onclick="event.stopPropagation();PawzoChat.momentsReplyMenu(event,'${esc(m.id)}','${rid}')">${iconHtml("ri-more-fill")}</button>
+          ${ownerActions}
         </div>`;
       }).join("")}
     </div>`;
@@ -384,7 +387,20 @@ export function momentsItemMenu(event, mid) {
   _closeActionsPop();
 
   const moment = _list.items.find(m => m.id === mid);
-  const liked = !!(moment?.likes || []).find(l => l.author === "user");
+  if (!moment) return;
+  const liked = !!(moment.likes || []).find(l => l.author === "user");
+  const ownerActions = `
+    ${moment.can_edit === true ? `
+      <span class="map-divider"></span>
+      <button class="map-btn" onclick="PawzoChat.momentsEdit('${esc(mid)}')">
+        ${iconHtml("ri-edit-line")}<span>编辑</span>
+      </button>` : ""}
+    ${moment.can_delete === true ? `
+      <span class="map-divider"></span>
+      <button class="map-btn map-btn-danger" onclick="PawzoChat.momentsDelete('${esc(mid)}')">
+        ${iconHtml("ri-delete-bin-line")}<span>删除</span>
+      </button>` : ""}
+  `;
 
   const el = document.createElement("div");
   el.className = "moments-actions-pop";
@@ -398,14 +414,7 @@ export function momentsItemMenu(event, mid) {
     <button class="map-btn" onclick="PawzoChat.momentsOpenComposer('${esc(mid)}')">
       ${iconHtml("ri-chat-3-line")}<span>评论</span>
     </button>
-    <span class="map-divider"></span>
-    <button class="map-btn" onclick="PawzoChat.momentsEdit('${esc(mid)}')">
-      ${iconHtml("ri-edit-line")}<span>编辑</span>
-    </button>
-    <span class="map-divider"></span>
-    <button class="map-btn map-btn-danger" onclick="PawzoChat.momentsDelete('${esc(mid)}')">
-      ${iconHtml("ri-delete-bin-line")}<span>删除</span>
-    </button>
+    ${ownerActions}
   `;
   document.body.appendChild(el);
 
@@ -438,20 +447,27 @@ export function momentsReplyMenu(event, mid, rid) {
   const anchor = event?.currentTarget || event?.target || null;
   _closeActionsPop();
 
+  const moment = _list.items.find(m => m.id === mid);
+  const reply = (moment?.replies || []).find(r => r.id === rid);
+  if (!reply || (reply.can_edit !== true && reply.can_delete !== true)) return;
+  const ownerActions = `
+    ${reply.can_edit === true ? `
+      <button class="map-btn" onclick="PawzoChat.momentsEditReply('${esc(mid)}','${esc(rid)}')">
+        ${iconHtml("ri-edit-line")}<span>编辑</span>
+      </button>` : ""}
+    ${reply.can_edit === true && reply.can_delete === true ? `<span class="map-divider"></span>` : ""}
+    ${reply.can_delete === true ? `
+      <button class="map-btn map-btn-danger" onclick="PawzoChat.momentsDeleteReply('${esc(mid)}','${esc(rid)}')">
+        ${iconHtml("ri-delete-bin-line")}<span>删除</span>
+      </button>` : ""}
+  `;
+
   const el = document.createElement("div");
   el.className = "moments-actions-pop";
   el.setAttribute("data-mid", mid);
   el.setAttribute("data-rid", rid);
   el.addEventListener("click", e => e.stopPropagation());
-  el.innerHTML = `
-    <button class="map-btn" onclick="PawzoChat.momentsEditReply('${esc(mid)}','${esc(rid)}')">
-      ${iconHtml("ri-edit-line")}<span>编辑</span>
-    </button>
-    <span class="map-divider"></span>
-    <button class="map-btn map-btn-danger" onclick="PawzoChat.momentsDeleteReply('${esc(mid)}','${esc(rid)}')">
-      ${iconHtml("ri-delete-bin-line")}<span>删除</span>
-    </button>
-  `;
+  el.innerHTML = ownerActions;
   document.body.appendChild(el);
 
   // Reply "..." buttons hug the right edge of the reply row, so try the left
