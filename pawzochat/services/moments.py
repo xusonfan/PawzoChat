@@ -542,13 +542,9 @@ class MomentsService:
                     f"「{_excerpt(reply_text)}」。{moment_part}"
                 )
                 self._write_moment_memory(rid, mem_summary)
-            # Persona who commented also auto-likes the moment.
-            if self._store.add_like(moment_id, rid):
-                broadcast(
-                    "moments_updated",
-                    action="like_changed",
-                    moment_id=moment_id,
-                )
+            # Persona who commented also auto-likes the moment
+            # (never self-likes — see ``_auto_like_moment``).
+            self._auto_like_moment(moment_id, rid, author=author)
 
     # ---- Helpers ----
 
@@ -753,8 +749,39 @@ class MomentsService:
                 f"我回复了：「{_excerpt(reply_text)}」。"
             )
             self._write_moment_memory(persona_id, mem_summary)
+        # Auto-like after counter-reply; never self-like own moment.
+        self._auto_like_moment(moment_id, persona_id, author=moment_author)
+
+    def _auto_like_moment(
+        self,
+        moment_id: str,
+        persona_id: str,
+        *,
+        author: str | None = None,
+    ) -> bool:
+        """Record a persona auto-like after commenting / counter-replying.
+
+        Central rule for automated engagement: a persona must never auto-like
+        a moment they authored. Manual likes via :meth:`like` are unaffected
+        and still go straight to the store.
+        """
+        if not persona_id or persona_id == "user":
+            return False
+        if author is None:
+            moment = self._store.get_moment(moment_id)
+            if moment is None:
+                return False
+            author = moment.get("author", "") or ""
+        if persona_id == author:
+            return False
         if self._store.add_like(moment_id, persona_id):
-            broadcast("moments_updated", action="like_changed", moment_id=moment_id)
+            broadcast(
+                "moments_updated",
+                action="like_changed",
+                moment_id=moment_id,
+            )
+            return True
+        return False
 
     def _build_counter_reply_thread(
         self,
