@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 import { esc, escAttr, formatMsgTime, iconHtml } from "./utils.js";
+import { renderTextMedia } from "./message_content.js";
 import { api } from "./api.js";
 import { $, content } from "./state.js";
 import { toast, confirm, showLoading, hideLoading } from "./ui.js";
@@ -66,7 +67,7 @@ function _renderEmptyPage(text = "暂无消息记录") {
   </div>`;
 }
 
-function _renderContent(blocks) {
+function _renderContent(blocks, renderLinkedImages = false) {
   blocks = Array.isArray(blocks) ? blocks : [];
   const base = window.PAWZOCHAT_BASE || "";
 
@@ -110,7 +111,9 @@ function _renderContent(blocks) {
         </div>`;
       }
     } else if (b.type === "text" && b.text) {
-      parts += `<div class="he-text">${esc(b.text)}</div>`;
+      parts += renderLinkedImages
+        ? renderTextMedia(b.text, { textClass: "he-text", imageClass: "he-media" })
+        : `<div class="he-text">${esc(b.text)}</div>`;
     }
   }
   if (!parts) {
@@ -230,7 +233,7 @@ function _renderList() {
           <button class="he-btn he-btn-del" ${delAttrs}>${iconHtml("ri-delete-bin-line")}</button>
         </span>
       </div>
-      <div class="he-body">${_renderContent(m.content)}${m.quote ? `<div class="he-quote">${esc(m.quote)}</div>` : ""}</div>
+      <div class="he-body">${_renderContent(m.content, m.role === "assistant")}${m.quote ? `<div class="he-quote">${esc(m.quote)}</div>` : ""}</div>
     </div>`;
     })
     .join("");

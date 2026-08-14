@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 import { avatarHtml, personaAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
+import { renderTextMedia } from "./message_content.js";
 import { api } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
@@ -225,7 +226,7 @@ export async function openChat(personaId) {
   }
 }
 
-function renderContentBlocks(content) {
+function renderContentBlocks(content, renderLinkedImages = false) {
   const blocks = Array.isArray(content) ? content : [];
   const emojiBlocks = blocks.filter(b => b.type === "emoji");
   if (emojiBlocks.length > 0) {
@@ -278,7 +279,9 @@ function renderContentBlocks(content) {
         </div>`;
       }
     } else if (b.type === "text" && b.text) {
-      parts += `<div class="msg-bubble">${esc(b.text)}</div>`;
+      parts += renderLinkedImages
+        ? renderTextMedia(b.text, { textClass: "msg-bubble", imageClass: "msg-image" })
+        : `<div class="msg-bubble">${esc(b.text)}</div>`;
     }
   }
   if (!parts) {
@@ -751,7 +754,7 @@ function renderMessages(messages) {
       ? avatarHtml(_pname, "sm", _avUrl)
       : avatarHtml(_userName, "sm", _userAvUrl);
     const source = sourceBadge(m.source);
-    const bubbleHtml = renderContentBlocks(m.content);
+    const bubbleHtml = renderContentBlocks(m.content, role === "assistant");
 
     html += `<div class="msg-row ${role}">
       ${av}
@@ -963,7 +966,7 @@ export function appendAssistantMessage(message, isLast) {
   const pname = persona?.name || chatPersonaId;
   const avUrl = personaAvatarUrl(persona);
   const source = sourceBadge(message.source);
-  const bubbleHtml = renderContentBlocks(message.content);
+  const bubbleHtml = renderContentBlocks(message.content, true);
 
   msgsEl.insertAdjacentHTML("beforeend", `<div class="msg-row assistant">
     ${avatarHtml(pname, "sm", avUrl)}

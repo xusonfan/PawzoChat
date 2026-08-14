@@ -1657,6 +1657,19 @@ select.qs-field-input {
   max-width:240px; max-height:240px; border-radius:8px;
   object-fit:contain; cursor:pointer;
 }
+.linked-image-fallback {
+  display: inline-block;
+  max-width: 240px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--primary);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+.linked-image-fallback[hidden] { display: none; }
 
 /* ---- Image preview modal ---- */
 .image-preview-modal {
