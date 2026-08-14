@@ -37,7 +37,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from openai import AsyncOpenAI
 
-BASE_URL = "https://paw.v1chat.cc/v1"
+BASE_URL = os.environ.get("IMAGE_RECOGNITION_BASE_URL", "https://paw.v1chat.cc/v1")
 MODEL = os.environ.get("IMAGE_RECOGNITION_MODEL", "") or "gpt-4o"
 DATA_DIR = Path(
     sys.executable if getattr(sys, "frozen", False) else __file__
