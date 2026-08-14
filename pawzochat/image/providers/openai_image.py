@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 
 import requests
 
@@ -35,6 +36,10 @@ from pawzochat.image.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+IMAGE_REQUEST_TIMEOUT_SECONDS = float(
+    os.getenv("PAWZOCHAT_IMAGE_TIMEOUT_SECONDS", "180"),
+)
 
 
 class OpenAIImageProvider(ImageProvider):
@@ -134,7 +139,12 @@ class OpenAIImageProvider(ImageProvider):
         response_format-related.
         """
         try:
-            resp = requests.post(url, json=body, headers=headers, timeout=180)
+            resp = requests.post(
+                url,
+                json=body,
+                headers=headers,
+                timeout=IMAGE_REQUEST_TIMEOUT_SECONDS,
+            )
         except requests.exceptions.Timeout:
             raise ImageGenerationError(self.provider_type, "请求超时") from None
         except requests.exceptions.ConnectionError as e:
@@ -152,7 +162,12 @@ class OpenAIImageProvider(ImageProvider):
             logger.info("上游拒绝 response_format，去掉后重试")
             body2 = {k: v for k, v in body.items() if k != "response_format"}
             try:
-                resp2 = requests.post(url, json=body2, headers=headers, timeout=180)
+                resp2 = requests.post(
+                    url,
+                    json=body2,
+                    headers=headers,
+                    timeout=IMAGE_REQUEST_TIMEOUT_SECONDS,
+                )
             except requests.exceptions.Timeout:
                 raise ImageGenerationError(self.provider_type, "请求超时") from None
             except requests.exceptions.ConnectionError as e:
