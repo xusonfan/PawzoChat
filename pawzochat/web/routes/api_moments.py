@@ -92,6 +92,22 @@ def _existing_cover() -> Path | None:
     return None
 
 
+def _file_version(path: Path) -> str:
+    """Return a stable version that changes whenever a managed file changes."""
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return ""
+
+
+def _cover_url(cover: Path | None = None) -> str:
+    cover = cover or _existing_cover()
+    if cover is None:
+        return ""
+    version = _file_version(cover)
+    return f"/api/moments/cover?v={version}" if version else "/api/moments/cover"
+
+
 def _persona_summaries(app) -> list[dict]:
     """Lightweight persona list for the settings UI (id/name/has_avatar)."""
     from pawzochat.paths import CHATS_DIR
@@ -104,6 +120,7 @@ def _persona_summaries(app) -> list[dict]:
             "id": pid,
             "name": p.name,
             "has_avatar": avatar.is_file(),
+            "avatar_version": _file_version(avatar),
         })
     return result
 
@@ -425,7 +442,9 @@ def get_settings():
             "counter_reply_default": DEFAULT_COUNTER_REPLY_PROMPT,
         },
         "personas": personas,
-        "cover_url": "/api/moments/cover" if _existing_cover() else "",
+        # Versioned cover URL so browsers can cache the binary long-term and
+        # still pick up a new cover immediately after upload/replace.
+        "cover_url": _cover_url(),
     })
 
 
@@ -516,8 +535,13 @@ def serve_cover():
     cover = _existing_cover()
     if cover is None:
         return jsonify({"error": "not found"}), 404
-    resp = send_from_directory(str(MOMENTS_DIR), cover.name, conditional=False)
-    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    # conditional=True enables ETag/304; with ?v= the URL itself is the
+    # cache key (mtime changes on replace), matching avatar caching.
+    resp = send_from_directory(str(MOMENTS_DIR), cover.name, conditional=True)
+    if request.args.get("v"):
+        resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    else:
+        resp.headers["Cache-Control"] = "private, no-cache"
     return resp
 
 
@@ -563,7 +587,7 @@ def upload_cover():
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "cover_url": _cover_url()})
 
 
 @api_moments_bp.route("/cover", methods=["DELETE"])
@@ -577,7 +601,7 @@ def delete_cover():
                 removed = True
             except OSError:
                 pass
-    return jsonify({"ok": True, "removed": removed})
+    return jsonify({"ok": True, "removed": removed, "cover_url": ""})
 
 
 # ----- image serving -----
@@ -588,6 +612,8 @@ def serve_image(moment_id: str, filename: str):
     path = app.moments_store.get_image_path(moment_id, filename)
     if path is None:
         return jsonify({"error": "not found"}), 404
-    resp = send_from_directory(str(path.parent), path.name, conditional=False)
-    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    # Filenames are random hex (img_<hex>.ext) with immutable content, same
+    # policy as chat images — long-lived browser cache, no third-party URLs.
+    resp = send_from_directory(str(path.parent), path.name, conditional=True)
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return resp

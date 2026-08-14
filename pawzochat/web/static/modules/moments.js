@@ -180,7 +180,9 @@ async function renderMomentsList() {
 function _renderCover() {
   const el = $("m-cover");
   if (!el) return;
-  const url = _state.coverUrl ? `${BASE()}${_state.coverUrl}?t=${Date.now()}` : "";
+  // cover_url already carries ?v=<mtime> from the API; do not append Date.now()
+  // or re-entering moments would force a full re-download every time.
+  const url = _state.coverUrl ? `${BASE()}${_state.coverUrl}` : "";
   if (url) {
     el.style.backgroundImage = `url('${url}')`;
     el.classList.add("has-image");
@@ -819,7 +821,7 @@ export async function momentsOnCoverFile(event) {
     const r = await fetch(`${BASE()}/api/moments/cover`, { method: "POST", body: fd });
     const data = await r.json();
     if (r.status >= 400) { toast(data?.error || "上传失败", "error"); return; }
-    _state.coverUrl = "/api/moments/cover";
+    _state.coverUrl = data?.cover_url || "/api/moments/cover";
     _renderCover();
     toast("封面已更新", "success");
   } catch (e) { toast("上传失败", "error"); }
