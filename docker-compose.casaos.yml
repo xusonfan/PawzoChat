@@ -1,0 +1,51 @@
+name: pawzochat
+
+services:
+  pawzochat:
+    build:
+      context: /DATA/AppData/PawzoChat
+      dockerfile: Dockerfile
+    image: pawzochat:latest
+    container_name: pawzochat
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      PAWZOCHAT_WEB_HOST: 0.0.0.0
+      PAWZOCHAT_OPEN_BROWSER: "0"
+      PAWZOCHAT_IMAGE_TIMEOUT_SECONDS: "600"
+      TZ: Asia/Shanghai
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - target: 62000
+        published: "8787"
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: bind
+        source: /DATA/AppData/PawzoChat/data
+        target: /app/data
+        bind:
+          create_host_path: true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:62000/api/status', timeout=5)
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+x-casaos:
+  author: iwyxdxl
+  category: AI
+  hostname: ""
+  icon: https://raw.githubusercontent.com/iwyxdxl/PawzoChat/main/docs/images/logo.png
+  index: /
+  is_uncontrolled: false
+  port_map: "8787"
+  scheme: http
+  title:
+    custom: PawzoChat

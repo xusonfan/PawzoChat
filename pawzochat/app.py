@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import signal
 import sys
 import threading
@@ -295,27 +296,31 @@ class App:
         from pawzochat.web.app import SecretPrefixMiddleware, create_app
 
         port = int(self.config.get("web", "port", default=62000))
-        ensure_listen_port_free(port, "127.0.0.1", label="本地面板")
+        host = os.environ.get("PAWZOCHAT_WEB_HOST", "127.0.0.1")
+        ensure_listen_port_free(port, host, label="本地面板")
 
         flask_app = create_app(self)
 
-        local_server = WSGIServer(("127.0.0.1", port), flask_app)
+        local_server = WSGIServer((host, port), flask_app)
         self._web_servers.append(local_server)
         threading.Thread(
             target=local_server.safe_start,
             name="web-local",
             daemon=True,
         ).start()
-        url = f"http://127.0.0.1:{port}"
+        url = f"http://{host}:{port}"
         logger.info("本地面板已启动: %s", url)
 
-        def _open_browser():
-            try:
-                webbrowser.open(url)
-            except Exception:
-                logger.debug("自动打开浏览器失败", exc_info=True)
+        if os.environ.get("PAWZOCHAT_OPEN_BROWSER", "1").lower() not in {
+            "0", "false", "no",
+        }:
+            def _open_browser():
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    logger.debug("自动打开浏览器失败", exc_info=True)
 
-        threading.Timer(1.0, _open_browser).start()
+            threading.Timer(1.0, _open_browser).start()
 
         if self.config.get("web", "public_enabled", default=False):
             public_port = int(self.config.get("web", "public_port", default=0))
@@ -361,6 +366,7 @@ class App:
     def _print_access_info(self):
         """Print access URLs to the console after startup."""
         port = int(self.config.get("web", "port", default=62000))
+        host = os.environ.get("PAWZOCHAT_WEB_HOST", "127.0.0.1")
         public_enabled = self.config.get("web", "public_enabled", default=False)
         public_port = int(self.config.get("web", "public_port", default=0))
         secret = self.config.get("web", "public_secret", default="")
@@ -368,7 +374,7 @@ class App:
         logger.info("=" * 40)
         logger.info("  访问信息")
         logger.info("=" * 40)
-        logger.info("  本地地址: http://127.0.0.1:%s", port)
+        logger.info("  本地地址: http://%s:%s", host, port)
         if public_enabled and public_port and secret:
             logger.info(
                 "  公网地址: https://你的公网IP:%s/%s", public_port, secret,
