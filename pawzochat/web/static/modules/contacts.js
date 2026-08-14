@@ -1244,11 +1244,25 @@ export function onAvatarFileSelected(input) {
       const resp = await fetch(`${base}/api/personas/${pid}/avatar`, { method: "POST", body: fd });
       const res = await resp.json();
       if (resp.status >= 400) { toast(res.error || "上传失败", "error"); return; }
+      const persona = state.personas.find(p => p.id === pid);
+      if (persona) {
+        persona.has_avatar = true;
+        persona.avatar_version = res.avatar_version || String(Date.now());
+      }
       toast("头像已更新", "success");
       const avDiv = content().querySelector(".avatar-upload-wrap .avatar");
       if (avDiv) {
-        avDiv.style.background = "";
-        avDiv.innerHTML = `<img src="${base}/api/personas/${pid}/avatar?t=${Date.now()}" alt="avatar">`;
+        let img = avDiv.querySelector("img");
+        if (!img) {
+          img = document.createElement("img");
+          img.alt = persona?.name || pid;
+          avDiv.appendChild(img);
+        }
+        img.src = personaAvatarUrl(persona || {
+          id: pid,
+          has_avatar: true,
+          avatar_version: res.avatar_version || String(Date.now()),
+        });
       }
     } catch (e) { toast("上传失败", "error"); }
   });

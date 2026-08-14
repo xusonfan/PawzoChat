@@ -17,7 +17,7 @@
  */
 /* Moments (朋友圈) — feed, publish, settings */
 
-import { esc, iconHtml, avatarHtml, formatMsgTime, placeActionsPop } from "./utils.js";
+import { esc, iconHtml, avatarHtml, personaAvatarUrl, profileAvatarUrl, formatMsgTime, placeActionsPop } from "./utils.js";
 import { api } from "./api.js";
 import { state, $, content } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
@@ -89,8 +89,8 @@ const _settings = {
 
 function _avatarUrl(author) {
   if (!author) return "";
-  if (author === "user") return `${BASE()}/api/profile/avatar`;
-  return `${BASE()}/api/personas/${encodeURIComponent(author)}/avatar`;
+  if (author === "user") return profileAvatarUrl(state.profile);
+  return personaAvatarUrl(_state.personasById[author]);
 }
 
 function _hasAvatar(author) {
@@ -1072,7 +1072,7 @@ function _personaSettingsRow(p) {
   const isReplier = _settings.repliers.has(p.id);
   const isPublisher = _settings.publishers.has(p.id);
   const isMemory = _settings.memoryEnabled[p.id] !== false;
-  const avatarUrl = p.has_avatar ? _avatarUrl(p.id) : "";
+  const avatarUrl = personaAvatarUrl(p);
   return `
     <div class="moments-pp-row" data-pid="${pid}">
       <div class="moments-pp-head">

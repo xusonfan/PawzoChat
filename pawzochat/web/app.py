@@ -346,14 +346,23 @@ def create_app(app_instance: App) -> Flask:
         avatar_file = abs_dir / "avatar.png"
         if not avatar_file.is_file():
             return {"error": "not found"}, 404
-        resp = send_from_directory(str(abs_dir), "avatar.png", conditional=False)
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp = send_from_directory(str(abs_dir), "avatar.png", conditional=True)
+        if request.args.get("v"):
+            resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "private, no-cache"
         return resp
 
     # ---- Profile API ----
 
     _PROFILE_JSON = PROFILE_DIR / "profile.json"
     _PROFILE_AVATAR = PROFILE_DIR / "avatar.png"
+
+    def _profile_avatar_version() -> str:
+        try:
+            return str(_PROFILE_AVATAR.stat().st_mtime_ns)
+        except OSError:
+            return ""
 
     def _load_profile() -> dict:
         if _PROFILE_JSON.is_file():
@@ -364,7 +373,11 @@ def create_app(app_instance: App) -> Flask:
     @flask_app.route("/api/profile", methods=["GET"])
     def get_profile():
         p = _load_profile()
-        return jsonify({"name": p.get("name", "我"), "has_avatar": _PROFILE_AVATAR.is_file()})
+        return jsonify({
+            "name": p.get("name", "我"),
+            "has_avatar": _PROFILE_AVATAR.is_file(),
+            "avatar_version": _profile_avatar_version(),
+        })
 
     @flask_app.route("/api/profile", methods=["PATCH"])
     def update_profile():
@@ -380,7 +393,12 @@ def create_app(app_instance: App) -> Flask:
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         with open(_PROFILE_JSON, "w", encoding="utf-8") as f:
             json.dump(p, f, ensure_ascii=False)
-        return jsonify({"ok": True, "name": p["name"], "has_avatar": _PROFILE_AVATAR.is_file()})
+        return jsonify({
+            "ok": True,
+            "name": p["name"],
+            "has_avatar": _PROFILE_AVATAR.is_file(),
+            "avatar_version": _profile_avatar_version(),
+        })
 
     @flask_app.route("/api/profile/avatar", methods=["POST"])
     def upload_profile_avatar():
@@ -397,14 +415,17 @@ def create_app(app_instance: App) -> Flask:
         img = img.crop((left, top, left + side, top + side)).resize((256, 256), Image.LANCZOS)
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         img.save(str(_PROFILE_AVATAR), "PNG")
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "avatar_version": _profile_avatar_version()})
 
     @flask_app.route("/api/profile/avatar", methods=["GET"])
     def serve_profile_avatar():
         if not _PROFILE_AVATAR.is_file():
             return {"error": "not found"}, 404
-        resp = send_from_directory(str(PROFILE_DIR), "avatar.png", conditional=False)
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp = send_from_directory(str(PROFILE_DIR), "avatar.png", conditional=True)
+        if request.args.get("v"):
+            resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "private, no-cache"
         return resp
 
     from pawzochat.web.sse import sse_stream

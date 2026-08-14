@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-import { avatarHtml, personaAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
+import { avatarHtml, personaAvatarUrl, profileAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
 import { renderTextMedia } from "./message_content.js";
 import { api } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
@@ -118,9 +118,11 @@ async function renderChatList() {
 
   target.innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
   try {
-    const res = await api.get("/api/conversations");
+    const [res, pres] = await Promise.all([
+      api.get("/api/conversations"),
+      api.get("/api/personas"),
+    ]);
     state.conversations = res.conversations || [];
-    const pres = await api.get("/api/personas");
     state.personas = pres.personas || [];
   } catch (e) { toast("加载失败", "error"); return; }
 
@@ -632,6 +634,9 @@ export function clearPendingQuote() {
 
 async function renderChatWindow(data) {
   chatPersonaId = data.personaId;
+  const renderedPersonaId = chatPersonaId;
+  const messagesUrl = `/api/conversations/${renderedPersonaId}/messages?rounds=10`;
+  const cachedMessages = api.peek(messagesUrl);
   const pname = state.personas.find(p => p.id === chatPersonaId)?.name || chatPersonaId;
 
   setTopBar(pname, true,
@@ -645,7 +650,7 @@ async function renderChatWindow(data) {
   _pendingQuote = "";
   _closeQuotePop();  // never let a popup (in document.body) outlive the chat that spawned it
   content().innerHTML = `<div class="chat-container">
-    <div class="chat-messages" id="chat-msgs"><div class="loading-center"><div class="spinner"></div></div></div>
+    <div class="chat-messages" id="chat-msgs">${cachedMessages ? "" : `<div class="loading-center"><div class="spinner"></div></div>`}</div>
     <div id="img-preview-bar" class="img-preview-bar" style="display:none"></div>
     <div id="file-preview-bar" class="file-preview-bar" style="display:none"></div>
     <div id="quote-preview-bar" class="quote-preview-bar" style="display:none"></div>
@@ -714,12 +719,26 @@ async function renderChatWindow(data) {
   _emojiActiveTab = 0;
   _plusMenuOpen = false;
 
-  try {
-    const res = await api.get(`/api/conversations/${chatPersonaId}/messages?rounds=10`);
-    renderMessages(res.messages || []);
-  } catch (e) { toast("加载消息失败", "error"); }
+  if (cachedMessages) renderMessages(cachedMessages.messages || []);
 
-  if (state.processingPersonas.has(chatPersonaId)) showTypingIndicator();
+  try {
+    const res = await api.get(messagesUrl, {
+      onUpdate: fresh => {
+        if (_isActiveChatWindow(renderedPersonaId)) {
+          renderMessages(fresh.messages || []);
+        }
+      },
+    });
+    if (!cachedMessages && _isActiveChatWindow(renderedPersonaId)) {
+      renderMessages(res.messages || []);
+    }
+  } catch (e) {
+    if (!cachedMessages) toast("加载消息失败", "error");
+  }
+
+  if (_isActiveChatWindow(renderedPersonaId) && state.processingPersonas.has(renderedPersonaId)) {
+    showTypingIndicator();
+  }
 }
 
 function renderMessages(messages) {
@@ -736,9 +755,8 @@ function renderMessages(messages) {
   const _pname = _persona?.name || chatPersonaId;
   const _avUrl = personaAvatarUrl(_persona);
 
-  const base = window.PAWZOCHAT_BASE || "";
   const _userName = state.profile?.name || "我";
-  const _userAvUrl = state.profile?.has_avatar ? `${base}/api/profile/avatar` : "";
+  const _userAvUrl = profileAvatarUrl(state.profile);
 
   let html = "";
   let lastTime = 0;
@@ -882,9 +900,8 @@ export async function sendChat() {
   const emptyState = msgsEl.querySelector(".empty-state");
   if (emptyState) emptyState.remove();
 
-  const _base = window.PAWZOCHAT_BASE || "";
   const _uName = state.profile?.name || "我";
-  const _uAvUrl = state.profile?.has_avatar ? `${_base}/api/profile/avatar` : "";
+  const _uAvUrl = profileAvatarUrl(state.profile);
 
   let userBubble = "";
   if (text) userBubble += `<div class="msg-bubble">${esc(text)}</div>`;
@@ -1165,7 +1182,7 @@ export async function sendSticker(stickerUrl) {
 
   const _base = window.PAWZOCHAT_BASE || "";
   const _uName = state.profile?.name || "我";
-  const _uAvUrl = state.profile?.has_avatar ? `${_base}/api/profile/avatar` : "";
+  const _uAvUrl = profileAvatarUrl(state.profile);
 
   const imgSrc = _base + stickerUrl;
   msgsEl.insertAdjacentHTML("beforeend",

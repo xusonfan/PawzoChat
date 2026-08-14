@@ -114,6 +114,13 @@ def _avatar_path(persona_id: str) -> str:
     return str(CHATS_DIR / persona_id / "avatar.png")
 
 
+def _avatar_version(persona_id: str) -> str:
+    try:
+        return str(os.stat(_avatar_path(persona_id)).st_mtime_ns)
+    except OSError:
+        return ""
+
+
 def _name_exists(personas_cfg: dict, name: str, *, exclude_id: str = "") -> bool:
     """Check whether a persona name is already taken."""
     for pid, pdata in personas_cfg.items():
@@ -231,6 +238,7 @@ def list_personas():
             "emoji_send_probability": p.emoji_send_probability,
             "emoji_group": p.emoji_group,
             "has_avatar": os.path.isfile(_avatar_path(pid)),
+            "avatar_version": _avatar_version(pid),
             "memory": p.memory,
             "memory_count": len(memory_data.get("memories", [])),
             "proactive": p.proactive,
@@ -267,6 +275,7 @@ def get_persona(persona_id: str):
         "emoji_send_probability": p.emoji_send_probability,
         "emoji_group": p.emoji_group,
         "has_avatar": os.path.isfile(_avatar_path(persona_id)),
+        "avatar_version": _avatar_version(persona_id),
         "memory": p.memory,
         "memory_count": len(memory_data.get("memories", [])),
         "proactive": p.proactive,
@@ -615,7 +624,7 @@ def upload_avatar(persona_id: str):
         return jsonify({"error": "Invalid image"}), 400
 
     _save_avatar_from_image(persona_id, img)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "avatar_version": _avatar_version(persona_id)})
 
 
 # ---------------------------------------------------------------------------

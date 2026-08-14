@@ -72,6 +72,9 @@ function _changed(a, b) {
 }
 
 export const api = {
+  peek(url) {
+    return _cache.has(url) ? _clone(_cacheTouch(url)) : null;
+  },
   async get(url, { onUpdate, bypassCache = false } = {}) {
     if (!bypassCache && _cache.has(url)) {
       const cached = _cacheTouch(url);

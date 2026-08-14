@@ -377,10 +377,28 @@ body {
   color: #fff;
   flex-shrink: 0;
   margin-right: 12px;
+  position: relative;
+  overflow: hidden;
 }
 .avatar.sm { width: 40px; height: 40px; font-size: 16px; }
 .avatar.lg { width: 72px; height: 72px; font-size: 28px; }
-.avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.avatar-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avatar img {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
 .conv-info { flex: 1; min-width: 0; }
 .conv-name {
   font-size: 15px;

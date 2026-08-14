@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-import { avatarHtml, formatTime, esc, escAttr, jsArg, iconHtml, voiceOptionsHtml, voiceCatalogFor } from "./utils.js";
+import { avatarHtml, profileAvatarUrl, formatTime, esc, escAttr, jsArg, iconHtml, voiceOptionsHtml, voiceCatalogFor } from "./utils.js";
 import { api, downloadFile } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
@@ -79,8 +79,7 @@ async function renderSettings() {
   const isPublic = !!state.settings?.is_public;
 
   const profile = state.profile || { name: "我", has_avatar: false };
-  const base = window.PAWZOCHAT_BASE || "";
-  const profileAvUrl = profile.has_avatar ? `${base}/api/profile/avatar` : "";
+  const profileAvUrl = profileAvatarUrl(profile);
 
   target.innerHTML = `<div class="page">
     <div class="status-card" onclick="PawzoChat.pushPage('profileEdit')">
@@ -3280,8 +3279,7 @@ async function renderProfileEdit() {
   );
 
   const profile = state.profile || { name: "我", has_avatar: false };
-  const base = window.PAWZOCHAT_BASE || "";
-  const avUrl = profile.has_avatar ? `${base}/api/profile/avatar` : "";
+  const avUrl = profileAvatarUrl(profile);
 
   content().innerHTML = `<div class="page">
     <input type="file" id="profile-avatar-input" accept="image/*" style="display:none" onchange="PawzoChat.onProfileAvatarSelected(this)">
@@ -3314,11 +3312,17 @@ export function onProfileAvatarSelected(input) {
       const res = await resp.json();
       if (resp.status >= 400) { toast(res.error || "上传失败", "error"); return; }
       state.profile.has_avatar = true;
+      state.profile.avatar_version = res.avatar_version || String(Date.now());
       toast("头像已更新", "success");
       const avDiv = content().querySelector(".avatar-upload-wrap .avatar");
       if (avDiv) {
-        avDiv.style.background = "";
-        avDiv.innerHTML = `<img src="${base}/api/profile/avatar?t=${Date.now()}" alt="avatar">`;
+        let img = avDiv.querySelector("img");
+        if (!img) {
+          img = document.createElement("img");
+          img.alt = state.profile.name || "我";
+          avDiv.appendChild(img);
+        }
+        img.src = profileAvatarUrl(state.profile);
       }
     } catch (e) { toast("上传失败", "error"); }
   });
@@ -3333,7 +3337,11 @@ export async function saveProfile() {
   try {
     const res = await api.patch("/api/profile", { name });
     if (res.status >= 400) { toast(res.data?.error || "保存失败", "error"); return; }
-    state.profile = { name: res.data?.name || name, has_avatar: res.data?.has_avatar ?? state.profile?.has_avatar };
+    state.profile = {
+      name: res.data?.name || name,
+      has_avatar: res.data?.has_avatar ?? state.profile?.has_avatar,
+      avatar_version: res.data?.avatar_version || state.profile?.avatar_version || "",
+    };
     toast("已保存", "success");
     goBack();
     refreshSidebar();

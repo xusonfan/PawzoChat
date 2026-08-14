@@ -386,7 +386,11 @@ window.PawzoChat = {
 async function loadProfile() {
   try {
     const res = await api.get("/api/profile");
-    state.profile = { name: res.name || "我", has_avatar: !!res.has_avatar };
+    state.profile = {
+      name: res.name || "我",
+      has_avatar: !!res.has_avatar,
+      avatar_version: res.avatar_version || "",
+    };
   } catch (e) { /* keep default */ }
 }
 

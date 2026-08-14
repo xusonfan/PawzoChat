@@ -37,18 +37,30 @@ export function avatarColor(name) {
 }
 
 export function avatarHtml(name, cls, avatarUrl) {
+  const color = avatarColor(name || "?");
+  const initial = esc((name || "?").charAt(0));
+  const fallback = `<span class="avatar-fallback" aria-hidden="true">${initial}</span>`;
   if (avatarUrl) {
-    return `<div class="avatar ${cls || ""}"><img src="${esc(avatarUrl)}" alt="${esc(name)}"></div>`;
+    return `<div class="avatar ${cls || ""}" style="background:${color}">${fallback}<img src="${escAttr(avatarUrl)}" alt="${escAttr(name)}" decoding="async" onerror="this.remove()"></div>`;
   }
-  const c = avatarColor(name);
-  const ch = (name || "?").charAt(0);
-  return `<div class="avatar ${cls || ""}" style="background:${c}">${ch}</div>`;
+  return `<div class="avatar ${cls || ""}" style="background:${color}">${fallback}</div>`;
+}
+
+function _versionedAvatarUrl(path, version) {
+  return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }
 
 export function personaAvatarUrl(persona) {
   if (!persona || !persona.has_avatar) return "";
   const base = window.PAWZOCHAT_BASE || "";
-  return `${base}/api/personas/${persona.id}/avatar`;
+  const path = `${base}/api/personas/${encodeURIComponent(persona.id)}/avatar`;
+  return _versionedAvatarUrl(path, persona.avatar_version);
+}
+
+export function profileAvatarUrl(profile) {
+  if (!profile || !profile.has_avatar) return "";
+  const base = window.PAWZOCHAT_BASE || "";
+  return _versionedAvatarUrl(`${base}/api/profile/avatar`, profile.avatar_version);
 }
 
 export function iconHtml(iconId, cls, label) {
