@@ -933,13 +933,21 @@ export async function sendChat() {
   for (const img of imagesToSend) URL.revokeObjectURL(img.url);
 }
 
+function _isActiveChatWindow(personaId = chatPersonaId) {
+  const topPage = state.pageStack[state.pageStack.length - 1];
+  return topPage?.name === "chatWindow"
+    && topPage.data?.personaId === personaId
+    && !!$("chat-msgs");
+}
+
 export function showTypingIndicator() {
-  if (!state.settings?.reply?.show_typing_indicator) return;
+  if (!state.settings?.reply?.show_typing_indicator || !_isActiveChatWindow()) return;
   const el = $("top-bar-title");
   if (el) el.textContent = "对方正在输入…";
 }
 
 function hideTypingIndicator() {
+  if (!_isActiveChatWindow()) return;
   const pname = state.personas.find(p => p.id === chatPersonaId)?.name || chatPersonaId;
   const el = $("top-bar-title");
   if (el) el.textContent = pname;
