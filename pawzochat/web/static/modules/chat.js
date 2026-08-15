@@ -29,6 +29,9 @@ import {
 import { ownsConversationListTarget } from "./conversation_list_ownership.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
 import {
+  createChatBottomAnchor,
+} from "./chat_scroll.js";
+import {
   setTopBar, pushPage, goBack, switchTab,
   registerTabRenderer, registerPageRenderer,
   isDesktop, setSidebarBar, refreshSidebar,
@@ -49,13 +52,7 @@ let _pinBottomForKeyboard = false;
 let _keyboardBlurTimer = 0;
 
 let _chatInputComposing = false;
-const _chatScrollState = {
-  el: null,
-  followBottom: true,
-  suppressScroll: false,
-  mediaEpoch: 0,
-  alignFrame: 0,
-};
+const _chatBottomAnchor = createChatBottomAnchor();
 
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
@@ -479,61 +476,12 @@ export function playVoiceMessage(el) {
   });
 }
 
-function _isNearBottom(el) {
-  return el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
-}
-
 function _bindChatScroll(el) {
-  if (_chatScrollState.alignFrame) {
-    cancelAnimationFrame(_chatScrollState.alignFrame);
-    _chatScrollState.alignFrame = 0;
-  }
-  _chatScrollState.el = el;
-  _chatScrollState.followBottom = true;
-  _chatScrollState.suppressScroll = false;
-  _chatScrollState.mediaEpoch += 1;
-  el.addEventListener("scroll", () => {
-    if (_chatScrollState.el !== el || _chatScrollState.suppressScroll) return;
-    _chatScrollState.followBottom = _isNearBottom(el);
-  }, { passive: true });
-}
-
-function _alignChatBottom(el) {
-  if (_chatScrollState.el !== el || !_chatScrollState.followBottom) return;
-  el.scrollTop = el.scrollHeight;
-}
-
-function _scheduleChatBottom(el) {
-  if (_chatScrollState.el !== el || !_chatScrollState.followBottom || _chatScrollState.alignFrame) return;
-  _chatScrollState.alignFrame = requestAnimationFrame(() => {
-    _chatScrollState.alignFrame = 0;
-    _alignChatBottom(el);
-  });
-}
-
-// Message renderers mark layout-affecting images with data-message-media. The
-// chat layer owns the follow decision: each image gets bounded one-shot
-// listeners, while cached images are settled on the next frame as well.
-function _watchMessageMedia(root, el, epoch = _chatScrollState.mediaEpoch) {
-  for (const img of root.querySelectorAll("img[data-message-media]")) {
-    const settled = () => {
-      if (_chatScrollState.el === el && _chatScrollState.mediaEpoch === epoch) {
-        _scheduleChatBottom(el);
-      }
-    };
-    if (img.complete) {
-      requestAnimationFrame(settled);
-    } else {
-      img.addEventListener("load", settled, { once: true });
-      img.addEventListener("error", settled, { once: true });
-    }
-  }
+  _chatBottomAnchor.bind(el, { initial: true, lifecycleRoot: content() });
 }
 
 function _scrollAfterInsert(el, insertedRoot = el.lastElementChild) {
-  _alignChatBottom(el);
-  requestAnimationFrame(() => _scheduleChatBottom(el));
-  if (insertedRoot) _watchMessageMedia(insertedRoot, el);
+  _chatBottomAnchor.scrollAfterInsert(el, insertedRoot);
 }
 
 function _syncMobileViewport() {
@@ -920,18 +868,11 @@ function renderMessages(messages) {
   if (!el) return;
   _closeQuotePop();  // a full in-place re-render (e.g. SSE refresh) detaches the popup anchor
 
-  const followBottom = _chatScrollState.el !== el || _chatScrollState.followBottom;
-  const previousScrollTop = el.scrollTop;
-  const mediaEpoch = ++_chatScrollState.mediaEpoch;
-  _chatScrollState.suppressScroll = true;
+  const renderState = _chatBottomAnchor.beginRender(el);
 
   if (messages.length === 0) {
     el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="empty-text">开始对话吧</div></div>`;
-    requestAnimationFrame(() => {
-      if (_chatScrollState.el === el && _chatScrollState.mediaEpoch === mediaEpoch) {
-        _chatScrollState.suppressScroll = false;
-      }
-    });
+    requestAnimationFrame(() => _chatBottomAnchor.finishRender(renderState, el));
     return;
   }
 
@@ -968,17 +909,7 @@ function renderMessages(messages) {
     </div>`;
   }
   el.innerHTML = html;
-  requestAnimationFrame(() => {
-    if (_chatScrollState.el !== el || _chatScrollState.mediaEpoch !== mediaEpoch) return;
-    _chatScrollState.followBottom = followBottom;
-    _chatScrollState.suppressScroll = false;
-    if (followBottom) {
-      _alignChatBottom(el);
-    } else {
-      el.scrollTop = previousScrollTop;
-    }
-    _watchMessageMedia(el, el, mediaEpoch);
-  });
+  requestAnimationFrame(() => _chatBottomAnchor.finishRender(renderState, el));
 }
 
 export function onChatInput() {
@@ -1111,7 +1042,7 @@ export async function sendChat() {
   let userBubble = "";
   if (text) userBubble += `<div class="msg-bubble">${esc(text)}</div>`;
   for (const img of _pendingImages) {
-    userBubble += `<div class="msg-image"><img src="${img.url}" alt="image"></div>`;
+    userBubble += `<div class="msg-image"><img src="${img.url}" alt="image" data-message-media></div>`;
   }
   for (const f of _pendingFiles) {
     userBubble += `<div class="msg-file-inline">
@@ -1182,9 +1113,7 @@ export function appendAssistantMessage(message, isLast) {
   const msgsEl = $("chat-msgs");
   if (!msgsEl) return;
 
-  const wasAtBottom = _chatScrollState.el === msgsEl
-    ? _chatScrollState.followBottom
-    : _isNearBottom(msgsEl);
+  const wasAtBottom = _chatBottomAnchor.followsBottom(msgsEl);
 
   const persona = state.personas.find(p => p.id === chatPersonaId);
   const pname = persona?.name || chatPersonaId;
@@ -1394,7 +1323,7 @@ export async function sendSticker(stickerUrl) {
 
   const imgSrc = _base + stickerUrl;
   msgsEl.insertAdjacentHTML("beforeend",
-    `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div><div class="msg-image"><img src="${esc(imgSrc)}" alt="sticker" onclick="PawzoChat.openImagePreview(this.src)"></div></div></div>`
+    `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div><div class="msg-image"><img src="${esc(imgSrc)}" alt="sticker" data-message-media onclick="PawzoChat.openImagePreview(this.src)"></div></div></div>`
   );
   _scrollAfterInsert(msgsEl);
 
