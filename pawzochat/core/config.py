@@ -62,6 +62,8 @@ DEFAULTS: dict = {
     "chat": {
         "max_context_rounds": 10,
         "queue_wait_seconds": 7,
+        "new_message_sound": True,
+        "new_message_vibration": True,
     },
     "reply": {
         "typing_speed": 0.2,

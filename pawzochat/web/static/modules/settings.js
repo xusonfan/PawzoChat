@@ -26,6 +26,7 @@ import {
 } from "./navigation.js";
 import { applyThemeFromState, invalidateCache } from "./theme.js";
 import { renderVerifyInput, clearVerifyInput } from "./qr_verify.js";
+import { previewNotificationSound } from "./notification_feedback.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -2085,13 +2086,86 @@ function renderSettingsChat() {
   );
   const s = state.settings?.chat || {};
   const maxRounds = s.max_context_rounds || 5;
-  content().innerHTML = `<div class="page">
+  content().innerHTML = `<div class="page" id="settings-chat-page">
+    <style>
+      #settings-chat-page .notification-setting-row {
+        align-items: center;
+        gap: 12px;
+      }
+      #settings-chat-page .notification-setting-copy {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      #settings-chat-page .notification-setting-title {
+        display: block;
+        width: auto;
+        min-width: 0;
+        max-width: none;
+      }
+      #settings-chat-page .notification-setting-hint {
+        margin-top: 4px;
+        color: var(--text-3);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      #settings-chat-page .notification-setting-actions {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-left: auto;
+      }
+      #settings-chat-page .notification-setting-actions .switch-wrap {
+        position: relative;
+        width: 44px;
+        min-width: 44px;
+        max-width: 44px;
+        height: 26px;
+        flex: 0 0 44px;
+        margin-left: 0;
+      }
+      #settings-chat-page .notification-sound-preview {
+        padding: 5px 8px;
+        border: 1px solid var(--divider);
+        border-radius: 6px;
+        color: var(--text-2);
+        font-size: 13px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      @media (max-width: 420px) {
+        #settings-chat-page .notification-setting-actions { gap: 6px; }
+      }
+    </style>
     <div class="card">
       <div class="card-header">上下文</div>
       <div class="form-group"><div class="form-row"><label>最大上下文轮次</label>
         <div class="stepper"><button onclick="PawzoChat.step('sc-ctx',-1)">−</button><span class="stepper-val" id="sc-ctx">${maxRounds}</span><button onclick="PawzoChat.step('sc-ctx',1)">+</button></div>
       </div></div>
       <div class="form-hint">LLM 每次请求携带的历史对话轮次数</div>
+    </div>
+    <div class="card">
+      <div class="card-header">新消息提醒</div>
+      <div class="form-group"><div class="form-row notification-setting-row">
+        <div class="notification-setting-copy">
+          <label class="notification-setting-title" id="sc-sound-label" for="sc-sound">新消息提示音</label>
+          <div class="notification-setting-hint">收到当前未查看会话的角色新消息时播放短提示音；试听不受开关影响</div>
+        </div>
+        <div class="notification-setting-actions">
+          <button type="button" class="btn-text notification-sound-preview" onclick="PawzoChat.previewNewMessageSound()" aria-label="试听新消息提示音">试听</button>
+          <label class="switch-wrap"><input type="checkbox" id="sc-sound" role="switch" aria-labelledby="sc-sound-label" ${s.new_message_sound !== false ? "checked" : ""}><span class="switch-track"></span></label>
+        </div>
+      </div></div>
+      <div class="form-group"><div class="form-row notification-setting-row">
+        <div class="notification-setting-copy">
+          <label class="notification-setting-title" id="sc-vibration-label" for="sc-vibration">新消息震动</label>
+          <div class="notification-setting-hint">支持震动的设备收到新消息时振动，不支持的设备会自动跳过</div>
+        </div>
+        <div class="notification-setting-actions">
+          <label class="switch-wrap"><input type="checkbox" id="sc-vibration" role="switch" aria-labelledby="sc-vibration-label" ${s.new_message_vibration !== false ? "checked" : ""}><span class="switch-track"></span></label>
+        </div>
+      </div></div>
     </div>
     <div class="card">
       <div class="card-header">消息队列</div>
@@ -2103,10 +2177,25 @@ function renderSettingsChat() {
   </div>`;
 }
 
+export function previewNewMessageSound() {
+  // Do not await anything before this call: it must reach audio.play() in the
+  // original click activation stack on restrictive mobile browsers.
+  const playback = previewNotificationSound();
+  void playback.then(played => {
+    if (!played) toast("提示音播放失败，请检查浏览器媒体权限或静音设置", "error");
+  });
+  return playback;
+}
+
 export async function saveSettingsChat() {
   const rounds = parseInt($("sc-ctx").textContent);
   const wait = parseInt($("sc-wait").textContent);
-  const patch = { max_context_rounds: rounds, queue_wait_seconds: wait };
+  const patch = {
+    max_context_rounds: rounds,
+    queue_wait_seconds: wait,
+    new_message_sound: $("sc-sound").checked,
+    new_message_vibration: $("sc-vibration").checked,
+  };
   showLoading("保存中…");
   try {
     await api.patch("/api/settings", { chat: patch });

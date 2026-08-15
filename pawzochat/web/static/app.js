@@ -28,6 +28,7 @@ import {
   isDesktop, setSidebarBar, initMobileTabSwipe,
 } from "./modules/navigation.js";
 import { applyThemeFromState, watchSystemTheme } from "./modules/theme.js";
+import { notifyNewMessage } from "./modules/notification_feedback.js";
 
 import {
   chatPersonaId, renderChatList, refreshChatMessages, refreshUnreadCounts,
@@ -92,6 +93,7 @@ import {
   editVoiceModel, confirmEditVoiceModel, removeEditVoiceModel,
   openVoiceTest, onVoiceTestProviderChange, onVoiceTestModelChange, onVoiceTestVoiceChange, onVoiceTestTextInput, runVoiceTest,
   onTypingDelayToggle,
+  previewNewMessageSound,
   saveSettingsChat, saveSettingsReply,
   onThemeModeChange, onThemeToggle, onThemeMove, onThemeDelete, saveSettingsTheme,
   themeImportPick, themeImportSubmit,
@@ -230,7 +232,12 @@ function initSSE() {
       }
       if (data.type === "assistant_message") {
         if (data.is_last) state.processingPersonas.delete(data.persona_id);
-        if (isViewingChat(data.persona_id)) {
+        const viewingChat = isViewingChat(data.persona_id);
+        notifyNewMessage(data, {
+          isViewing: viewingChat,
+          settings: state.settings?.chat,
+        });
+        if (viewingChat) {
           appendAssistantMessage(data.message, data.is_last);
           markConversationRead(data.persona_id);
         }
@@ -329,6 +336,7 @@ window.PawzoChat = {
   editVoiceModel, confirmEditVoiceModel, removeEditVoiceModel,
   openVoiceTest, onVoiceTestProviderChange, onVoiceTestModelChange, onVoiceTestVoiceChange, onVoiceTestTextInput, runVoiceTest,
   onTypingDelayToggle,
+  previewNewMessageSound,
   saveSettingsChat, saveSettingsReply,
   onThemeModeChange, onThemeToggle, onThemeMove, onThemeDelete, saveSettingsTheme,
   themeImportPick, themeImportSubmit,
