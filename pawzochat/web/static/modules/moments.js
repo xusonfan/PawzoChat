@@ -24,6 +24,12 @@ import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } fro
 import { setTopBar, goBack, pushPage, registerPageRenderer } from "./navigation.js";
 import { renderTextMedia } from "./message_content.js";
 import { buildMomentActionsPopHtml, buildMomentMetaHtml } from "./moments_item_chrome.js";
+import {
+  groupMomentsByYearMonth,
+  stablePersonaCoverStyle,
+  momentTextExcerpt,
+  parseMomentDate,
+} from "./moments_timeline.js";
 
 const BASE = () => window.PAWZOCHAT_BASE || "";
 
@@ -35,6 +41,13 @@ const _list = {
   loading: false,
   observer: null,
   inListPage: false,
+  // Stable author/persona id filter for API list calls. null = global feed.
+  authorFilter: null,
+  // "feed" | "persona" | "detail"
+  view: "feed",
+  personaId: null,
+  personaMeta: null, // { id, name, signature, has_avatar, avatar_version, ... }
+  detailMid: null,
 };
 
 const _state = {
@@ -149,6 +162,11 @@ function _setListActions() {
 
 async function renderMomentsList() {
   _list.inListPage = true;
+  _list.view = "feed";
+  _list.authorFilter = null;
+  _list.personaId = null;
+  _list.personaMeta = null;
+  _list.detailMid = null;
   _list.items = [];
   _list.hasMore = true;
   _list.loading = false;
@@ -216,6 +234,9 @@ async function _loadNextPage(isFirst) {
   if (!_list.hasMore && !isFirst) return;
   _list.loading = true;
   let url = "/api/moments?limit=20";
+  if (_list.authorFilter) {
+    url += `&author=${encodeURIComponent(_list.authorFilter)}`;
+  }
   if (!isFirst && _list.items.length > 0) {
     const oldestTs = _list.items[_list.items.length - 1].timestamp;
     url += `&before=${encodeURIComponent(oldestTs)}`;
@@ -230,12 +251,55 @@ async function _loadNextPage(isFirst) {
       for (const it of items) if (!seen.has(it.id)) _list.items.push(it);
     }
     _list.hasMore = !!res.has_more;
-    _renderItems();
+    _renderLiveView();
   } catch (e) {
     toast("加载失败", "error");
+    if (isFirst && _list.view === "persona") {
+      const feed = $("pm-feed");
+      if (feed) {
+        feed.innerHTML = `<div class="moments-empty">加载失败，请返回后重试</div>`;
+      }
+    }
   } finally {
     _list.loading = false;
   }
+}
+
+function _preserveComposer() {
+  if (!_composer.mid) return null;
+  const inp = document.getElementById(`m-comp-input-${_composer.mid}`);
+  if (!inp) return null;
+  return {
+    mid: _composer.mid,
+    value: inp.value,
+    selStart: inp.selectionStart,
+    selEnd: inp.selectionEnd,
+    wasFocused: document.activeElement === inp,
+  };
+}
+
+function _restoreComposer(preserved) {
+  if (!preserved) return;
+  const inp = document.getElementById(`m-comp-input-${preserved.mid}`);
+  if (!inp) return;
+  inp.value = preserved.value;
+  if (preserved.wasFocused) {
+    inp.focus();
+    try { inp.setSelectionRange(preserved.selStart, preserved.selEnd); } catch (e) { /* ignore */ }
+  }
+}
+
+/** Re-render whichever moments surface is currently mounted. */
+function _renderLiveView() {
+  if (_list.view === "persona" && $("pm-feed")) {
+    _renderPersonaTimeline();
+    return;
+  }
+  if (_list.view === "detail" && $("md-body")) {
+    _renderMomentDetailBody();
+    return;
+  }
+  _renderItems();
 }
 
 function _renderItems() {
@@ -248,32 +312,11 @@ function _renderItems() {
   }
   // Snapshot composer state (text + caret) so SSE-triggered re-renders
   // don't drop what the user is currently typing.
-  let preserved = null;
-  if (_composer.mid) {
-    const inp = document.getElementById(`m-comp-input-${_composer.mid}`);
-    if (inp) {
-      preserved = {
-        mid: _composer.mid,
-        value: inp.value,
-        selStart: inp.selectionStart,
-        selEnd: inp.selectionEnd,
-        wasFocused: document.activeElement === inp,
-      };
-    }
-  }
+  const preserved = _preserveComposer();
   feed.innerHTML = _list.items.map(_momentHtml).join("");
   const end = $("m-end");
   if (end) end.style.display = _list.hasMore ? "none" : "";
-  if (preserved) {
-    const inp = document.getElementById(`m-comp-input-${preserved.mid}`);
-    if (inp) {
-      inp.value = preserved.value;
-      if (preserved.wasFocused) {
-        inp.focus();
-        try { inp.setSelectionRange(preserved.selStart, preserved.selEnd); } catch (e) { /* ignore */ }
-      }
-    }
-  }
+  _restoreComposer(preserved);
 }
 
 function _momentHtml(m) {
@@ -366,7 +409,7 @@ function _composerHtml(mid) {
 
 function _setupObserver() {
   if (_list.observer) { try { _list.observer.disconnect(); } catch (e) { /* ignore */ } }
-  const sentinel = $("m-sentinel");
+  const sentinel = $("m-sentinel") || $("pm-sentinel");
   if (!sentinel) return;
   _list.observer = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -376,6 +419,246 @@ function _setupObserver() {
     }
   }, { rootMargin: "200px 0px" });
   _list.observer.observe(sentinel);
+}
+
+/* ---- Persona personal moments ---- */
+
+export function openPersonaMoments(personaId) {
+  if (!personaId) return;
+  pushPage("personaMoments", { personaId });
+}
+
+async function renderPersonaMoments(data) {
+  const personaId = data?.personaId;
+  if (!personaId) {
+    toast("角色无效", "error");
+    return;
+  }
+
+  _list.inListPage = true;
+  _list.view = "persona";
+  _list.authorFilter = personaId;
+  _list.personaId = personaId;
+  _list.detailMid = null;
+  _list.items = [];
+  _list.hasMore = true;
+  _list.loading = false;
+
+  setTopBar("朋友圈", true, "");
+  content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
+
+  let persona = null;
+  try {
+    const [p, stateRes, settingsRes, personasRes] = await Promise.all([
+      api.get(`/api/personas/${encodeURIComponent(personaId)}`),
+      api.get("/api/moments/state"),
+      api.get("/api/moments/settings"),
+      api.get("/api/personas"),
+    ]);
+    persona = p;
+    _state.isGenerating = !!stateRes.is_generating;
+    _state.coverUrl = settingsRes.cover_url || "";
+    _state.personasById = {};
+    for (const row of (personasRes.personas || [])) _state.personasById[row.id] = row;
+    // Ensure current persona is present for avatar lookup even if list is stale.
+    _state.personasById[personaId] = {
+      ...(_state.personasById[personaId] || {}),
+      id: personaId,
+      name: p.name,
+      has_avatar: p.has_avatar,
+      avatar_version: p.avatar_version,
+    };
+  } catch (e) {
+    toast("加载失败", "error");
+    content().innerHTML = `<div class="moments-empty">无法加载角色朋友圈</div>`;
+    return;
+  }
+
+  _list.personaMeta = persona;
+  const name = persona.name || "角色";
+  const signature = (persona.signature || "").trim() || "这个人很神秘，什么都没写";
+  const avUrl = personaAvatarUrl(persona);
+  const avatarBlock = avatarHtml(name, "lg", avUrl);
+
+  content().innerHTML = `
+    <div class="persona-moments-page" id="pm-page">
+      <div class="persona-moments-cover" id="pm-cover" aria-hidden="true"></div>
+      <div class="persona-moments-identity">
+        <div class="persona-moments-avatar">${avatarBlock}</div>
+        <div class="persona-moments-name">${esc(name)}</div>
+      </div>
+      <div class="persona-moments-signature">${esc(signature)}</div>
+      <div class="persona-moments-feed" id="pm-feed">
+        <div class="loading-center"><div class="spinner"></div></div>
+      </div>
+      <div class="moments-bottom-sentinel" id="pm-sentinel"></div>
+      <div class="moments-end" id="pm-end" style="display:none">— 已经到底了 —</div>
+    </div>
+  `;
+
+  _renderPersonaCover();
+  await _loadNextPage(true);
+  _setupObserver();
+}
+
+function _renderPersonaCover() {
+  const el = $("pm-cover");
+  if (!el) return;
+  const url = _state.coverUrl ? `${BASE()}${_state.coverUrl}` : "";
+  if (url) {
+    el.style.backgroundImage = `url('${url}')`;
+    el.classList.add("has-image");
+    el.classList.remove("persona-moments-cover--theme");
+  } else {
+    const style = stablePersonaCoverStyle(_list.personaId || "");
+    el.style.backgroundImage = style.backgroundImage;
+    el.classList.remove("has-image");
+    el.classList.add(style.className);
+  }
+}
+
+function _renderPersonaTimeline() {
+  const feed = $("pm-feed");
+  if (!feed) return;
+  if (_list.items.length === 0) {
+    feed.innerHTML = `<div class="moments-empty">还没有发布过朋友圈</div>`;
+    const end = $("pm-end"); if (end) end.style.display = "none";
+    return;
+  }
+
+  const groups = groupMomentsByYearMonth(_list.items);
+  const currentYear = new Date().getFullYear();
+  let html = "";
+
+  for (const y of groups) {
+    if (y.year !== currentYear) {
+      html += `<div class="persona-moments-year" role="heading" aria-level="2">${y.year}年</div>`;
+    }
+    for (const mo of y.months) {
+      html += `<div class="persona-moments-month-block">`;
+      let firstInMonth = true;
+      for (const m of mo.items) {
+        html += _personaTimelineRowHtml(m, { showMonth: firstInMonth, month: mo.month });
+        firstInMonth = false;
+      }
+      html += `</div>`;
+    }
+  }
+
+  feed.innerHTML = html;
+  const end = $("pm-end");
+  if (end) end.style.display = _list.hasMore ? "none" : "";
+}
+
+function _personaTimelineRowHtml(m, { showMonth, month }) {
+  const { day } = parseMomentDate(m.timestamp);
+  const imgs = (m.images || []).filter(Boolean);
+  const thumbs = imgs.slice(0, 4).map(fn => {
+    const url = _imageUrl(m.id, fn);
+    return `<div class="persona-moments-thumb" style="background-image:url('${url}')" aria-hidden="true"></div>`;
+  }).join("");
+  const more = imgs.length > 4
+    ? `<span class="persona-moments-thumb-more">+${imgs.length - 4}</span>`
+    : "";
+  const mediaHtml = thumbs
+    ? `<div class="persona-moments-thumbs">${thumbs}${more}</div>`
+    : `<div class="persona-moments-thumbs persona-moments-thumbs--empty" aria-hidden="true"></div>`;
+  const excerpt = momentTextExcerpt(m.text || "");
+  const textHtml = excerpt
+    ? `<div class="persona-moments-excerpt">${esc(excerpt)}</div>`
+    : (imgs.length
+      ? `<div class="persona-moments-excerpt persona-moments-excerpt--muted">分享了 ${imgs.length} 张图片</div>`
+      : `<div class="persona-moments-excerpt persona-moments-excerpt--muted">动态</div>`);
+
+  const dateLabel = showMonth
+    ? `<span class="persona-moments-day-num">${day}</span><span class="persona-moments-day-month">${month}月</span>`
+    : `<span class="persona-moments-day-num">${day}</span>`;
+
+  const mid = esc(m.id);
+  return `
+    <button type="button" class="persona-moments-row"
+      data-mid="${mid}"
+      aria-label="查看这条朋友圈"
+      onclick="PawzoChat.momentsOpenDetail('${mid}')">
+      <div class="persona-moments-date">${dateLabel}</div>
+      <div class="persona-moments-row-body">
+        ${mediaHtml}
+        ${textHtml}
+      </div>
+    </button>
+  `;
+}
+
+export function momentsOpenDetail(momentId) {
+  if (!momentId) return;
+  // Keep return chain: personaMoments stays under this page on the stack.
+  pushPage("momentDetail", {
+    momentId,
+    personaId: _list.personaId || undefined,
+  });
+}
+
+async function renderMomentDetail(data) {
+  const mid = data?.momentId;
+  if (!mid) {
+    toast("动态无效", "error");
+    return;
+  }
+
+  _list.inListPage = true;
+  _list.view = "detail";
+  _list.detailMid = mid;
+  // Keep authorFilter if we came from a persona page so SSE filtering stays consistent.
+  if (data?.personaId) {
+    _list.authorFilter = data.personaId;
+    _list.personaId = data.personaId;
+  }
+
+  setTopBar("详情", true, "");
+  content().innerHTML = `
+    <div class="page moment-detail-page" id="md-page">
+      <div class="moment-detail-body" id="md-body">
+        <div class="loading-center"><div class="spinner"></div></div>
+      </div>
+    </div>
+  `;
+
+  // Ensure personas cache for avatars.
+  if (!Object.keys(_state.personasById).length) {
+    try {
+      const personasRes = await api.get("/api/personas");
+      for (const p of (personasRes.personas || [])) _state.personasById[p.id] = p;
+    } catch (e) { /* tolerate */ }
+  }
+
+  let m = _list.items.find(x => x.id === mid);
+  if (!m) {
+    try {
+      const res = await api.get(`/api/moments/${encodeURIComponent(mid)}`);
+      m = res.moment;
+      if (m) {
+        // Seed into shared list so like/reply handlers can find it without duplicating state.
+        _list.items = [m, ..._list.items.filter(x => x.id !== m.id)];
+      }
+    } catch (e) {
+      toast("加载失败", "error");
+    }
+  }
+  _renderMomentDetailBody();
+}
+
+function _renderMomentDetailBody() {
+  const host = $("md-body");
+  if (!host) return;
+  const mid = _list.detailMid;
+  const m = _list.items.find(x => x.id === mid);
+  if (!m) {
+    host.innerHTML = `<div class="moments-empty">这条朋友圈不存在或已删除</div>`;
+    return;
+  }
+  const preserved = _preserveComposer();
+  host.innerHTML = _momentHtml(m);
+  _restoreComposer(preserved);
 }
 
 /* ---- Refresh / Publish actions ---- */
@@ -540,7 +823,7 @@ export async function momentsLikeToggle(mid) {
     } else {
       moment.likes = [...(moment.likes || []), { author: "user", author_label: userName }];
     }
-    _renderItems();
+    _renderLiveView();
   } catch (e) { toast("操作失败", "error"); }
 }
 
@@ -551,7 +834,7 @@ export function momentsOpenComposer(mid) {
   _composer.replyToLabel = "";
   _composer.activeRid = null;
   _mountComposerOutside();
-  _renderItems();
+  _renderLiveView();
   _focusComposer(mid);
 }
 
@@ -573,7 +856,7 @@ export function momentsReplyTo(mid, rid) {
   }
   _composer.activeRid = rid;
   _mountComposerOutside();
-  _renderItems();
+  _renderLiveView();
   _focusComposer(mid);
 }
 
@@ -584,7 +867,7 @@ export function momentsCloseComposer() {
   _composer.replyToLabel = "";
   _composer.activeRid = null;
   _unmountComposerOutside();
-  _renderItems();
+  _renderLiveView();
 }
 
 function _mountComposerOutside() {
@@ -640,7 +923,7 @@ export async function momentsSubmitReply(mid) {
     _composer.replyToLabel = "";
     _composer.activeRid = null;
     _unmountComposerOutside();
-    _renderItems();
+    _renderLiveView();
   } catch (e) { toast("评论失败", "error"); }
 }
 
@@ -655,7 +938,7 @@ export async function momentsDeleteReply(mid, rid) {
     const deleted = new Set(res.data?.deleted_ids || [rid]);
     const moment = _list.items.find(m => m.id === mid);
     if (moment) moment.replies = (moment.replies || []).filter(r => !deleted.has(r.id));
-    _renderItems();
+    _renderLiveView();
   } catch (e) { toast("删除失败", "error"); }
   finally { hideLoading(); }
 }
@@ -765,7 +1048,7 @@ export async function momentsSubmitEdit() {
         const r = (moment.replies || []).find(x => x.id === rid);
         if (r) r.text = res.data?.text ?? text;
       }
-      _renderItems();
+      _renderLiveView();
     }
     closeOverlay();
   } catch (e) { toast("保存失败", "error"); }
@@ -782,7 +1065,7 @@ export async function momentsDelete(mid) {
     if (res.status >= 400) { toast(res.data?.error || "删除失败", "error"); return; }
     // SSE will also remove it, but update locally for snappy response.
     _list.items = _list.items.filter(m => m.id !== mid);
-    _renderItems();
+    _renderLiveView();
   } catch (e) { toast("删除失败", "error"); }
   finally { hideLoading(); }
 }
@@ -856,12 +1139,17 @@ export async function momentsCoverDelete() {
 
 /* ---- SSE handlers ---- */
 
-// True iff the moments list page is the currently rendered page. The
-// _list.inListPage flag alone is unreliable because nothing resets it when
-// the user switches to a different top-level tab — checking for the feed
-// element keeps SSE side-effects scoped to when the page is actually visible.
+// True iff a moments surface that shares _list state is currently mounted.
+// The _list.inListPage flag alone is unreliable because nothing resets it when
+// the user switches to a different top-level tab — checking for live roots
+// keeps SSE side-effects scoped to when the page is actually visible.
 function _isListPageVisible() {
-  return _list.inListPage && !!document.getElementById("m-feed");
+  if (!_list.inListPage) return false;
+  return !!(
+    document.getElementById("m-feed")
+    || document.getElementById("pm-feed")
+    || document.getElementById("md-body")
+  );
 }
 
 export async function momentsOnUpdate(data) {
@@ -878,14 +1166,18 @@ export async function momentsOnUpdate(data) {
       if (m.likes) m.likes = m.likes.filter(l => l.author !== authorId);
       return true;
     });
-    _renderItems();
+    _renderLiveView();
     return;
   }
   if (!mid) return;
   try {
     if (action === "deleted") {
       _list.items = _list.items.filter(m => m.id !== mid);
-      _renderItems();
+      if (_list.view === "detail" && _list.detailMid === mid) {
+        _renderLiveView();
+        return;
+      }
+      _renderLiveView();
       return;
     }
     if (action === "reply_deleted") {
@@ -894,34 +1186,42 @@ export async function momentsOnUpdate(data) {
       if (idx >= 0) {
         _list.items[idx].replies =
           (_list.items[idx].replies || []).filter(r => !deleted.has(r.id));
-        _renderItems();
+        _renderLiveView();
       }
       return;
     }
     const res = await api.get(`/api/moments/${encodeURIComponent(mid)}`);
     if (!res.moment) return;
     const m = res.moment;
+    // When viewing a persona album, ignore moments from other authors.
+    if (_list.authorFilter && m.author !== _list.authorFilter) {
+      // Still allow updates to an already-listed item (shouldn't happen for author mismatch).
+      const existing = _list.items.findIndex(x => x.id === mid);
+      if (existing < 0) return;
+    }
     const idx = _list.items.findIndex(x => x.id === mid);
     if (idx >= 0) {
       _list.items[idx] = m;
     } else if (action === "added" || action === "reply_added" || action === "like_changed") {
+      if (_list.authorFilter && m.author !== _list.authorFilter) return;
       // Promote off-window moments to the top only when they grew (new post,
       // new reply, or like change). Edits never reorder the feed.
       _list.items.unshift(m);
     }
-    _renderItems();
+    _renderLiveView();
   } catch (e) { /* silent */ }
 }
 
 export function momentsOnGenerating(isGenerating) {
   _state.isGenerating = !!isGenerating;
-  if (_isListPageVisible()) _setListActions();
+  if (_isListPageVisible() && _list.view === "feed") _setListActions();
 }
 
 /* ---- Publish page ---- */
 
 function renderMomentsPublish() {
   _list.inListPage = false;
+  _list.view = "feed";
   setTopBar("发布朋友圈", true, `
     <button class="btn-text" onclick="PawzoChat.momentsSubmitPublish()" style="font-size:15px;font-weight:500;padding:8px 8px">发表</button>
   `);
@@ -1022,6 +1322,7 @@ export async function momentsSubmitPublish() {
 
 async function renderMomentsSettings() {
   _list.inListPage = false;
+  _list.view = "feed";
   setTopBar("朋友圈设置", true, `
     <button class="btn-text" onclick="PawzoChat.momentsSaveSettings()">保存</button>
   `);
@@ -1199,3 +1500,5 @@ export async function momentsSaveSettings() {
 registerPageRenderer("momentsList", renderMomentsList);
 registerPageRenderer("momentsPublish", renderMomentsPublish);
 registerPageRenderer("momentsSettings", renderMomentsSettings);
+registerPageRenderer("personaMoments", renderPersonaMoments);
+registerPageRenderer("momentDetail", renderMomentDetail);

@@ -696,7 +696,193 @@ body {
 }
 .persona-card-label { color: var(--text-3); }
 .persona-card-value { color: var(--text-2); overflow-wrap: anywhere; }
+.persona-card-links {
+  margin: 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+}
+.persona-card-links .card-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.persona-card-links .card-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.persona-moments-entry-previews {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+}
+.persona-moments-entry-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--bg-hover, #eee);
+  flex: 0 0 auto;
+}
 .persona-card-actions { padding: 28px 24px; }
+
+/* ---- Persona personal moments (相册) ---- */
+.persona-moments-page {
+  background: var(--bg);
+  min-height: 100%;
+  padding-bottom: 24px;
+}
+.persona-moments-cover {
+  position: relative;
+  height: 240px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--primary-light, #e8d5c4);
+}
+.persona-moments-identity {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: -44px;
+  padding: 0 16px 8px;
+  position: relative;
+  z-index: 1;
+}
+.persona-moments-avatar .avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  border: 3px solid var(--card, #fff);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  margin-right: 0;
+  font-size: 28px;
+}
+.persona-moments-avatar .avatar img { border-radius: 6px; }
+.persona-moments-name {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  padding-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+.persona-moments-signature {
+  padding: 4px 16px 16px;
+  text-align: right;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.persona-moments-feed { padding: 0 12px 8px; }
+.persona-moments-year {
+  padding: 18px 4px 8px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.persona-moments-month-block { margin-bottom: 4px; }
+.persona-moments-row {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.persona-moments-row:hover { background: rgba(176, 137, 104, 0.06); }
+.persona-moments-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.persona-moments-row:active { background: rgba(176, 137, 104, 0.1); }
+.persona-moments-date {
+  flex: 0 0 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+  padding-top: 2px;
+}
+.persona-moments-day-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.persona-moments-day-month {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.persona-moments-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.persona-moments-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  flex: 0 0 auto;
+  max-width: 148px;
+}
+.persona-moments-thumbs--empty { display: none; }
+.persona-moments-thumb {
+  width: 70px;
+  height: 70px;
+  border-radius: 3px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--bg-hover, #eee);
+}
+.persona-moments-thumb-more {
+  align-self: flex-end;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 0 2px;
+}
+.persona-moments-excerpt {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  color: var(--text-1);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.persona-moments-excerpt--muted { color: var(--text-3); }
+.moment-detail-page {
+  background: var(--bg);
+  min-height: 100%;
+  padding-left: 0;
+  padding-right: 0;
+}
+.moment-detail-body { padding-bottom: 24px; }
+@media (max-width: 480px) {
+  .persona-moments-cover { height: 200px; }
+  .persona-moments-thumb { width: 60px; height: 60px; }
+  .persona-moments-thumbs { max-width: 126px; }
+}
 
 /* ---- Legacy Persona Settings ---- */
 .persona-header {

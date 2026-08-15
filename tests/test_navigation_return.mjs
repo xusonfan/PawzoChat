@@ -62,6 +62,7 @@ const { state } = await import(moduleUrl("state"));
 const {
   goBack,
   navigateToPage,
+  pushPage,
   registerPageRenderer,
   registerTabRenderer,
 } = await import(moduleUrl("navigation"));
@@ -70,7 +71,13 @@ for (const tab of ["chat", "contacts", "discover"]) {
   registerTabRenderer(tab, () => {});
 }
 const rendered = [];
-for (const page of ["chatWindow", "personaDetail", "momentsList"]) {
+for (const page of [
+  "chatWindow",
+  "personaDetail",
+  "momentsList",
+  "personaMoments",
+  "momentDetail",
+]) {
   registerPageRenderer(page, data => rendered.push([page, data]));
 }
 
@@ -108,5 +115,64 @@ assert.equal(state.currentTab, "discover");
 assert.deepEqual(state.pageStack, [page("momentsList"), page("personaDetail", "cat")]);
 goBack();
 assert.deepEqual(state.pageStack, [page("momentsList")]);
+
+// 详细资料 -> 个人朋友圈 -> 详情：逐级返回资料页，不形成循环。
+state.currentTab = "contacts";
+state.pageStack = [];
+pushPage("personaDetail", { personaId: "cat" });
+pushPage("personaMoments", { personaId: "cat" });
+pushPage("momentDetail", { momentId: "mom_1", personaId: "cat" });
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["personaDetail", "personaMoments", "momentDetail"],
+);
+goBack();
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["personaDetail", "personaMoments"],
+);
+assert.equal(state.pageStack[1].data.personaId, "cat");
+goBack();
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["personaDetail"],
+);
+assert.equal(state.pageStack[0].data.personaId, "cat");
+goBack();
+assert.deepEqual(state.pageStack, []);
+assert.equal(state.currentTab, "contacts");
+
+// 从聊天进入资料再进个人朋友圈：返回仍落回聊天。
+state.currentTab = "chat";
+state.pageStack = [page("chatWindow", "cat")];
+pushPage("personaDetail", { personaId: "cat" });
+pushPage("personaMoments", { personaId: "cat" });
+goBack();
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["chatWindow", "personaDetail"],
+);
+goBack();
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["chatWindow"],
+);
+
+// 从全局朋友圈进资料再进个人朋友圈：返回保持 discover 链。
+state.currentTab = "discover";
+state.pageStack = [page("momentsList")];
+pushPage("personaDetail", { personaId: "cat" });
+pushPage("personaMoments", { personaId: "cat" });
+goBack();
+assert.equal(state.currentTab, "discover");
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["momentsList", "personaDetail"],
+);
+goBack();
+assert.deepEqual(
+  state.pageStack.map(p => p.name),
+  ["momentsList"],
+);
 
 console.log("navigation return-state tests passed");

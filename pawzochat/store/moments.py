@@ -128,11 +128,14 @@ class MomentsStore:
         *,
         before: str | None = None,
         limit: int = 20,
+        author: str | None = None,
     ) -> tuple[list[dict], bool]:
         """Return moments newest-first plus a ``has_more`` flag.
 
         Cursor: pass the timestamp of the last item from the previous page as
         ``before`` to get the next slice (strictly older than that timestamp).
+        When *author* is set, only moments whose stored ``author`` field equals
+        that stable id are returned (never matched by display name).
         Limit is clamped to [1, 100].
         """
         limit = max(1, min(int(limit or 20), 100))
@@ -143,6 +146,8 @@ class MomentsStore:
                 key=lambda m: m.get("timestamp", ""),
                 reverse=True,
             )
+            if author is not None:
+                ordered = [m for m in ordered if m.get("author") == author]
             if before:
                 ordered = [m for m in ordered if m.get("timestamp", "") < before]
             page = ordered[:limit]

@@ -179,12 +179,17 @@ def _author_label(app, author: str) -> str:
 def list_moments():
     app = get_app()
     before = request.args.get("before") or None
+    # Stable author / persona id filter (not display-name matching).
+    author_raw = request.args.get("author")
+    author = (author_raw or "").strip() or None
+    if author is not None and len(author) > 64:
+        return jsonify({"error": "invalid author"}), 400
     try:
         limit = int(request.args.get("limit", 20))
     except ValueError:
         limit = 20
     moments, has_more = app.moments_store.list_moments(
-        before=before, limit=limit,
+        before=before, limit=limit, author=author,
     )
     return jsonify({
         "moments": [_serialize_moment(app, m) for m in moments],

@@ -347,6 +347,16 @@ async function renderPersonaDetail(data) {
         </div>
       </section>
 
+      <section class="card persona-card-links" aria-label="更多资料">
+        <button type="button" class="card-row persona-moments-entry"
+          aria-label="查看${esc(p.name)}的朋友圈"
+          onclick="PawzoChat.openPersonaMoments('${esc(p.id)}')">
+          <span class="row-label">朋友圈</span>
+          <span class="persona-moments-entry-previews" id="persona-moments-previews" aria-hidden="true"></span>
+          <span class="row-arrow" aria-hidden="true">›</span>
+        </button>
+      </section>
+
       <div class="persona-card-actions">
         <button class="btn-primary" onclick="PawzoChat.chatWithPersona('${p.id}')">发消息</button>
       </div>
@@ -356,7 +366,41 @@ async function renderPersonaDetail(data) {
       event.stopPropagation();
       openImagePreview(detailAvUrl);
     });
+
+    // Optional recent-image previews for the 朋友圈 entry (best-effort).
+    _fillPersonaMomentsPreviews(p.id);
   } catch (e) { toast("加载失败", "error"); }
+}
+
+async function _fillPersonaMomentsPreviews(personaId) {
+  const host = $("persona-moments-previews");
+  if (!host || !personaId) return;
+  try {
+    const res = await api.get(
+      `/api/moments?author=${encodeURIComponent(personaId)}&limit=8`,
+    );
+    const thumbs = [];
+    for (const m of (res.moments || [])) {
+      for (const fn of (m.images || [])) {
+        if (!fn) continue;
+        thumbs.push(
+          `/api/moments/images/${encodeURIComponent(m.id)}/${encodeURIComponent(fn)}`,
+        );
+        if (thumbs.length >= 3) break;
+      }
+      if (thumbs.length >= 3) break;
+    }
+    if (!thumbs.length) {
+      host.innerHTML = "";
+      return;
+    }
+    const base = window.PAWZOCHAT_BASE || "";
+    host.innerHTML = thumbs.map(u =>
+      `<span class="persona-moments-entry-thumb" style="background-image:url('${base}${u}')"></span>`
+    ).join("");
+  } catch (e) {
+    host.innerHTML = "";
+  }
 }
 
 async function renderPersonaSettings(data) {
