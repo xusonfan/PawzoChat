@@ -142,9 +142,11 @@ export function initMobileTabSwipe() {
 
 /* ---- Top / Sidebar bar helpers ---- */
 
-export function setTopBar(title, showBack, actionsHtml, leftHtml) {
+export function setTopBar(title, showBack, actionsHtml, leftHtml, variant = "") {
   topTitle().textContent = title;
   const bar = $("top-bar");
+  bar.classList.toggle("moments-cover-overlay", variant === "moments-cover-overlay");
+  bar.classList.remove("is-cover-hidden");
   const back = topBack();
   if (leftHtml) {
     back.classList.add("hide");
@@ -190,7 +192,20 @@ function renderCurrentTab() {
 function renderPage(name, data) {
   resetContentScroll();
   const fn = pageRenderers[name];
-  if (fn) fn(data);
+  return fn ? fn(data) : undefined;
+}
+
+function _restoreContentScroll(scrollTop, renderResult) {
+  if (!Number.isFinite(scrollTop)) return;
+  const restore = () => requestAnimationFrame(() => {
+    const area = content();
+    if (area) area.scrollTop = scrollTop;
+  });
+  if (renderResult && typeof renderResult.then === "function") {
+    Promise.resolve(renderResult).then(restore, restore);
+  } else {
+    restore();
+  }
 }
 
 export function refreshSidebar() {
@@ -419,7 +434,7 @@ export function pushPage(name, data) {
   if (isDesktop()) {
     // Desktop keeps the sidebar's tab content visible while the sub-page
     // takes over the main content area — no need to detach anything.
-    state.pageStack.push({ name, data });
+    state.pageStack.push({ name, data, scrollTop: content()?.scrollTop || 0 });
     $("top-bar").classList.remove("desktop-hidden");
     renderPage(name, data);
   } else {
@@ -443,7 +458,8 @@ function _renderPreviousPage() {
     _showNavigationRoot();
   } else {
     const prev = state.pageStack[state.pageStack.length - 1];
-    renderPage(prev.name, prev.data);
+    const renderResult = renderPage(prev.name, prev.data);
+    _restoreContentScroll(current?.scrollTop, renderResult);
   }
 }
 

@@ -52,9 +52,12 @@ const _list = {
 
 const _state = {
   isGenerating: false,
+  isRefreshPending: false,
   coverUrl: "",
   personasById: {},      // pid -> {id, name, has_avatar}
 };
+
+let _coverChromeController = null;
 
 const _publish = {
   files: [],             // [{file, dataUrl}]
@@ -137,11 +140,12 @@ function _replyTextHtml(text) {
 
 /* ---- List page ---- */
 
-function _listActionsHtml(isGenerating) {
-  const dis = isGenerating ? "disabled" : "";
-  const refreshTitle = isGenerating ? "正在生成…" : "刷新";
-  const publishTitle = isGenerating ? "正在生成…" : "发布";
-  const refreshIconCls = isGenerating ? "is-spinning" : "";
+function _listActionsHtml() {
+  const isBusy = _state.isGenerating || _state.isRefreshPending;
+  const dis = isBusy ? "disabled" : "";
+  const refreshTitle = _state.isRefreshPending ? "正在生成动态…" : "刷新";
+  const publishTitle = isBusy ? "正在生成…" : "发布";
+  const refreshIconCls = _state.isRefreshPending ? "is-spinning" : "";
   return `
     <button class="top-btn moments-action-btn" id="m-refresh-btn" title="${refreshTitle}" ${dis} onclick="PawzoChat.momentsRefresh()">
       ${iconHtml("ri-refresh-line", refreshIconCls)}
@@ -157,7 +161,31 @@ function _listActionsHtml(isGenerating) {
 
 function _setListActions() {
   const actions = $("top-bar-actions");
-  if (actions) actions.innerHTML = _listActionsHtml(_state.isGenerating);
+  if (actions) actions.innerHTML = _listActionsHtml();
+}
+
+function _setupCoverTopBar() {
+  if (_coverChromeController) _coverChromeController.abort();
+
+  const area = content();
+  const cover = $("m-cover");
+  const bar = $("top-bar");
+  if (!area || !cover || !bar) return;
+
+  const controller = new AbortController();
+  _coverChromeController = controller;
+  const sync = () => {
+    if (!cover.isConnected) {
+      controller.abort();
+      if (_coverChromeController === controller) _coverChromeController = null;
+      return;
+    }
+    const coverHidden = cover.getBoundingClientRect().bottom <= bar.getBoundingClientRect().top;
+    bar.classList.toggle("is-cover-hidden", coverHidden);
+  };
+
+  area.addEventListener("scroll", sync, { passive: true, signal: controller.signal });
+  sync();
 }
 
 async function renderMomentsList() {
@@ -171,7 +199,7 @@ async function renderMomentsList() {
   _list.hasMore = true;
   _list.loading = false;
 
-  setTopBar("朋友圈", true, _listActionsHtml(_state.isGenerating));
+  setTopBar("朋友圈", true, _listActionsHtml(), undefined, "moments-cover-overlay");
 
   content().innerHTML = `
     <input type="file" id="m-cover-file" accept="image/*" style="display:none" onchange="PawzoChat.momentsOnCoverFile(event)">
@@ -187,6 +215,7 @@ async function renderMomentsList() {
       <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i^w^y^x^d^x^l</div>
     </div>
   `;
+  _setupCoverTopBar();
 
   // Load state + first page + cover in parallel.
   try {
@@ -218,10 +247,7 @@ function _renderCover() {
   if (url) {
     el.style.backgroundImage = `url('${url}')`;
     el.classList.add("has-image");
-    el.innerHTML = `
-      <button class="moments-cover-edit" onclick="event.stopPropagation();PawzoChat.momentsCoverMenu()" title="封面操作">
-        ${iconHtml("ri-more-2-fill")}
-      </button>`;
+    el.innerHTML = "";
   } else {
     el.style.backgroundImage = "";
     el.classList.remove("has-image");
@@ -340,7 +366,13 @@ function _momentHtml(m) {
   const likesList = m.likes || [];
   const likesHtml = likesList.length === 0 ? "" : `
     <div class="moments-likes">
-      ${iconHtml("ri-heart-fill")}<span class="moments-likes-names">${likesList.map(l => esc(l.author_label || l.author || "?")).join("、")}</span>
+      ${iconHtml("ri-heart-fill")}<span class="moments-likes-names">${likesList.map(l => {
+        const likeAuthor = l.author || "";
+        const likeLabel = l.author_label || likeAuthor || "?";
+        if (!likeAuthor) return esc(likeLabel);
+        const safeLabel = esc(likeLabel);
+        return `<button type="button" class="moments-like-author" title="查看${safeLabel}的资料" aria-label="查看${safeLabel}的资料" onclick="PawzoChat.momentsOpenAuthor(event,${jsArg(likeAuthor)})">${safeLabel}</button>`;
+      }).join("、")}</span>
     </div>`;
 
   const repliesList = m.replies || [];
@@ -675,19 +707,35 @@ export function momentsOpenAuthor(event, author) {
 }
 
 export async function momentsRefresh() {
-  if (_state.isGenerating) { toast("正在生成中…", "info"); return; }
+  if (_state.isGenerating || _state.isRefreshPending) {
+    toast("正在生成中…", "info");
+    return;
+  }
+  const area = content();
+  if (area) area.scrollTo({ top: 0, behavior: "smooth" });
+  _state.isRefreshPending = true;
+  _setListActions();
   try {
     const res = await api.post("/api/moments/refresh", {});
     if (res.status >= 400) {
+      _state.isRefreshPending = false;
+      _setListActions();
       toast(res.data?.error || "刷新失败", "error");
       return;
     }
     toast("正在生成…", "info");
-  } catch (e) { toast("刷新失败", "error"); }
+  } catch (e) {
+    _state.isRefreshPending = false;
+    _setListActions();
+    toast("刷新失败", "error");
+  }
 }
 
 export function momentsOpenPublish() {
-  if (_state.isGenerating) { toast("正在生成中…", "info"); return; }
+  if (_state.isGenerating || _state.isRefreshPending) {
+    toast("正在生成中…", "info");
+    return;
+  }
   _publish.files = [];
   pushPage("momentsPublish", {});
 }
@@ -1209,11 +1257,16 @@ export async function momentsOnUpdate(data) {
       _list.items.unshift(m);
     }
     _renderLiveView();
+    if (action === "added" && _state.isRefreshPending) {
+      _state.isRefreshPending = false;
+      if (_list.view === "feed") _setListActions();
+    }
   } catch (e) { /* silent */ }
 }
 
 export function momentsOnGenerating(isGenerating) {
   _state.isGenerating = !!isGenerating;
+  if (!_state.isGenerating) _state.isRefreshPending = false;
   if (_isListPageVisible() && _list.view === "feed") _setListActions();
 }
 

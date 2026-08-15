@@ -47,6 +47,10 @@ globalThis.window = {
   matchMedia: () => ({ matches: true, addEventListener() {} }),
   addEventListener() {},
 };
+globalThis.requestAnimationFrame = callback => {
+  callback();
+  return 1;
+};
 globalThis.document = {
   getElementById: id => elements.get(id) || null,
   querySelectorAll: selector => selector === ".tab" ? tabs : [],
@@ -174,5 +178,23 @@ assert.deepEqual(
   state.pageStack.map(p => p.name),
   ["momentsList"],
 );
+
+// 朋友圈进入名片后返回：等待异步列表渲染完成，再恢复原滚动位置。
+let finishMomentsRender;
+registerPageRenderer("momentsList", () => new Promise(resolve => {
+  finishMomentsRender = resolve;
+}));
+state.currentTab = "discover";
+state.pageStack = [page("momentsList")];
+elements.get("content-area").scrollTop = 640;
+pushPage("personaDetail", { personaId: "cat" });
+assert.equal(state.pageStack.at(-1).scrollTop, 640);
+elements.get("content-area").scrollTop = 0;
+goBack();
+assert.equal(elements.get("content-area").scrollTop, 0, "渲染完成前不应过早恢复");
+finishMomentsRender();
+await Promise.resolve();
+await Promise.resolve();
+assert.equal(elements.get("content-area").scrollTop, 640, "返回后应恢复朋友圈原位置");
 
 console.log("navigation return-state tests passed");
