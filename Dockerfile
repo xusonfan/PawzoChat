@@ -20,7 +20,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
-COPY . /app
+COPY main.py /app/main.py
+COPY pawzochat /app/pawzochat
 
 EXPOSE 62000
 
