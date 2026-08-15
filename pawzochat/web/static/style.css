@@ -2306,9 +2306,33 @@ select.qs-field-input {
   max-width:100%;
 }
 .msg-row.user .msg-voice-wrap { margin-left:auto; }
+.msg-voice-line {
+  display:flex;
+  align-items:center;
+  gap:3px;
+  margin-top:4px;
+}
+.msg-voice-transcript-btn {
+  flex:0 0 auto;
+  padding:2px 3px;
+  border:0;
+  background:transparent;
+  color:var(--text-3);
+  font:500 10px/1.1 var(--font);
+  white-space:nowrap;
+  cursor:pointer;
+}
+.msg-voice-transcript-btn[hidden] { display:none; }
+.msg-voice-transcript-btn:hover {
+  color:var(--primary);
+}
+.msg-voice-transcript-btn:focus-visible {
+  outline:2px solid var(--primary);
+  outline-offset:1px;
+}
 .msg-voice {
   display:flex; align-items:center; gap:6px;
-  margin-top:4px; padding:9px 12px;
+  margin-top:0; padding:9px 12px;
   min-width:64px; max-width:100%;
   background:var(--bubble-ai);
   border-radius:var(--radius-bubble);

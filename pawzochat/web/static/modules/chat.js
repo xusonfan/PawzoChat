@@ -385,6 +385,7 @@ export async function openChat(personaId, { restored = false } = {}) {
       return;
     }
   }
+  _expandedVoiceTranscripts.clear();
   state.pageStack = [];
   pushPage("chatWindow", { personaId });
   markConversationRead(personaId);
@@ -447,9 +448,12 @@ function renderContentBlocks(content, renderLinkedImages = false) {
         // a percentage width would collapse to the minimum content width)
         const width = Math.min(220, 84 + secs * 6);
         parts += `<div class="msg-voice-wrap" data-voice-key="${escAttr(voiceKey)}">
-          <div class="msg-voice" style="width:${width}px" data-src="${escAttr(src)}" data-transcript="${escAttr(transcript)}" onclick="PawzoChat.playVoiceMessage(this)">
-            <svg class="msg-voice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path class="v1" d="M8.5 9.5a4 4 0 010 5"/><path class="v2" d="M11.5 7a8 8 0 010 10"/><path class="v3" d="M14.5 4.5a12.5 12.5 0 010 15"/></svg>
-            <span class="msg-voice-dur">${secs}″</span>
+          <div class="msg-voice-line">
+            <div class="msg-voice" style="width:${width}px" data-src="${escAttr(src)}" data-transcript="${escAttr(transcript)}" onclick="PawzoChat.playVoiceMessage(this)">
+              <svg class="msg-voice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path class="v1" d="M8.5 9.5a4 4 0 010 5"/><path class="v2" d="M11.5 7a8 8 0 010 10"/><path class="v3" d="M14.5 4.5a12.5 12.5 0 010 15"/></svg>
+              <span class="msg-voice-dur">${secs}″</span>
+            </div>
+            <button type="button" class="msg-voice-transcript-btn"${expanded ? " hidden" : ""} onclick="event.stopPropagation();PawzoChat.toggleVoiceTranscript(this)">转文字</button>
           </div>
           <div class="msg-voice-transcript"${expanded ? "" : " hidden"}>${esc(transcript)}</div>
         </div>`;
@@ -639,9 +643,7 @@ function _openQuotePop(row, armIgnore, voiceEl = null) {
   }
   if (voiceEl) {
     const transcriptEl = voiceEl.closest(".msg-voice-wrap")?.querySelector(".msg-voice-transcript");
-    if (transcriptEl && !transcriptEl.hidden) {
-      buttons += `<button class="map-btn" onclick="PawzoChat.toggleVoiceTranscript()">${iconHtml("ri-eye-close-line")}<span>收起文字</span></button>`;
-    } else {
+    if (transcriptEl?.hidden) {
       buttons += `<button class="map-btn" onclick="PawzoChat.toggleVoiceTranscript()">${iconHtml("ri-file-text-line")}<span>转文字</span></button>`;
     }
   }
@@ -752,22 +754,23 @@ export function quoteMessage() {
   if (inp) inp.focus();
 }
 
-export function toggleVoiceTranscript() {
-  const voiceEl = _quotePop.voiceEl;
-  const wrap = voiceEl?.closest(".msg-voice-wrap");
+export function toggleVoiceTranscript(trigger = null) {
+  const wrap = trigger?.closest?.(".msg-voice-wrap")
+    || _quotePop.voiceEl?.closest(".msg-voice-wrap");
   const transcriptEl = wrap?.querySelector(".msg-voice-transcript");
-  if (!wrap || !transcriptEl) {
+  if (!wrap || !transcriptEl || !transcriptEl.hidden) {
     _closeQuotePop();
     return;
   }
-  const visible = transcriptEl.hidden;
+  transcriptEl.hidden = false;
   const key = wrap.dataset.voiceKey || "";
-  transcriptEl.hidden = !visible;
-  if (key) {
-    if (visible) _expandedVoiceTranscripts.add(key);
-    else _expandedVoiceTranscripts.delete(key);
-  }
+  if (key) _expandedVoiceTranscripts.add(key);
+  const directButton = wrap.querySelector(".msg-voice-transcript-btn");
+  if (directButton) directButton.hidden = true;
   _closeQuotePop();
+  requestAnimationFrame(() => {
+    transcriptEl.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  });
 }
 
 export function clearPendingQuote() {
