@@ -50,8 +50,8 @@ let _mobileViewportReady = false;
 let _viewportSyncFrame = 0;
 let _pinBottomForKeyboard = false;
 let _keyboardBlurTimer = 0;
-
 let _chatInputComposing = false;
+
 const _chatBottomAnchor = createChatBottomAnchor();
 
 // "via <channel>" tag under a message that arrived from an external channel.
@@ -132,7 +132,7 @@ function _paintChatList(target, desktop) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
         <div class="empty-text">还没有对话</div>
         <button onclick="PawzoChat.newConversation()">发起新对话</button>
-        <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i*w*y*x*d*x*l</div>
+        <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none"></div>
       </div>`;
     updateChatTabUnread(state.conversations);
     return;
@@ -165,7 +165,7 @@ function _paintChatList(target, desktop) {
 
   // Single write: session rows + unread badges from the same state snapshot.
   target.innerHTML = `<div class="page" id="conv-list-page" style="position:relative">${searchHtml}<div class="card" id="conv-list-items">${listHtml}</div>
-    <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i*w*y*x*d*x*l</div>
+    <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none"></div>
   </div>`;
   attachConversationMenu(target.querySelector("#conv-list-items"), state.conversations, {
     onOpen: openChat,
@@ -786,6 +786,7 @@ async function renderChatWindow(data) {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
       </button>
     </div>
+    <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display:none" onchange="PawzoChat.onPhotoSelected(this)">
     <input type="file" id="img-file-input" accept="image/*" multiple style="display:none" onchange="PawzoChat.onImageSelected(this)">
     <input type="file" id="file-file-input" multiple style="display:none" onchange="PawzoChat.onFileSelected(this)">
   </div>`;
@@ -839,8 +840,8 @@ async function renderChatWindow(data) {
   _emojiGroupCache = {};
   _emojiActiveTab = 0;
   _plusMenuOpen = false;
-
   _chatInputComposing = false;
+
   if (cachedMessages) renderMessages(cachedMessages.messages || []);
 
   try {
@@ -940,6 +941,15 @@ export function onChatKey(e) {
     || _pendingImages.length > 0
     || _pendingFiles.length > 0;
   if (hasContent) sendChat();
+}
+
+export function takePhoto() {
+  const input = $("camera-file-input");
+  if (input) input.click();
+}
+
+export function onPhotoSelected(input) {
+  onImageSelected(input);
 }
 
 export function pickImage() {
@@ -1259,7 +1269,7 @@ function _renderStickerImages(el, images) {
   }</div>`;
 }
 
-/* ---- Plus Menu (图片 / 文件) ---- */
+/* ---- Plus Menu (拍照 / 图片 / 文件) ---- */
 
 function _closePlusMenu() {
   _plusMenuOpen = false;
@@ -1282,6 +1292,10 @@ export function togglePlusMenu() {
   if (!panel) return;
   panel.style.display = "flex";
   panel.innerHTML = `
+    <button class="plus-menu-item" onclick="PawzoChat.takePhoto();PawzoChat.togglePlusMenu()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4l1.5 2H20a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h4l1.5-2h5z"/><circle cx="12" cy="13" r="3"/></svg>
+      <span>拍照</span>
+    </button>
     <button class="plus-menu-item" onclick="PawzoChat.pickImage();PawzoChat.togglePlusMenu()">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
       <span>图片</span>

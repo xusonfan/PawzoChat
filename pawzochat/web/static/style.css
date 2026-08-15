@@ -2877,7 +2877,7 @@ select.qs-field-input {
 }
 .img-upload-btn.active { color: var(--primary); }
 
-/* ---- Plus Menu Panel (图片 / 文件) ---- */
+/* ---- Plus Menu Panel (拍照 / 图片 / 文件) ---- */
 .plus-menu-panel {
   display: none;
   flex-direction: row;

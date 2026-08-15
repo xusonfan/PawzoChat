@@ -33,12 +33,24 @@ assert.match(inputBar, /id="plus-menu-btn"[^>]+aria-label="打开附件面板"/)
 assert.match(inputBar, /id="chat-input"[^>]+enterkeyhint="send"/);
 assert.match(chatSource, /id="emoji-picker-panel"/);
 assert.match(chatSource, /id="plus-menu-panel"/);
+assert.match(
+  chatSource,
+  /id="camera-file-input"[^>]+accept="image\/\*"[^>]+capture="environment"[^>]+onchange="PawzoChat\.onPhotoSelected\(this\)"/,
+  "拍照输入应请求手机后置摄像头",
+);
+assert.match(chatSource, /export function takePhoto\(\)[\s\S]*?\$\("camera-file-input"\)[\s\S]*?input\.click\(\);/);
+assert.match(chatSource, /export function onPhotoSelected\(input\) \{\s*onImageSelected\(input\);\s*\}/);
+assert.ok(
+  chatSource.indexOf("PawzoChat.takePhoto()") < chatSource.indexOf("PawzoChat.pickImage()"),
+  "附件面板应先显示拍照入口",
+);
+assert.match(appSource, /takePhoto, onPhotoSelected/, "拍照操作应暴露给页面");
 assert.match(chatSource, /export function insertEmoji[\s\S]*?_closeEmojiPicker\(\);[\s\S]*?inp\.focus\(\);/);
 assert.match(chatSource, /export async function sendChat\(\)/, "公共发送逻辑应保留");
 assert.match(appSource, /onChatCompositionStart, onChatCompositionEnd/, "组合输入事件应暴露给页面");
 
 const keyHandlerMatch = chatSource.match(
-  /export function onChatKey\(e\) \{([\s\S]*?)\n\}\n\nexport function pickImage/,
+  /export function onChatKey\(e\) \{([\s\S]*?)\n\}\n\nexport function takePhoto/,
 );
 assert.ok(keyHandlerMatch, "应存在输入框键盘处理逻辑");
 const runKey = new Function(
