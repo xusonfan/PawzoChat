@@ -254,6 +254,8 @@ function _snapshotChrome() {
     topLeftHtml: slot?.innerHTML || "",
     topLeftHidden: slot ? slot.classList.contains("hide") : true,
     topBarContextual: bar?.classList.contains("contextual") || false,
+    topBarMomentsCoverOverlay: bar?.classList.contains("moments-cover-overlay") || false,
+    topBarCoverHidden: bar?.classList.contains("is-cover-hidden") || false,
     sidebarTitle: $("sidebar-title")?.textContent || "",
     sidebarActions: $("sidebar-actions")?.innerHTML || "",
   };
@@ -274,7 +276,11 @@ function _restoreChrome(chrome) {
     slot.classList.toggle("hide", chrome.topLeftHidden !== false);
   }
   const bar = $("top-bar");
-  if (bar) bar.classList.toggle("contextual", !!chrome.topBarContextual);
+  if (bar) {
+    bar.classList.toggle("contextual", !!chrome.topBarContextual);
+    bar.classList.toggle("moments-cover-overlay", !!chrome.topBarMomentsCoverOverlay);
+    bar.classList.toggle("is-cover-hidden", !!chrome.topBarCoverHidden);
+  }
   const st = $("sidebar-title"); if (st) st.textContent = chrome.sidebarTitle;
   const sa = $("sidebar-actions"); if (sa) sa.innerHTML = chrome.sidebarActions;
 }

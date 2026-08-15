@@ -3,6 +3,7 @@
  * Run: node tests/test_navigation_return.mjs
  */
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -62,6 +63,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const moduleUrl = name => pathToFileURL(
   join(__dirname, `../pawzochat/web/static/modules/${name}.js`),
 ).href;
+const navigationSource = await readFile(
+  join(__dirname, "../pawzochat/web/static/modules/navigation.js"),
+  "utf8",
+);
+assert.match(navigationSource, /topBarMomentsCoverOverlay:[\s\S]*?topBarCoverHidden:/);
+assert.match(
+  navigationSource,
+  /classList\.toggle\("moments-cover-overlay", !!chrome\.topBarMomentsCoverOverlay\)[\s\S]*?classList\.toggle\("is-cover-hidden", !!chrome\.topBarCoverHidden\)/,
+  "返回标签页时应完整恢复朋友圈顶部栏状态",
+);
 const { state } = await import(moduleUrl("state"));
 const {
   goBack,
