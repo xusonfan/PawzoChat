@@ -878,6 +878,14 @@ body {
   padding-right: 0;
 }
 .moment-detail-body { padding-bottom: 24px; }
+/* Detail-only breakout: let interactions use the row width without changing feed cards. */
+.moment-detail-page .moments-interact,
+.moment-detail-page .moments-composer {
+  width: calc(100% + 52px);
+  margin-left: -52px;
+}
+.moment-detail-page .moments-composer-input { min-width: 0; }
+
 @media (max-width: 480px) {
   .persona-moments-cover { height: 200px; }
   .persona-moments-thumb { width: 60px; height: 60px; }

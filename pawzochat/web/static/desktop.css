@@ -168,6 +168,12 @@
     margin: 0 auto;
   }
 
+  /* Moment detail can use more of the main panel than form pages. */
+  #content-area > .page.moment-detail-page {
+    width: 100%;
+    max-width: 760px;
+  }
+
   /* Chat window should use full width */
   #content-area > .chat-container {
     max-width: none;
