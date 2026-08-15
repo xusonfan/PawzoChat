@@ -195,6 +195,75 @@ export async function requestSystemNotificationPermission() {
   }
 }
 
+const _NOTIFICATION_ICON_CACHE = "pawzo-notification-icons-v1";
+const _notificationIcons = new Map();
+
+function _personaAvatarUrl(persona) {
+  if (!persona?.has_avatar) return "";
+  const base = (typeof window !== "undefined" ? window.PAWZOCHAT_BASE : "") || "";
+  const path = `${base}/api/personas/${encodeURIComponent(persona.id)}/avatar`;
+  const versioned = persona.avatar_version
+    ? `${path}?v=${encodeURIComponent(persona.avatar_version)}`
+    : path;
+  const origin = typeof window !== "undefined" ? window.location?.origin : "";
+  return origin ? new URL(versioned, origin).href : versioned;
+}
+
+function _blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(reader.error || new Error("avatar decode failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+export function cachedNotificationIcon(personaId) {
+  return _notificationIcons.get(personaId) || "";
+}
+
+export async function prepareNotificationIcons(personas, options = {}) {
+  const cacheStorage = options.cacheStorage ?? (typeof caches !== "undefined" ? caches : null);
+  const fetchFn = options.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : null);
+  const toDataUrl = options.toDataUrl ?? _blobToDataUrl;
+  if (!cacheStorage || !fetchFn) return;
+
+  const desired = new Map(
+    (personas || [])
+      .map(persona => [persona.id, _personaAvatarUrl(persona)])
+      .filter(([, url]) => url),
+  );
+  for (const personaId of [..._notificationIcons.keys()]) {
+    if (!desired.has(personaId)) _notificationIcons.delete(personaId);
+  }
+
+  try {
+    const cache = await cacheStorage.open(_NOTIFICATION_ICON_CACHE);
+    const desiredUrls = new Set(desired.values());
+    const keys = await cache.keys();
+    await Promise.all(keys.map(request => (
+      desiredUrls.has(request.url) ? Promise.resolve() : cache.delete(request)
+    )));
+
+    await Promise.all([...desired].map(async ([personaId, url]) => {
+      try {
+        let response = await cache.match(url);
+        if (!response) {
+          response = await fetchFn(url, { credentials: "same-origin" });
+          if (!response.ok) return;
+          await cache.put(url, response.clone());
+        }
+        const dataUrl = await toDataUrl(await response.blob());
+        if (dataUrl) _notificationIcons.set(personaId, dataUrl);
+      } catch (e) {
+        _notificationIcons.delete(personaId);
+      }
+    }));
+  } catch (e) {
+    // Notification delivery must never wait for or depend on avatar caching.
+  }
+}
+
 function _notificationBody(message) {
   const blocks = Array.isArray(message?.content) ? message.content : [];
   const text = blocks
@@ -263,6 +332,7 @@ export function notifyNewMessage(event, options = {}) {
 
 export function resetNotificationFeedbackForTests() {
   _handledMessageKeys.clear();
+  _notificationIcons.clear();
   _audioContext = null;
   _notificationAudio = null;
 }

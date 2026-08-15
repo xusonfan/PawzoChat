@@ -118,6 +118,31 @@ assert.equal(gestureCalls.resumes, 1);
 assert.equal(gestureCalls.bufferStarts, 1);
 assert.equal(gestureListeners.size, 0);
 
+// Avatar notification icons are fetched once, persisted, and exposed synchronously.
+mod.resetNotificationFeedbackForTests();
+const storedIcons = new Map();
+const fakeIconCache = {
+  async keys() { return []; },
+  async match(url) { return storedIcons.get(url); },
+  async put(url, response) { storedIcons.set(url, response); },
+  async delete(url) { return storedIcons.delete(url); },
+};
+const fakeAvatarResponse = {
+  ok: true,
+  clone() { return this; },
+  async blob() { return { avatar: true }; },
+};
+let avatarFetches = 0;
+await mod.prepareNotificationIcons([
+  { id: "cat", has_avatar: true, avatar_version: "7" },
+], {
+  cacheStorage: { async open() { return fakeIconCache; } },
+  fetchFn: async () => { avatarFetches += 1; return fakeAvatarResponse; },
+  toDataUrl: async () => "data:image/png;base64,Y2F0",
+});
+assert.equal(avatarFetches, 1);
+assert.equal(mod.cachedNotificationIcon("cat"), "data:image/png;base64,Y2F0");
+
 // Stable identifier and duplicate SSE delivery: one actual message, one feedback.
 mod.resetNotificationFeedbackForTests();
 const audio = fakeAudio();
@@ -320,6 +345,13 @@ assert.match(settingsSource, /api\.patch\("\/api\/settings",\s*\{ chat: patch \}
 assert.match(settingsSource, /export async function saveAsrSettings\(\)[\s\S]*api\.patch\("\/api\/asr\/settings",\s*patch\)/);
 assert.match(settingsSource, /function renderSettingsVoiceProviders\(\)[\s\S]*语音输出（TTS）/);
 assert.doesNotMatch(settingsSource, /sc-asr-/, "ASR 设置不应继续挂在对话设置表单中");
+
+const appSource = await readFile(join(
+  __dirname,
+  "../pawzochat/web/static/app.js",
+), "utf8");
+assert.match(appSource, /iconUrl:\s*cachedNotificationIcon\(data\.persona_id\)/, "系统通知应只读取已预热头像");
+assert.doesNotMatch(appSource, /iconUrl:\s*personaAvatarUrl\(/, "系统通知不应临时请求动态角色头像");
 
 const serviceWorkerSource = await readFile(join(
   __dirname,

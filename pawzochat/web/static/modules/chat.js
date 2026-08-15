@@ -22,6 +22,7 @@ import {
   updateChatTabUnread, updateConversationUnread,
 } from "./unread.js";
 import { api } from "./api.js";
+import { prepareNotificationIcons } from "./notification_feedback.js";
 import { state, $, content, sidebar } from "./state.js";
 import {
   attachConversationMenu, closeConversationMenu,
@@ -243,6 +244,7 @@ async function renderChatList() {
       res.conversations || [],
     );
     state.personas = pres.personas || [];
+    void prepareNotificationIcons(state.personas);
   } catch (e) {
     if (gen !== _conversationsFetchGen) return;
     if (!hasListDom) toast("加载失败", "error");
@@ -326,6 +328,7 @@ export async function newConversation() {
   try {
     const pres = await api.get("/api/personas");
     state.personas = pres.personas || [];
+    void prepareNotificationIcons(state.personas);
   } catch (e) { toast("加载失败", "error"); return; }
 
   const convSet = new Set(state.conversations.map(c => c.persona_id));

@@ -17,7 +17,7 @@
  */
 /* PawzoChat SPA — Module entry point */
 
-import { esc, iconHtml, personaAvatarUrl } from "./modules/utils.js";
+import { esc, iconHtml } from "./modules/utils.js";
 import { api } from "./modules/api.js";
 import { state, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
@@ -28,7 +28,10 @@ import {
   isDesktop, setSidebarBar, initMobileTabSwipe,
 } from "./modules/navigation.js";
 import { applyThemeFromState, watchSystemTheme } from "./modules/theme.js";
-import { notifyNewMessage } from "./modules/notification_feedback.js";
+import {
+  cachedNotificationIcon,
+  notifyNewMessage,
+} from "./modules/notification_feedback.js";
 import { initPwa, requestPwaInstall } from "./modules/pwa.js";
 
 import {
@@ -246,7 +249,7 @@ function initSSE() {
           isViewing: viewingChat,
           settings: state.settings?.chat,
           personaName: persona?.name || "PawzoChat",
-          iconUrl: personaAvatarUrl(persona),
+          iconUrl: cachedNotificationIcon(data.persona_id),
           baseUrl: window.PAWZOCHAT_BASE || "",
         });
         if (viewingChat) {

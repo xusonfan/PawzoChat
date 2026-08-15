@@ -18,6 +18,7 @@
 import { avatarHtml, personaAvatarUrl, esc, CAP_ICONS, ILLEGAL_NAME_RE, voiceOptionsHtml, voiceCatalogFor } from "./utils.js";
 import { openImagePreview } from "./image_preview.js";
 import { api, downloadFile } from "./api.js";
+import { prepareNotificationIcons } from "./notification_feedback.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showLoading, hideLoading, showSheet, closeOverlay } from "./ui.js";
 import {
@@ -74,6 +75,7 @@ async function renderContacts() {
   try {
     const res = await api.get("/api/personas");
     state.personas = res.personas || [];
+    void prepareNotificationIcons(state.personas);
   } catch (e) { toast("加载失败", "error"); return; }
 
   const searchHtml = `<div class="search-bar">
