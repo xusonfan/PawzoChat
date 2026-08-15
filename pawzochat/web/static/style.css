@@ -428,6 +428,90 @@ body {
 }
 .search-bar input::placeholder { color: var(--text-3); }
 
+/* ---- Contacts alphabet index ---- */
+#content-area:has(.contacts-page),
+#sidebar-body:has(.contacts-page) {
+  scrollbar-width: none;
+}
+#content-area:has(.contacts-page)::-webkit-scrollbar,
+#sidebar-body:has(.contacts-page)::-webkit-scrollbar {
+  display: none;
+}
+.contacts-page { padding-right: 30px; }
+.contacts-section-title {
+  height: 24px;
+  padding: 3px 4px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.contacts-section[hidden] { display: none; }
+.contacts-index-slot {
+  position: sticky;
+  top: 50%;
+  z-index: 8;
+  height: 0;
+  margin-left: auto;
+  pointer-events: none;
+}
+.contacts-index {
+  position: absolute;
+  right: -24px;
+  width: 20px;
+  height: min(68vh, 405px);
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: auto;
+}
+.contacts-index-letter {
+  flex: 1 1 0;
+  min-height: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--primary-dark, var(--primary));
+  font: 600 10px/1 var(--font);
+  cursor: pointer;
+}
+.contacts-index-letter:disabled {
+  color: var(--text-3);
+  opacity: 0.32;
+  cursor: default;
+}
+.contacts-index-letter.is-active:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+}
+.contacts-index-bubble {
+  position: absolute;
+  right: 18px;
+  top: 0;
+  width: 48px;
+  height: 48px;
+  transform: translateY(-50%) scale(0.85);
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.12s, transform 0.12s;
+}
+.contacts-index-bubble.is-visible {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
 /* ---- Conversation List ---- */
 .conv-item {
   display: flex;

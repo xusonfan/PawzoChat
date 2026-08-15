@@ -27,6 +27,11 @@ import {
   isDesktop, setSidebarBar, refreshSidebar,
 } from "./navigation.js";
 import { fetchWorldbookSummary, openWorldbookPicker } from "./worldbook.js";
+import {
+  CONTACT_INDEX_LETTERS,
+  groupPersonasByInitial,
+  syncContactIndexAvailability,
+} from "./contacts_index.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -83,21 +88,45 @@ async function renderContacts() {
     <input placeholder="搜索" oninput="PawzoChat.filterPersonas(this.value)">
   </div>`;
 
-  const listHtml = state.personas.map(p => {
-    const sub = p.signature?.trim() || "这个人很神秘，什么都没写";
-    const avUrl = personaAvatarUrl(p);
-    return `<div class="card-row persona-row" onclick="PawzoChat.pushPage('personaDetail',{personaId:'${p.id}'})">
-      ${avatarHtml(p.name, "", avUrl)}
-      <div style="flex:1;min-width:0">
-        <div style="font-size:15px;font-weight:500">${esc(p.name)}</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${esc(sub)}</div>
-      </div>
-      <span class="row-arrow">›</span>
-    </div>`;
+  const groups = groupPersonasByInitial(state.personas);
+  const availableInitials = new Set(groups.map(group => group.initial));
+  const sectionsHtml = groups.map(({ initial, personas }) => {
+    const sectionId = initial === "#" ? "other" : initial;
+    const rows = personas.map(p => {
+      const sub = p.signature?.trim() || "这个人很神秘，什么都没写";
+      const avUrl = personaAvatarUrl(p);
+      return `<div class="card-row persona-row" onclick="PawzoChat.pushPage('personaDetail',{personaId:'${p.id}'})">
+        ${avatarHtml(p.name, "", avUrl)}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:500">${esc(p.name)}</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px">${esc(sub)}</div>
+        </div>
+        <span class="row-arrow">›</span>
+      </div>`;
+    }).join("");
+    return `<section class="contacts-section" id="contacts-section-${sectionId}" data-initial="${initial}">
+      <div class="contacts-section-title">${initial}</div>
+      <div class="card">${rows}</div>
+    </section>`;
   }).join("");
 
+  const indexHtml = CONTACT_INDEX_LETTERS.map(initial => `
+    <button type="button" class="contacts-index-letter" data-initial="${initial}"
+      aria-label="跳转到 ${initial}" ${availableInitials.has(initial) ? "" : "disabled"}
+      onclick="PawzoChat.jumpToContactInitial('${initial}')">${initial}</button>
+  `).join("");
+
   target.innerHTML = `<input type="file" id="persona-import-file" accept=".png,.json,.zip" style="display:none" onchange="PawzoChat.personaImportSubmit(this)">
-    <div class="page" style="position:relative">${searchHtml}<div class="card" id="persona-list">${listHtml}</div>
+    <div class="page contacts-page" style="position:relative">${searchHtml}
+      <div class="contacts-index-slot">
+        <nav class="contacts-index" aria-label="通讯录字母索引"
+          onpointerdown="PawzoChat.contactsIndexStart(event)"
+          onpointermove="PawzoChat.contactsIndexMove(event)"
+          onpointerup="PawzoChat.contactsIndexEnd(event)"
+          onpointercancel="PawzoChat.contactsIndexEnd(event)">${indexHtml}</nav>
+        <div class="contacts-index-bubble" id="contacts-index-bubble" aria-hidden="true"></div>
+      </div>
+      <div class="contacts-sections" id="persona-list">${sectionsHtml}</div>
       <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i'w'y'x'd'x'l</div>
     </div>`;
 }
@@ -308,6 +337,7 @@ export function filterPersonas(val) {
   items.forEach(el => {
     el.style.display = el.textContent.toLowerCase().includes(v) ? "" : "none";
   });
+  syncContactIndexAvailability();
 }
 
 /* ---- Persona Card / Settings ---- */

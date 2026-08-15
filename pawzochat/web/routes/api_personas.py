@@ -44,6 +44,7 @@ from pawzochat.transport.models import (
     normalize_image_generation,
     normalize_voice_generation,
 )
+from pawzochat.utils.persona_sort import persona_sort_metadata
 from pawzochat.web.routes import download_response, get_app, safe_download_stem
 
 logger = logging.getLogger(__name__)
@@ -226,9 +227,12 @@ def list_personas():
     for pid, p in personas.items():
         memory_data = app.memory_service.load_memories(pid)
         link = app.conversation_store.channel_link(pid) or {}
+        sort_key, initial = persona_sort_metadata(p.name)
         result.append({
             "id": pid,
             "name": p.name,
+            "sort_key": sort_key,
+            "initial": initial,
             "signature": p.signature,
             "llm_provider": p.llm_provider,
             "llm_model": p.llm_model,
@@ -248,6 +252,11 @@ def list_personas():
             "wechat_chat_type": link.get("chat_type", "") if link else "",
             "linked_channel": link.get("channel", "") if link else "",
         })
+    result.sort(key=lambda item: (
+        item["initial"] == "#",
+        item["sort_key"],
+        item["name"].casefold(),
+    ))
     return jsonify({"personas": result})
 
 

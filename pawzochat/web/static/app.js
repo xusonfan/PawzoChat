@@ -75,6 +75,13 @@ import {
 } from "./modules/contacts.js";
 
 import {
+  contactsIndexEnd,
+  contactsIndexMove,
+  contactsIndexStart,
+  jumpToContactInitial,
+} from "./modules/contacts_index.js";
+
+import {
   addAccount, openAccount, deleteAccount, saveAccountNote,
   skipAccountNote, confirmAccountNote,
   selectChannelType, submitFormAccount,
@@ -323,7 +330,8 @@ window.PawzoChat = {
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
   playVoiceMessage, toggleVoiceTranscript,
-  filterPersonas, chatWithPersona, deletePersona,
+  filterPersonas, contactsIndexStart, contactsIndexMove, contactsIndexEnd, jumpToContactInitial,
+  chatWithPersona, deletePersona,
   savePersona, switchPersonaEditTab, resetSystemInstructions, onPersonaProviderChange,
   onPersonaImageProviderChange,
   onPersonaVoiceProviderChange, onPersonaVoiceModelChange,
