@@ -23,6 +23,10 @@ import {
 } from "./unread.js";
 import { api } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
+import {
+  attachConversationMenu, closeConversationMenu,
+} from "./conversation_menu.js";
+import { ownsConversationListTarget } from "./conversation_list_ownership.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
 import {
   setTopBar, pushPage, goBack, switchTab,
@@ -123,6 +127,7 @@ const _STANDARD_EMOJIS = [
 /* ---- Chat List (Tab) ---- */
 
 function _paintChatList(target, desktop) {
+  closeConversationMenu();
   if (state.conversations.length === 0) {
     target.innerHTML = `
       <div class="empty-state" style="position:relative">
@@ -150,13 +155,15 @@ function _paintChatList(target, desktop) {
       ? `<span class="wechat-badge"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg></span>` : "";
     const active = (desktop && chatPersonaId === c.persona_id) ? " active" : "";
     const unreadBadge = unreadBadgeHtml(c.unread_count, "conv-unread-badge");
-    return `<div class="conv-item${active}" data-persona-id="${c.persona_id}" onclick="PawzoChat.openChat('${c.persona_id}')">
+    const pinnedBadge = c.pinned
+      ? `<span class="conv-pinned" aria-label="已置顶">${iconHtml("ri-pushpin-fill")}</span>` : "";
+    return `<div class="conv-item${active}" data-persona-id="${escAttr(c.persona_id)}" tabindex="0" role="button" aria-haspopup="menu" aria-label="打开与${escAttr(pname)}的对话">
       <div class="conv-avatar-wrap">${avatarHtml(pname, "", avUrl)}${unreadBadge}</div>
       <div class="conv-info">
         <div class="conv-name">${esc(pname)} ${wechatBadge}</div>
         <div class="conv-preview">${esc(preview)}</div>
       </div>
-      <div class="conv-meta"><div class="conv-time">${time}</div></div>
+      <div class="conv-meta"><div class="conv-time">${time}</div>${pinnedBadge}</div>
     </div>`;
   }).join("");
 
@@ -164,7 +171,30 @@ function _paintChatList(target, desktop) {
   target.innerHTML = `<div class="page" id="conv-list-page" style="position:relative">${searchHtml}<div class="card" id="conv-list-items">${listHtml}</div>
     <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i*w*y*x*d*x*l</div>
   </div>`;
+  attachConversationMenu(target.querySelector("#conv-list-items"), state.conversations, {
+    onOpen: openChat,
+    onPin: setConversationPinned,
+    onHide: hideConversation,
+  });
   updateChatTabUnread(state.conversations);
+}
+
+function _ownsConversationListTarget(target, desktop) {
+  return ownsConversationListTarget({
+    target,
+    desktop,
+    currentDesktop: isDesktop(),
+    currentTab: state.currentTab,
+    pageDepth: state.pageStack.length,
+    contentTarget: content(),
+    sidebarTarget: sidebar(),
+  });
+}
+
+function _paintConversationListIfOwned(target, desktop) {
+  if (!_ownsConversationListTarget(target, desktop)) return false;
+  _paintChatList(target, desktop);
+  return true;
 }
 
 async function renderChatList() {
@@ -203,7 +233,7 @@ async function renderChatList() {
   }
 
   if (gen !== _conversationsFetchGen) return;
-  _paintChatList(target, desktop);
+  _paintConversationListIfOwned(target, desktop);
 }
 
 export { renderChatList };
@@ -215,6 +245,64 @@ export function filterConvs(val) {
     const name = el.querySelector(".conv-name").textContent.toLowerCase();
     el.style.display = name.includes(v) ? "" : "none";
   });
+}
+
+async function _reloadConversationList() {
+  const desktop = isDesktop();
+  const target = desktop ? sidebar() : content();
+  const res = await api.get("/api/conversations", { bypassCache: true });
+  state.conversations = mergeConversationsPreserveUnread(
+    state.conversations,
+    res.conversations || [],
+  );
+  _paintConversationListIfOwned(target, desktop);
+}
+
+export async function setConversationPinned(conversation, pinned) {
+  try {
+    const res = await api.put(
+      `/api/conversations/${encodeURIComponent(conversation.persona_id)}/pinned`,
+      { pinned },
+    );
+    if (res.status >= 400) throw new Error(res.data?.error || "操作失败");
+    await _reloadConversationList();
+  } catch (e) {
+    toast(e.message || "操作失败", "error");
+  }
+}
+
+export async function hideConversation(conversation) {
+  try {
+    const res = await api.put(
+      `/api/conversations/${encodeURIComponent(conversation.persona_id)}/visibility`,
+      { hidden: true },
+    );
+    if (res.status >= 400) throw new Error(res.data?.error || "操作失败");
+    state.conversations = state.conversations.filter(
+      item => item.persona_id !== conversation.persona_id,
+    );
+    _paintChatList(isDesktop() ? sidebar() : content(), isDesktop());
+  } catch (e) {
+    toast(e.message || "操作失败", "error");
+  }
+}
+
+async function _restoreOrCreateConversation(personaId) {
+  const restored = await api.put(
+    `/api/conversations/${encodeURIComponent(personaId)}/visibility`,
+    { hidden: false },
+  );
+  if (restored.status < 400) return true;
+  if (restored.status !== 404) {
+    toast(restored.data?.error || "打开对话失败", "error");
+    return false;
+  }
+  const created = await api.post("/api/conversations", { persona_id: personaId });
+  if (created.status >= 400 && created.status !== 409) {
+    toast(created.data?.error || "创建失败", "error");
+    return false;
+  }
+  return true;
 }
 
 export async function newConversation() {
@@ -239,22 +327,16 @@ export async function newConversation() {
 
 export async function startChat(personaId, hasConv) {
   closeOverlay();
-  if (!hasConv) {
-    showLoading("创建中…");
-    try {
-      const res = await api.post("/api/conversations", { persona_id: personaId });
-      if (res.status >= 400) {
-        toast(res.data?.error || "创建失败", "error");
-        return;
-      }
-    } catch (e) {
-      toast("创建失败", "error");
-      return;
-    } finally {
-      hideLoading();
-    }
+  if (!hasConv) showLoading("打开中…");
+  try {
+    if (!await _restoreOrCreateConversation(personaId)) return;
+  } catch (e) {
+    toast("打开对话失败", "error");
+    return;
+  } finally {
+    if (!hasConv) hideLoading();
   }
-  openChat(personaId);
+  openChat(personaId, { restored: true });
 }
 
 export function isViewingChat(personaId = chatPersonaId) {
@@ -273,7 +355,16 @@ export async function markConversationRead(personaId = chatPersonaId) {
   } catch (e) { /* the next list refresh restores server truth */ }
 }
 
-export async function openChat(personaId) {
+export async function openChat(personaId, { restored = false } = {}) {
+  closeConversationMenu();
+  if (!restored) {
+    try {
+      if (!await _restoreOrCreateConversation(personaId)) return;
+    } catch (e) {
+      toast("打开对话失败", "error");
+      return;
+    }
+  }
   state.pageStack = [];
   pushPage("chatWindow", { personaId });
   markConversationRead(personaId);

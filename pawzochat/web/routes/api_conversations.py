@@ -96,9 +96,41 @@ def create_conversation():
         "created_at": conv["created_at"],
         "updated_at": conv["updated_at"],
         "wechat_linked": False,
+        "pinned": False,
+        "hidden_at": None,
         "unread_count": 0,
         "last_message": None,
     }), 201
+
+
+@api_conversations_bp.route("/<persona_id>/pinned", methods=["PUT"])
+def set_conversation_pinned(persona_id: str):
+    app = get_app()
+    data = request.get_json(force=True)
+    pinned = data.get("pinned")
+    if not isinstance(pinned, bool):
+        return jsonify({"error": "pinned must be a boolean"}), 400
+    if not app.conversation_store.set_pinned(persona_id, pinned):
+        return jsonify({"error": "Conversation not found"}), 404
+    broadcast("conversation_updated", persona_id=persona_id)
+    return jsonify({"ok": True, "pinned": pinned})
+
+
+@api_conversations_bp.route("/<persona_id>/visibility", methods=["PUT"])
+def set_conversation_visibility(persona_id: str):
+    app = get_app()
+    data = request.get_json(force=True)
+    hidden = data.get("hidden")
+    if not isinstance(hidden, bool):
+        return jsonify({"error": "hidden must be a boolean"}), 400
+    action = (
+        app.conversation_store.hide_conversation
+        if hidden else app.conversation_store.restore_hidden
+    )
+    if not action(persona_id):
+        return jsonify({"error": "Conversation not found"}), 404
+    broadcast("conversation_updated", persona_id=persona_id)
+    return jsonify({"ok": True, "hidden": hidden})
 
 
 @api_conversations_bp.route("/<persona_id>/read", methods=["POST"])

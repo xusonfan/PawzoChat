@@ -101,12 +101,22 @@ class ConversationStore:
         return self._data_dir / persona_id / f"{persona_id}.json"
 
     def _prepare_read_state(self, data: dict) -> bool:
-        """Migrate message sequence/read metadata in memory.
+        """Migrate message sequence/read and chat-list metadata in memory.
 
         Existing conversations are treated as fully read on first upgrade, so
         installing unread support never turns the whole history into alerts.
+        Legacy chat-list entries default to visible and unpinned.
         """
         changed = False
+        if not isinstance(data.get("pinned"), bool):
+            data["pinned"] = False
+            changed = True
+        if "hidden_at" not in data or (
+            data.get("hidden_at") is not None
+            and not isinstance(data.get("hidden_at"), str)
+        ):
+            data["hidden_at"] = None
+            changed = True
         next_seq = 1
         for message in data.get("messages", []):
             seq = message.get("_seq")
@@ -228,10 +238,13 @@ class ConversationStore:
 
     # ---- Public API ----
 
-    def list_conversations(self) -> list[dict]:
-        """Return summaries of all conversations, sorted by updated_at desc."""
+    def list_conversations(self, *, include_hidden: bool = False) -> list[dict]:
+        """Return visible summaries, pinned first then newest within each group."""
         summaries = []
         for pid, data in self._cache.items():
+            hidden_at = data.get("hidden_at")
+            if hidden_at and not include_hidden:
+                continue
             messages = data.get("messages", [])
             last_msg = None
             if messages:
@@ -280,12 +293,17 @@ class ConversationStore:
                 "created_at": data.get("created_at", ""),
                 "updated_at": data.get("updated_at", ""),
                 "unread_count": unread_count,
+                "pinned": data.get("pinned", False),
+                "hidden_at": hidden_at,
                 # Kept for chat.js back-compat; true for any bound channel.
                 "wechat_linked": bool(link),
                 "linked_channel": link.get("channel", "") if link else "",
                 "last_message": last_msg,
             })
-        summaries.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+        summaries.sort(
+            key=lambda s: (bool(s.get("pinned")), s.get("updated_at", "")),
+            reverse=True,
+        )
         return summaries
 
     def get_conversation(self, persona_id: str) -> dict | None:
@@ -306,6 +324,8 @@ class ConversationStore:
                 "updated_at": now,
                 "channel_link": None,
                 "wechat_link": None,
+                "pinned": False,
+                "hidden_at": None,
                 "next_message_seq": 1,
                 "last_read_message_seq": 0,
                 "messages": [],
@@ -327,12 +347,50 @@ class ConversationStore:
                 "updated_at": now,
                 "channel_link": None,
                 "wechat_link": None,
+                "pinned": False,
+                "hidden_at": None,
                 "next_message_seq": 1,
                 "last_read_message_seq": 0,
                 "messages": [],
             }
             self._write_file(persona_id, data)
             return data
+
+    def set_pinned(self, persona_id: str, pinned: bool) -> bool:
+        """Persist a conversation's pinned state without changing its recency."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return False
+            if data.get("pinned", False) != pinned:
+                data["pinned"] = pinned
+                self._write_file(persona_id, data)
+            return True
+
+    def hide_conversation(self, persona_id: str) -> bool:
+        """Remove a conversation from list results without deleting its data."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return False
+            if not data.get("hidden_at"):
+                data["hidden_at"] = _now_iso()
+                self._write_file(persona_id, data)
+            return True
+
+    def restore_hidden(self, persona_id: str) -> bool:
+        """Make a hidden conversation visible again, preserving all other state."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return False
+            if data.get("hidden_at") is not None:
+                data["hidden_at"] = None
+                self._write_file(persona_id, data)
+            return True
 
     def delete_conversation(self, persona_id: str) -> bool:
         lock = self._get_lock(persona_id)
@@ -377,6 +435,9 @@ class ConversationStore:
                 msg["quote"] = quote
             data["messages"].append(msg)
             data["updated_at"] = msg["timestamp"]
+            # All persisted-message entry points converge here. Any new message
+            # restores a hidden chat while preserving its messages/read marker.
+            data["hidden_at"] = None
             self._write_file(persona_id, data)
             return msg
 

@@ -387,8 +387,15 @@ body {
   padding: 12px 16px;
   cursor: pointer;
   transition: background 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
 }
+@media (max-width: 799px), (hover: none), (pointer: coarse) {
+  .conv-item { -webkit-touch-callout: none; }
+}
+.conv-item img { -webkit-user-drag: none; }
 .conv-item:active { background: #F8EFE4; }
+.conv-item:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .conv-item + .conv-item { border-top: 1px solid var(--divider); }
 .conv-avatar-wrap {
   position: relative;
@@ -448,6 +455,36 @@ body {
 .conv-preview { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-meta { text-align: right; flex-shrink: 0; margin-left: 8px; }
 .conv-time { font-size: 11px; color: var(--text-3); }
+.conv-pinned { display: inline-flex; margin-top: 5px; color: var(--text-3); }
+.conv-pinned .ui-icon { width: 13px; height: 13px; }
+.conversation-context-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 132px;
+  padding: 5px;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+.conversation-context-menu [role="menuitem"] {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.conversation-context-menu [role="menuitem"]:hover,
+.conversation-context-menu [role="menuitem"]:focus-visible {
+  outline: none;
+  background: var(--bg);
+}
 .wechat-badge {
   display: inline-flex;
   align-items: center;

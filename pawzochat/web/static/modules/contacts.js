@@ -453,11 +453,19 @@ async function renderPersonaSettings(data) {
 }
 
 export async function chatWithPersona(personaId) {
-  const convRes = await api.get("/api/conversations");
-  state.conversations = convRes.conversations || [];
-  const exists = state.conversations.find(c => c.persona_id === personaId);
-  if (!exists) {
-    await api.post("/api/conversations", { persona_id: personaId });
+  const restored = await api.put(
+    `/api/conversations/${encodeURIComponent(personaId)}/visibility`,
+    { hidden: false },
+  );
+  if (restored.status === 404) {
+    const created = await api.post("/api/conversations", { persona_id: personaId });
+    if (created.status >= 400 && created.status !== 409) {
+      toast(created.data?.error || "创建失败", "error");
+      return;
+    }
+  } else if (restored.status >= 400) {
+    toast(restored.data?.error || "打开对话失败", "error");
+    return;
   }
 
   navigateToPage("chat", "chatWindow", { personaId }, { collapsePreviousTarget: true });
