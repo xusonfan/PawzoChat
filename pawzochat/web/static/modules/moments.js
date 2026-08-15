@@ -116,6 +116,8 @@ function _replyTextHtml(text) {
     imageClass: "moments-reply-image",
     inline: true,
     preserveNewlines: true,
+    // Drop newlines that only sit at text↔image edges (avoids blank <br> rows).
+    trimMediaBoundaryNewlines: true,
     stopPropagation: true,
   });
 }

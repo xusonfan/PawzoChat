@@ -124,13 +124,16 @@ function imageUrls(segments) {
 
 // ---- renderTextMedia (moments comment mode) ----
 
+const momentsOpts = {
+  imageClass: "moments-reply-image",
+  inline: true,
+  preserveNewlines: true,
+  trimMediaBoundaryNewlines: true,
+  stopPropagation: true,
+};
+
 {
-  const html = renderTextMedia("纯图 https://cdn.example.com/e.png", {
-    imageClass: "moments-reply-image",
-    inline: true,
-    preserveNewlines: true,
-    stopPropagation: true,
-  });
+  const html = renderTextMedia("纯图 https://cdn.example.com/e.png", momentsOpts);
   assert.match(html, /纯图 /);
   assert.match(html, /class="moments-reply-image linked-image"/);
   assert.match(html, /<span class="moments-reply-image/);
@@ -141,13 +144,57 @@ function imageUrls(segments) {
 }
 
 {
-  const html = renderTextMedia("第一行\n第二行", {
-    imageClass: "moments-reply-image",
-    inline: true,
-    preserveNewlines: true,
-    stopPropagation: true,
-  });
+  const html = renderTextMedia("第一行\n第二行", momentsOpts);
   assert.match(html, /第一行<br>第二行/);
+}
+
+// text\nimage: no blank <br> immediately before the thumbnail
+{
+  const html = renderTextMedia("你好呀\nhttps://cdn.example.com/a.png", momentsOpts);
+  assert.match(html, /你好呀/);
+  assert.match(html, /src="https:\/\/cdn\.example\.com\/a\.png"/);
+  assert.doesNotMatch(html, /你好呀<br>/);
+  assert.doesNotMatch(html, /<br><span class="moments-reply-image/);
+}
+
+// pure image: no leading <br>
+{
+  const html = renderTextMedia("\nhttps://cdn.example.com/only.png\n", momentsOpts);
+  assert.match(html, /^<span class="moments-reply-image/);
+  assert.doesNotMatch(html, /^<br>/);
+  assert.doesNotMatch(html, /<br><span/);
+  assert.doesNotMatch(html, /<\/span><br>/);
+}
+
+// explicit double newline between text paragraphs stays
+{
+  const html = renderTextMedia("第一段\n\n第二段", momentsOpts);
+  assert.match(html, /第一段<br><br>第二段/);
+}
+
+// multi-image: no empty <br> rows between thumbs
+{
+  const html = renderTextMedia(
+    "https://cdn.example.com/1.png\nhttps://cdn.example.com/2.png",
+    momentsOpts,
+  );
+  assert.equal((html.match(/<img /g) || []).length, 2);
+  assert.doesNotMatch(html, /<\/span><br><span/);
+  assert.doesNotMatch(html, /<\/span>\s*<br>\s*<span/);
+}
+
+// chat defaults still keep boundary newlines (option off)
+{
+  const html = renderTextMedia("你好呀\nhttps://cdn.example.com/a.png", {
+    textClass: "msg-bubble",
+    imageClass: "msg-image",
+  });
+  // Default: text segment keeps trailing newline; non-empty after esc → bubble
+  assert.match(html, /class="msg-bubble"/);
+  assert.match(html, /class="msg-image linked-image"/);
+  assert.match(html, /src="https:\/\/cdn\.example\.com\/a\.png"/);
+  // preserveNewlines off → raw \n is escaped away as text content, not <br>
+  assert.doesNotMatch(html, /<br>/);
 }
 
 {

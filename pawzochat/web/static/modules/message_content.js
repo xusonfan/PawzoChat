@@ -152,12 +152,33 @@ export function summarizeConversationMessage(message, maxLength = 60) {
 }
 
 /**
+ * Drop newlines that only separate text from adjacent media segments.
+ * Keeps intentional paragraph breaks inside text (e.g. "a\\n\\nb"); only
+ * strips leading/trailing \\n at media boundaries so "text\\n[image]" does
+ * not emit a blank <br> line before the thumbnail.
+ */
+function normalizeMediaBoundaryNewlines(segments) {
+  return segments.map((segment, index) => {
+    if (segment.type !== "text") return segment;
+
+    let text = segment.text;
+    const prev = segments[index - 1];
+    const next = segments[index + 1];
+    if (prev && prev.type === "image") text = text.replace(/^\r?\n+/, "");
+    if (next && next.type === "image") text = text.replace(/\r?\n+$/, "");
+    if (!text) return null;
+    return text === segment.text ? segment : { type: "text", text };
+  }).filter(Boolean);
+}
+
+/**
  * Render parseTextMedia segments to safe HTML.
  *
  * Options (all optional; defaults keep chat/history-edit behaviour):
  * - textClass / imageClass: wrapper classes
  * - inline: no text wrappers; images use <span> (for moments comments)
  * - preserveNewlines: convert \n to <br> in text segments
+ * - trimMediaBoundaryNewlines: strip newlines at text↔image edges (moments)
  * - stopPropagation: stop click bubbling before openImagePreview / fallback link
  */
 export function renderTextMedia(text, {
@@ -165,6 +186,7 @@ export function renderTextMedia(text, {
   imageClass,
   inline = false,
   preserveNewlines = false,
+  trimMediaBoundaryNewlines = false,
   stopPropagation = false,
 } = {}) {
   const clickPrefix = stopPropagation ? "event.stopPropagation();" : "";
@@ -173,7 +195,12 @@ export function renderTextMedia(text, {
     : "";
   const wrapTag = inline ? "span" : "div";
 
-  return parseTextMedia(text).map(segment => {
+  let segments = parseTextMedia(text);
+  if (trimMediaBoundaryNewlines) {
+    segments = normalizeMediaBoundaryNewlines(segments);
+  }
+
+  return segments.map(segment => {
     if (segment.type === "text") {
       let body = esc(segment.text);
       if (preserveNewlines) body = body.replace(/\n/g, "<br>");
@@ -185,11 +212,13 @@ export function renderTextMedia(text, {
 
     const url = escAttr(segment.url);
     const alt = escAttr(segment.alt || "图片");
-    return `<${wrapTag} class="${imageClass} linked-image">
-      <img src="${url}" alt="${alt}" loading="lazy" data-message-media
-        onclick="${clickPrefix}PawzoChat.openImagePreview(this.src)"
-        onerror="this.hidden=true;this.nextElementSibling.hidden=false">
-      <a class="linked-image-fallback" href="${url}" target="_blank" rel="noopener noreferrer" hidden${fallbackClick}>图片加载失败，打开原链接</a>
-    </${wrapTag}>`;
+    // Compact markup: leading whitespace text nodes inside inline-block +
+    // block img create an extra empty line above the thumbnail.
+    return `<${wrapTag} class="${imageClass} linked-image">`
+      + `<img src="${url}" alt="${alt}" loading="lazy" data-message-media`
+      + ` onclick="${clickPrefix}PawzoChat.openImagePreview(this.src)"`
+      + ` onerror="this.hidden=true;this.nextElementSibling.hidden=false">`
+      + `<a class="linked-image-fallback" href="${url}" target="_blank" rel="noopener noreferrer" hidden${fallbackClick}>图片加载失败，打开原链接</a>`
+      + `</${wrapTag}>`;
   }).join("");
 }
