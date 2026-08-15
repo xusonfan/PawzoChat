@@ -17,7 +17,7 @@
  */
 /* Moments (朋友圈) — feed, publish, settings */
 
-import { esc, iconHtml, avatarHtml, personaAvatarUrl, profileAvatarUrl, formatMsgTime, placeActionsPop } from "./utils.js";
+import { esc, iconHtml, avatarHtml, personaAvatarUrl, profileAvatarUrl, formatMsgTime, placeActionsPop, jsArg } from "./utils.js";
 import { api } from "./api.js";
 import { state, $, content } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
@@ -331,11 +331,17 @@ function _momentHtml(m) {
   const composerHtml = _composer.mid === m.id ? _composerHtml(m.id) : "";
 
   const textHtml = m.text ? `<div class="moments-text">${esc(m.text).replace(/\n/g, "<br>")}</div>` : "";
+  const authorLabel = esc(label);
+  const openAuthor = `PawzoChat.momentsOpenAuthor(event,${jsArg(author)})`;
   return `
     <div class="moments-item" data-mid="${esc(m.id)}">
-      <div class="moments-avatar">${_avatarBlock(author, label)}</div>
+      <div class="moments-avatar">
+        <button type="button" class="moments-author-link moments-avatar-link" title="查看${authorLabel}的资料" aria-label="查看${authorLabel}的资料" onclick="${openAuthor}">
+          ${_avatarBlock(author, label)}
+        </button>
+      </div>
       <div class="moments-body">
-        <div class="moments-author">${esc(label)}</div>
+        <button type="button" class="moments-author moments-author-link" title="查看${authorLabel}的资料" aria-label="查看${authorLabel}的资料" onclick="${openAuthor}">${authorLabel}</button>
         ${textHtml}
         ${imgsHtml}
         ${buildMomentMetaHtml(m.id, time, { canDelete: m.can_delete === true })}
@@ -373,6 +379,17 @@ function _setupObserver() {
 }
 
 /* ---- Refresh / Publish actions ---- */
+
+export function momentsOpenAuthor(event, author) {
+  if (event?.preventDefault) event.preventDefault();
+  if (event?.stopPropagation) event.stopPropagation();
+  if (!author) return;
+  if (author === "user") {
+    pushPage("profileEdit");
+    return;
+  }
+  pushPage("personaDetail", { personaId: author });
+}
 
 export async function momentsRefresh() {
   if (_state.isGenerating) { toast("正在生成中…", "info"); return; }
@@ -575,7 +592,7 @@ function _mountComposerOutside() {
   const handler = (e) => {
     if (!_composer.mid) return;
     const t = e.target;
-    if (t && t.closest && t.closest(".moments-composer, .moments-reply, .moments-actions-pop")) return;
+    if (t && t.closest && t.closest(".moments-composer, .moments-reply, .moments-actions-pop, .moments-author-link")) return;
     momentsCloseComposer();
   };
   _composer.outsideHandler = handler;

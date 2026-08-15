@@ -158,7 +158,7 @@ import {
 } from "./modules/worldbook.js";
 
 import {
-  momentsRefresh, momentsOpenPublish, momentsItemMenu, momentsDelete,
+  momentsRefresh, momentsOpenPublish, momentsOpenAuthor, momentsItemMenu, momentsDelete,
   momentsLikeToggle, momentsOpenComposer, momentsReplyTo,
   momentsReplyMenu, momentsDeleteReply,
   momentsCloseComposer, momentsSubmitReply,
@@ -368,7 +368,7 @@ window.PawzoChat = {
   wbPickerConfirm,
   wbOnRangeChange, wbOnKwToggle, wbPersonaPick, wbPersonaPickConfirm,
   wbExportPick, wbExportCurrent, _wbExportGo,
-  momentsRefresh, momentsOpenPublish, momentsItemMenu, momentsDelete,
+  momentsRefresh, momentsOpenPublish, momentsOpenAuthor, momentsItemMenu, momentsDelete,
   momentsLikeToggle, momentsOpenComposer, momentsReplyTo,
   momentsReplyMenu, momentsDeleteReply,
   momentsCloseComposer, momentsSubmitReply,

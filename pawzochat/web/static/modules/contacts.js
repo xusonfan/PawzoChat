@@ -307,12 +307,51 @@ export function filterPersonas(val) {
   });
 }
 
-/* ---- Persona Detail ---- */
+/* ---- Persona Card / Settings ---- */
 
 async function renderPersonaDetail(data) {
+  const moreButton = `<button class="persona-card-more" type="button" title="角色设置" aria-label="打开角色设置"
+    onclick="PawzoChat.pushPage('personaSettings',{personaId:'${data.personaId}'})">…</button>`;
+  setTopBar("详细资料", true, moreButton);
+  content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
+  try {
+    const p = await api.get(`/api/personas/${data.personaId}`);
+    const channelNames = { wechat: "微信", qq: "QQ", web: "网页" };
+    const channel = channelNames[p.linked_channel] || p.linked_channel || "未绑定";
+    const signature = (p.signature || "").trim() || "这个人很神秘，什么都没写";
+    const detailAvUrl = personaAvatarUrl(p);
+
+    content().innerHTML = `<div class="page persona-card-page">
+      <section class="persona-card-identity" aria-label="角色名片">
+        ${avatarHtml(p.name, "lg", detailAvUrl)}
+        <div class="persona-card-name-wrap">
+          <div class="persona-card-name">${esc(p.name)}</div>
+          <div class="persona-card-subtitle">PawzoChat 角色</div>
+        </div>
+      </section>
+
+      <section class="persona-card-info">
+        <div class="persona-card-field">
+          <span class="persona-card-label">个性签名</span>
+          <span class="persona-card-value">${esc(signature)}</span>
+        </div>
+        <div class="persona-card-field">
+          <span class="persona-card-label">连接通道</span>
+          <span class="persona-card-value">${esc(channel)}</span>
+        </div>
+      </section>
+
+      <div class="persona-card-actions">
+        <button class="btn-primary" onclick="PawzoChat.chatWithPersona('${p.id}')">发消息</button>
+      </div>
+    </div>`;
+  } catch (e) { toast("加载失败", "error"); }
+}
+
+async function renderPersonaSettings(data) {
   const topBtns = `<button class="btn-text" onclick="PawzoChat.personaExportPick('${data.personaId}')" style="font-size:15px;font-weight:500;padding:8px 8px">导出</button>
     <button class="btn-text" onclick="PawzoChat.pushPage('personaEdit',{personaId:'${data.personaId}'})" style="font-size:15px;font-weight:500;padding:8px 8px">编辑</button>`;
-  setTopBar("角色详情", true, topBtns);
+  setTopBar("角色设置", true, topBtns);
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
   try {
     const p = await api.get(`/api/personas/${data.personaId}`);
@@ -396,7 +435,6 @@ async function renderPersonaDetail(data) {
       </div>`;
       })()}
       <div class="persona-actions">
-        <button class="btn-primary" onclick="PawzoChat.chatWithPersona('${p.id}')">发消息</button>
         <button class="btn-text danger mt-8" onclick="PawzoChat.deletePersona('${p.id}')">删除</button>
       </div>
     </div>`;
@@ -1328,4 +1366,5 @@ export async function deletePersonaRefImage() {
 
 registerTabRenderer("contacts", renderContacts);
 registerPageRenderer("personaDetail", renderPersonaDetail);
+registerPageRenderer("personaSettings", renderPersonaSettings);
 registerPageRenderer("personaEdit", renderPersonaEdit);
