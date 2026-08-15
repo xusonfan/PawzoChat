@@ -24,10 +24,12 @@ const inputBar = inputBarMatch[1];
 assert.doesNotMatch(chatSource, /(?:id|class)="send-btn"/, "不应渲染发送按钮");
 assert.doesNotMatch(css, /\.send-btn\b/, "不应保留发送按钮专属样式");
 assert.ok(
-  inputBar.indexOf('id="chat-input"') < inputBar.indexOf('id="emoji-picker-btn"')
+  inputBar.indexOf('id="voice-mode-btn"') < inputBar.indexOf('id="chat-input"')
+    && inputBar.indexOf('id="chat-input"') < inputBar.indexOf('id="emoji-picker-btn"')
     && inputBar.indexOf('id="emoji-picker-btn"') < inputBar.indexOf('id="plus-menu-btn"'),
-  "输入栏顺序应为输入框、表情、附件",
+  "输入栏顺序应为语音切换、输入框、表情、附件",
 );
+assert.match(inputBar, /id="voice-hold-btn"[\s\S]+onpointerdown="PawzoChat\.startVoiceRecording\(event\)"/);
 assert.match(inputBar, /id="emoji-picker-btn"[^>]+aria-label="打开表情面板"/);
 assert.match(inputBar, /id="plus-menu-btn"[^>]+aria-label="打开附件面板"/);
 assert.match(inputBar, /id="chat-input"[^>]+enterkeyhint="send"/);
@@ -46,12 +48,15 @@ assert.ok(
   "附件面板应先显示拍照入口",
 );
 assert.match(appSource, /takePhoto, capturePhoto/, "摄像头操作应暴露给页面");
+assert.match(appSource, /toggleVoiceInputMode, startVoiceRecording, moveVoiceRecording, finishVoiceRecording, cancelVoiceRecording/, "语音输入操作应暴露给页面");
+assert.match(chatSource, /fetch\(`\$\{base\}\/api\/asr\/transcriptions`/);
+assert.match(chatSource, /await sendChat\(\)/, "识别文字应复用现有消息发送链路");
 assert.match(chatSource, /export function insertEmoji[\s\S]*?_closeEmojiPicker\(\);[\s\S]*?inp\.focus\(\);/);
 assert.match(chatSource, /export async function sendChat\(\)/, "公共发送逻辑应保留");
 assert.match(appSource, /onChatCompositionStart, onChatCompositionEnd/, "组合输入事件应暴露给页面");
 
 const keyHandlerMatch = chatSource.match(
-  /export function onChatKey\(e\) \{([\s\S]*?)\n\}\n\nfunction _stopCameraStream/,
+  /export function onChatKey\(e\) \{([\s\S]*?)\n\}\n\nfunction _setVoiceButtonState/,
 );
 assert.ok(keyHandlerMatch, "应存在输入框键盘处理逻辑");
 const runKey = new Function(

@@ -98,6 +98,26 @@ let _emojiActiveTab = 0;
 let _plusMenuOpen = false;
 let _cameraStream = null;
 
+const _voiceInput = {
+  mode: false,
+  recorder: null,
+  stream: null,
+  chunks: [],
+  startedAt: 0,
+  pointerId: null,
+  stopTimer: null,
+  busy: false,
+  pressing: false,
+  canceled: false,
+  cancelOnRelease: false,
+  personaId: null,
+  mimeType: "",
+  generation: 0,
+};
+
+const _VOICE_MIN_DURATION_MS = 500;
+const _VOICE_MAX_DURATION_MS = 60_000;
+
 const _STANDARD_EMOJIS = [
   "\u{1F600}","\u{1F603}","\u{1F604}","\u{1F601}","\u{1F606}","\u{1F605}","\u{1F602}","\u{1F923}","\u{1F60A}","\u{1F607}",
   "\u{1F642}","\u{1F643}","\u{1F609}","\u{1F60C}","\u{1F60D}","\u{1F970}","\u{1F618}","\u{1F617}","\u{1F619}","\u{1F61A}",
@@ -760,6 +780,7 @@ async function renderChatWindow(data) {
   const messagesUrl = `/api/conversations/${renderedPersonaId}/messages?rounds=10`;
   const cachedMessages = api.peek(messagesUrl);
   const pname = state.personas.find(p => p.id === chatPersonaId)?.name || chatPersonaId;
+  const asrEnabled = state.settings?.asr?.enabled !== false;
 
   setTopBar(pname, true,
     `<button class="top-btn" onclick="PawzoChat.chatMore()">
@@ -767,10 +788,12 @@ async function renderChatWindow(data) {
     </button>`
   );
 
+  _disposeVoiceRecorder();
+  _voiceInput.mode = false;
   _pendingImages = [];
   _pendingFiles = [];
   _pendingQuote = "";
-  _closeQuotePop();  // never let a popup (in document.body) outlive the chat that spawned it
+  _closeQuotePop(); // never let a popup (in document.body) outlive the chat that spawned it
   content().innerHTML = `<div class="chat-container">
     <div class="chat-messages" id="chat-msgs">${cachedMessages ? "" : `<div class="loading-center"><div class="spinner"></div></div>`}</div>
     <div id="img-preview-bar" class="img-preview-bar" style="display:none"></div>
@@ -779,7 +802,12 @@ async function renderChatWindow(data) {
     <div id="emoji-picker-panel" class="emoji-picker-panel" style="display:none"></div>
     <div id="plus-menu-panel" class="plus-menu-panel" style="display:none"></div>
     <div class="chat-input-bar">
+      ${asrEnabled ? `<button class="img-upload-btn voice-mode-toggle" id="voice-mode-btn" onclick="PawzoChat.toggleVoiceInputMode()" title="切换到按住说话" aria-label="切换到按住说话">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0014 0M12 17v5M8 22h8"/></svg>
+      </button>` : ""}
       <textarea class="chat-input" id="chat-input" rows="1" placeholder="输入消息…" aria-label="消息输入框" enterkeyhint="send" oninput="PawzoChat.onChatInput()" onkeydown="PawzoChat.onChatKey(event)" oncompositionstart="PawzoChat.onChatCompositionStart()" oncompositionend="PawzoChat.onChatCompositionEnd()"></textarea>
+      <button class="voice-hold-btn" id="voice-hold-btn" type="button" aria-label="按住说话" hidden
+        onpointerdown="PawzoChat.startVoiceRecording(event)" onpointermove="PawzoChat.moveVoiceRecording(event)" onpointerup="PawzoChat.finishVoiceRecording(event)" onpointercancel="PawzoChat.cancelVoiceRecording(event)" oncontextmenu="return false">按住 说话</button>
       <button class="img-upload-btn" id="emoji-picker-btn" onclick="PawzoChat.toggleEmojiPicker()" title="表情" aria-label="打开表情面板">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
       </button>
@@ -941,6 +969,222 @@ export function onChatKey(e) {
     || _pendingImages.length > 0
     || _pendingFiles.length > 0;
   if (hasContent) sendChat();
+}
+
+function _setVoiceButtonState(label, stateName = "") {
+  const button = $("voice-hold-btn");
+  if (!button) return;
+  button.textContent = label;
+  button.classList.toggle("recording", stateName === "recording");
+  button.classList.toggle("canceling", stateName === "canceling");
+  button.classList.toggle("transcribing", stateName === "transcribing");
+  button.disabled = stateName === "transcribing";
+}
+
+function _stopVoiceStream() {
+  if (_voiceInput.stream) {
+    _voiceInput.stream.getTracks().forEach(track => track.stop());
+    _voiceInput.stream = null;
+  }
+}
+
+function _disposeVoiceRecorder() {
+  if (_voiceInput.stopTimer) clearTimeout(_voiceInput.stopTimer);
+  _voiceInput.stopTimer = null;
+  _voiceInput.generation += 1;
+  _voiceInput.pressing = false;
+  _voiceInput.canceled = true;
+  const recorder = _voiceInput.recorder;
+  _voiceInput.recorder = null;
+  if (recorder?.state === "recording") recorder.stop();
+  _stopVoiceStream();
+  _voiceInput.chunks = [];
+  _voiceInput.pointerId = null;
+}
+
+function _preferredAudioMimeType() {
+  const candidates = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"];
+  return candidates.find(type => MediaRecorder.isTypeSupported?.(type)) || "";
+}
+
+function _audioFilename(mimeType) {
+  if (mimeType.includes("mp4")) return "recording.m4a";
+  if (mimeType.includes("ogg")) return "recording.ogg";
+  return "recording.webm";
+}
+
+async function _transcribeVoice(blob, personaId) {
+  if (!blob.size) {
+    toast("没有录到声音，请重试", "error");
+    return;
+  }
+
+  _voiceInput.busy = true;
+  _setVoiceButtonState("正在识别…", "transcribing");
+  try {
+    const form = new FormData();
+    form.append("file", blob, _audioFilename(blob.type));
+    const base = window.PAWZOCHAT_BASE || "";
+    const response = await fetch(`${base}/api/asr/transcriptions`, {
+      method: "POST",
+      body: form,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "语音识别失败");
+
+    const text = String(result.text || "").trim();
+    if (!text) {
+      toast("没有识别到文字", "error");
+      return;
+    }
+    if (!_isActiveChatWindow(personaId)) return;
+
+    const input = $("chat-input");
+    if (!input) return;
+    input.value = text;
+    onChatInput();
+    await sendChat();
+  } catch (e) {
+    toast(e?.message || "语音识别失败", "error");
+  } finally {
+    _voiceInput.busy = false;
+    if (_isActiveChatWindow(personaId)) _setVoiceButtonState("按住 说话");
+  }
+}
+
+function _stopVoiceRecording({ send }) {
+  const recorder = _voiceInput.recorder;
+  if (!recorder || recorder.state !== "recording") return;
+  _voiceInput.canceled = !send;
+  if (_voiceInput.stopTimer) clearTimeout(_voiceInput.stopTimer);
+  _voiceInput.stopTimer = null;
+  recorder.stop();
+}
+
+export function toggleVoiceInputMode() {
+  if (_voiceInput.busy || _voiceInput.recorder?.state === "recording") return;
+  _voiceInput.mode = !_voiceInput.mode;
+  const input = $("chat-input");
+  const holdButton = $("voice-hold-btn");
+  const modeButton = $("voice-mode-btn");
+  const emojiButton = $("emoji-picker-btn");
+  const plusButton = $("plus-menu-btn");
+  if (!input || !holdButton || !modeButton) return;
+
+  input.hidden = _voiceInput.mode;
+  holdButton.hidden = !_voiceInput.mode;
+  emojiButton?.toggleAttribute("hidden", _voiceInput.mode);
+  plusButton?.toggleAttribute("hidden", _voiceInput.mode);
+  modeButton.classList.toggle("active", _voiceInput.mode);
+  modeButton.title = _voiceInput.mode ? "切换到文字输入" : "切换到按住说话";
+  modeButton.setAttribute("aria-label", modeButton.title);
+  if (!_voiceInput.mode) input.focus();
+}
+
+export async function startVoiceRecording(event) {
+  if (!_voiceInput.mode || _voiceInput.busy || _voiceInput.pressing || _voiceInput.recorder) return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    toast("当前浏览器不支持录音，请使用 HTTPS 访问", "error");
+    return;
+  }
+
+  event.preventDefault();
+  const button = event.currentTarget;
+  button?.setPointerCapture?.(event.pointerId);
+  _voiceInput.pressing = true;
+  _voiceInput.canceled = false;
+  _voiceInput.cancelOnRelease = false;
+  _voiceInput.pointerId = event.pointerId;
+  _voiceInput.personaId = chatPersonaId;
+  const generation = ++_voiceInput.generation;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (generation !== _voiceInput.generation || !_voiceInput.pressing || !_isActiveChatWindow(_voiceInput.personaId)) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+
+    const mimeType = _preferredAudioMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    _voiceInput.stream = stream;
+    _voiceInput.recorder = recorder;
+    _voiceInput.chunks = [];
+    _voiceInput.startedAt = Date.now();
+    _voiceInput.mimeType = recorder.mimeType || mimeType;
+
+    recorder.addEventListener("dataavailable", e => {
+      if (e.data?.size) _voiceInput.chunks.push(e.data);
+    });
+    recorder.addEventListener("stop", () => {
+      const duration = Date.now() - _voiceInput.startedAt;
+      const canceled = _voiceInput.canceled;
+      const personaId = _voiceInput.personaId;
+      const blob = new Blob(_voiceInput.chunks, { type: _voiceInput.mimeType });
+      _voiceInput.recorder = null;
+      _voiceInput.chunks = [];
+      _voiceInput.pointerId = null;
+      _stopVoiceStream();
+      _setVoiceButtonState("按住 说话");
+      if (canceled) return;
+      if (duration < _VOICE_MIN_DURATION_MS) {
+        toast("说话时间太短", "error");
+        return;
+      }
+      void _transcribeVoice(blob, personaId);
+    }, { once: true });
+
+    recorder.start(250);
+    _setVoiceButtonState("松开 发送", "recording");
+    _voiceInput.stopTimer = setTimeout(() => {
+      _voiceInput.pressing = false;
+      _stopVoiceRecording({ send: true });
+      toast("录音已达到 60 秒，正在识别", "success");
+    }, _VOICE_MAX_DURATION_MS);
+  } catch (e) {
+    if (generation !== _voiceInput.generation) return;
+    _voiceInput.pressing = false;
+    _voiceInput.pointerId = null;
+    _stopVoiceStream();
+    const message = e?.name === "NotAllowedError"
+      ? "麦克风权限被拒绝，请在浏览器设置中允许访问"
+      : "无法启动录音，请检查麦克风";
+    toast(message, "error");
+  }
+}
+
+export function moveVoiceRecording(event) {
+  if (!_voiceInput.pressing || _voiceInput.pointerId !== event.pointerId) return;
+  const button = event.currentTarget;
+  const cancel = event.clientY < button.getBoundingClientRect().top - 48;
+  if (cancel === _voiceInput.cancelOnRelease) return;
+  _voiceInput.cancelOnRelease = cancel;
+  _setVoiceButtonState(cancel ? "松开 取消" : "松开 发送", cancel ? "canceling" : "recording");
+}
+
+export function finishVoiceRecording(event) {
+  if (_voiceInput.pointerId != null && event.pointerId !== _voiceInput.pointerId) return;
+  event.preventDefault();
+  const send = !_voiceInput.cancelOnRelease;
+  _voiceInput.pressing = false;
+  _voiceInput.cancelOnRelease = false;
+  if (!_voiceInput.recorder) {
+    _voiceInput.generation += 1;
+    _voiceInput.pointerId = null;
+  }
+  _stopVoiceRecording({ send });
+}
+
+export function cancelVoiceRecording(event) {
+  if (_voiceInput.pointerId != null && event.pointerId !== _voiceInput.pointerId) return;
+  event.preventDefault();
+  _voiceInput.pressing = false;
+  _voiceInput.cancelOnRelease = false;
+  if (!_voiceInput.recorder) {
+    _voiceInput.generation += 1;
+    _voiceInput.pointerId = null;
+  }
+  _stopVoiceRecording({ send: false });
 }
 
 function _stopCameraStream() {

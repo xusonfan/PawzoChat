@@ -54,19 +54,20 @@ async function renderSettings() {
 
   let acctCount = 0, provCount = 0, imgProvCount = 0, voiceProvCount = 0, emojiGroupCount = 0, mcpSummary = "";
   try {
-    const [a, p, ip, vp, s, e] = await Promise.all([
+    const [a, p, ip, vp, s, asr, e] = await Promise.all([
       api.get("/api/accounts"),
       api.get("/api/providers"),
       api.get("/api/image-providers"),
       api.get("/api/voice-providers"),
       api.get("/api/settings"),
+      api.get("/api/asr/settings"),
       api.get("/api/emoji/groups"),
     ]);
     acctCount = (a.accounts || []).length;
     provCount = (p.providers || []).length;
     imgProvCount = (ip.providers || []).length;
     voiceProvCount = (vp.providers || []).length;
-    state.settings = s;
+    state.settings = { ...s, asr };
     emojiGroupCount = (e.groups || []).length;
   } catch (e) { /* silent */ }
   try {
@@ -1575,6 +1576,55 @@ function _voiceModelTypeOptionsHTML(selected) {
   ).join("");
 }
 
+function _renderAsrSettingsCard(asr, isPublic) {
+  if (isPublic) return "";
+  return `<div class="card" style="margin:8px 16px">
+    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+      <span>语音输入（ASR）</span>
+      <button class="btn-text" onclick="PawzoChat.saveAsrSettings()" style="font-size:14px;font-weight:500">保存</button>
+    </div>
+    <div class="form-group"><div class="form-row">
+      <label id="asr-enabled-label" for="asr-enabled">启用按住说话</label>
+      <label class="switch-wrap"><input type="checkbox" id="asr-enabled" role="switch" aria-labelledby="asr-enabled-label" ${asr.enabled !== false ? "checked" : ""}><span class="switch-track"></span></label>
+    </div></div>
+    <div class="form-group"><div class="form-row"><label for="asr-url">服务地址</label>
+      <input type="url" id="asr-url" value="${escAttr(asr.base_url || "http://127.0.0.1:8820/v1")}" placeholder="http://127.0.0.1:8820/v1">
+    </div></div>
+    <div class="form-group"><div class="form-row"><label for="asr-model">模型</label>
+      <input type="text" id="asr-model" value="${escAttr(asr.model || "qwen3-asr:itn")}" placeholder="qwen3-asr:itn">
+    </div></div>
+    <div class="form-group"><div class="form-row"><label for="asr-key">API Key</label>
+      <input type="password" id="asr-key" value="" placeholder="${asr.has_api_key ? "已配置，留空保持不变" : "可选"}" autocomplete="new-password">
+    </div></div>
+    <div class="form-hint">用于聊天界面的语音转文字，调用 OpenAI 兼容的 /audio/transcriptions 接口。</div>
+  </div>`;
+}
+
+export async function saveAsrSettings() {
+  const apiKey = $("asr-key")?.value?.trim() || "";
+  const patch = {
+    enabled: $("asr-enabled").checked,
+    base_url: $("asr-url").value.trim(),
+    model: $("asr-model").value.trim(),
+  };
+  if (apiKey) patch.api_key = apiKey;
+
+  showLoading("保存中…");
+  try {
+    const result = await api.patch("/api/asr/settings", patch);
+    if (result.status >= 400) throw new Error(result.data?.error || "ASR 设置保存失败");
+    state.settings = state.settings || {};
+    state.settings.asr = result.data;
+    const keyInput = $("asr-key");
+    if (keyInput) {
+      keyInput.value = "";
+      keyInput.placeholder = result.data?.has_api_key ? "已配置，留空保持不变" : "可选";
+    }
+    toast("ASR 设置已保存", "success");
+  } catch (e) { toast(e?.message || "ASR 设置保存失败", "error"); }
+  finally { hideLoading(); }
+}
+
 async function renderSettingsVoiceProviders() {
   setTopBar("语音服务商", true,
     `<button class="top-btn" onclick="PawzoChat.openVoiceProviderTypeSheet()">
@@ -1583,19 +1633,23 @@ async function renderSettingsVoiceProviders() {
   );
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
   try {
-    const res = await api.get("/api/voice-providers");
+    const [res, asr] = await Promise.all([
+      api.get("/api/voice-providers"),
+      api.get("/api/asr/settings"),
+    ]);
     const providers = res.providers || [];
+    state.settings = { ...(state.settings || {}), asr };
     _voiceProviderPresets = res.presets || {};
     _voicePresetModels = res.preset_models || {};
     _voiceModelTypeOptions = res.model_type_options || [];
     _voicePresetVoices = res.preset_voices || {};
-    if (providers.length === 0) {
-      content().innerHTML = `<div class="empty-state">
-        <div class="empty-text">没有已配置的语音服务商</div>
+    const asrCard = _renderAsrSettingsCard(asr, !!state.settings?.is_public);
+    const emptyTtsCard = `<div class="card" style="margin:8px 16px">
+      <div class="empty-state" style="padding:28px 16px">
+        <div class="empty-text">没有已配置的语音输出服务商</div>
         <button onclick="PawzoChat.openVoiceProviderTypeSheet()">添加语音服务商</button>
-      </div>`;
-      return;
-    }
+      </div>
+    </div>`;
     const testEntryCard = `<div class="card" style="margin:8px 16px;cursor:pointer" onclick="PawzoChat.openVoiceTest()">
       <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
         <div style="width:36px;height:36px;border-radius:8px;background:var(--primary-light);display:flex;align-items:center;justify-content:center;color:var(--primary);flex-shrink:0">
@@ -1624,7 +1678,12 @@ async function renderSettingsVoiceProviders() {
         </div>
       </div>`;
     }).join("");
-    content().innerHTML = `<div class="page">${testEntryCard}${html}</div>`;
+    const ttsContent = providers.length > 0 ? `${testEntryCard}${html}` : emptyTtsCard;
+    content().innerHTML = `<div class="page">
+      ${asrCard}
+      <div style="margin:18px 16px 6px;color:var(--text-3);font-size:12px;font-weight:600">语音输出（TTS）</div>
+      ${ttsContent}
+    </div>`;
   } catch (e) { toast("加载失败", "error"); }
 }
 
@@ -2198,11 +2257,12 @@ export async function saveSettingsChat() {
   };
   showLoading("保存中…");
   try {
-    await api.patch("/api/settings", { chat: patch });
+    const chatResult = await api.patch("/api/settings", { chat: patch });
+    if (chatResult.status >= 400) throw new Error(chatResult.data?.error || "保存失败");
     state.settings = state.settings || {};
     state.settings.chat = { ...(state.settings.chat || {}), ...patch };
     toast("已保存", "success");
-  } catch (e) { toast("保存失败", "error"); }
+  } catch (e) { toast(e?.message || "保存失败", "error"); }
   finally { hideLoading(); }
 }
 

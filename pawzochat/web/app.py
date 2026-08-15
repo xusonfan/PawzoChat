@@ -258,6 +258,7 @@ def create_app(app_instance: App) -> Flask:
     from pawzochat.web.routes.api_image_providers import api_image_providers_bp
     from pawzochat.web.routes.api_voice_providers import api_voice_providers_bp
     from pawzochat.web.routes.api_accounts import api_accounts_bp
+    from pawzochat.web.routes.api_asr import api_asr_bp
     from pawzochat.web.routes.api_emoji import api_emoji_bp
     from pawzochat.web.routes.api_mcp import api_mcp_bp
     from pawzochat.web.routes.api_moments import api_moments_bp
@@ -276,6 +277,7 @@ def create_app(app_instance: App) -> Flask:
     flask_app.register_blueprint(api_image_providers_bp, url_prefix="/api/image-providers")
     flask_app.register_blueprint(api_voice_providers_bp, url_prefix="/api/voice-providers")
     flask_app.register_blueprint(api_accounts_bp, url_prefix="/api/accounts")
+    flask_app.register_blueprint(api_asr_bp, url_prefix="/api/asr")
     flask_app.register_blueprint(api_emoji_bp, url_prefix="/api/emoji")
     flask_app.register_blueprint(api_mcp_bp, url_prefix="/api/mcp")
     flask_app.register_blueprint(api_moments_bp, url_prefix="/api/moments")

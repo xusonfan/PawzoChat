@@ -266,6 +266,9 @@ assert.doesNotMatch(settingsSource, /@media \(max-width: 420px\) \{[\s\S]*?#sett
 assert.match(settingsSource, /new_message_sound:\s*\$\("sc-sound"\)\.checked/);
 assert.match(settingsSource, /new_message_vibration:\s*\$\("sc-vibration"\)\.checked/);
 assert.match(settingsSource, /api\.patch\("\/api\/settings",\s*\{ chat: patch \}\)/);
+assert.match(settingsSource, /export async function saveAsrSettings\(\)[\s\S]*api\.patch\("\/api\/asr\/settings",\s*patch\)/);
+assert.match(settingsSource, /function renderSettingsVoiceProviders\(\)[\s\S]*语音输出（TTS）/);
+assert.doesNotMatch(settingsSource, /sc-asr-/, "ASR 设置不应继续挂在对话设置表单中");
 
 const configSource = await readFile(join(__dirname, "../pawzochat/core/config.py"), "utf8");
 assert.match(configSource, /"new_message_sound": True/);

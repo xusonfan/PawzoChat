@@ -38,6 +38,7 @@ import {
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
   openHistoryEdit,
   onChatInput, onChatKey, onChatCompositionStart, onChatCompositionEnd, sendChat,
+  toggleVoiceInputMode, startVoiceRecording, moveVoiceRecording, finishVoiceRecording, cancelVoiceRecording,
   takePhoto, capturePhoto,
   pickImage, onImageSelected, removePendingImage,
   pickFile, onFileSelected, removePendingFile,
@@ -87,7 +88,7 @@ import {
   editImageModel, confirmEditImageModel, removeEditImageModel,
   openImageTest, onImageTestProviderChange, onImageTestModelChange, onImageTestPromptInput, onImageTestPersonaChange, runImageTest,
   openVoiceProviderTypeSheet,
-  saveVoiceProvider, deleteVoiceProvider,
+  saveVoiceProvider, deleteVoiceProvider, saveAsrSettings,
   onVoiceProviderPresetChange, updateVoiceProviderPreview,
   importVoicePresetModels,
   addEditVoiceModel, confirmAddVoiceModel,
@@ -298,6 +299,7 @@ window.PawzoChat = {
   heEnterSelectMode, heExitSelectMode, heToggleSelectItem,
   heToggleSelectAllCurrentDate, heBatchDeleteSelected,
   onChatInput, onChatKey, onChatCompositionStart, onChatCompositionEnd, sendChat,
+  toggleVoiceInputMode, startVoiceRecording, moveVoiceRecording, finishVoiceRecording, cancelVoiceRecording,
   takePhoto, capturePhoto,
   pickImage, onImageSelected, removePendingImage,
   pickFile, onFileSelected, removePendingFile,
@@ -331,7 +333,7 @@ window.PawzoChat = {
   editImageModel, confirmEditImageModel, removeEditImageModel,
   openImageTest, onImageTestProviderChange, onImageTestModelChange, onImageTestPromptInput, onImageTestPersonaChange, runImageTest,
   openVoiceProviderTypeSheet,
-  saveVoiceProvider, deleteVoiceProvider,
+  saveVoiceProvider, deleteVoiceProvider, saveAsrSettings,
   onVoiceProviderPresetChange, updateVoiceProviderPreview,
   importVoicePresetModels,
   addEditVoiceModel, confirmAddVoiceModel,
@@ -417,8 +419,11 @@ async function loadProfile() {
 
 async function loadThemeSettings() {
   try {
-    const s = await api.get("/api/settings");
-    state.settings = s;
+    const [settings, asr] = await Promise.all([
+      api.get("/api/settings"),
+      api.get("/api/asr/settings"),
+    ]);
+    state.settings = { ...settings, asr };
   } catch (e) { /* keep default */ }
   try { await applyThemeFromState(); } catch (e) { /* silent */ }
   watchSystemTheme();

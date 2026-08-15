@@ -56,6 +56,13 @@ DEFAULTS: dict = {
     "llm_providers": {},
     "image_providers": {},
     "voice_providers": {},
+    "asr": {
+        "enabled": True,
+        "base_url": "http://127.0.0.1:8820/v1",
+        "model": "qwen3-asr:itn",
+        "api_key": "",
+        "timeout_seconds": 300,
+    },
     "personas": {},
     "mcp_servers": {},
     "capability_adapters": {},

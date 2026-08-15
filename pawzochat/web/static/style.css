@@ -590,6 +590,43 @@ body {
 }
 .chat-input::placeholder { color: var(--text-3); }
 .chat-input:focus-visible { box-shadow: 0 0 0 2px var(--primary-light); }
+.chat-input-bar [hidden] { display: none !important; }
+.voice-mode-toggle.active {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.voice-hold-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--search-bg);
+  color: var(--text-1);
+  font: 500 15px/1 var(--font);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.voice-hold-btn.recording {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+.voice-hold-btn.canceling {
+  background: var(--bg-hover);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.voice-hold-btn.transcribing {
+  color: var(--text-3);
+  cursor: wait;
+}
+.voice-hold-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
 
 /* ---- Persona Card / Settings ---- */
 .persona-card-page {
