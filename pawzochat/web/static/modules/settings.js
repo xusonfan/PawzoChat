@@ -88,11 +88,10 @@ async function renderSettings() {
   const profileAvUrl = profileAvatarUrl(profile);
 
   target.innerHTML = `<div class="page">
-    <div class="status-card" onclick="PawzoChat.pushPage('profileEdit')">
+    <div class="status-card" onclick="PawzoChat.pushPage('profileDetail')">
       ${avatarHtml(profile.name, "", profileAvUrl)}
       <div class="info">
         <div class="app-name">${esc(profile.name)}</div>
-        <div class="version">PawzoChat v${esc(statusInfo.version)}</div>
       </div>
       <span class="row-arrow">›</span>
     </div>
@@ -3461,7 +3460,39 @@ export async function applyUpdate() {
   }
 }
 
-/* ============ Profile Edit ============ */
+/* ============ Profile Detail / Edit ============ */
+
+function renderProfileDetail() {
+  setTopBar("个人名片", true,
+    `<button class="btn-text" onclick="PawzoChat.pushPage('profileEdit')" style="font-size:15px;font-weight:500">编辑</button>`
+  );
+
+  const profile = state.profile || { name: "我", has_avatar: false };
+  const avUrl = profileAvatarUrl(profile);
+  content().innerHTML = `<div class="page persona-card-page">
+    <section class="persona-card-identity" aria-label="我的名片">
+      ${avatarHtml(profile.name, "lg", avUrl)}
+      <div class="persona-card-name-wrap">
+        <div class="persona-card-name">${esc(profile.name)}</div>
+        <div class="persona-card-subtitle">PawzoChat 用户</div>
+      </div>
+    </section>
+    <section class="persona-card-info">
+      <div class="persona-card-field">
+        <span class="persona-card-label">昵称</span>
+        <span class="persona-card-value">${esc(profile.name)}</span>
+      </div>
+    </section>
+    <section class="card persona-card-links" aria-label="更多资料">
+      <button type="button" class="card-row persona-moments-entry"
+        aria-label="查看我的朋友圈"
+        onclick="PawzoChat.openPersonaMoments('user')">
+        <span class="row-label">朋友圈</span>
+        <span class="row-arrow" aria-hidden="true">›</span>
+      </button>
+    </section>
+  </div>`;
+}
 
 async function renderProfileEdit() {
   setTopBar("个人资料", true,
@@ -3927,6 +3958,7 @@ export async function saveSettingsTheme() {
 /* ---- Register renderers ---- */
 
 registerTabRenderer("settings", renderSettings);
+registerPageRenderer("profileDetail", renderProfileDetail);
 registerPageRenderer("profileEdit", renderProfileEdit);
 registerPageRenderer("settingsAccounts", renderSettingsAccounts);
 registerPageRenderer("accountDetail", renderAccountDetail);

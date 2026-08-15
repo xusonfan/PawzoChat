@@ -719,7 +719,7 @@ function _onMsgAvatarClick(e) {
   if (row.classList.contains("assistant")) {
     pushPage("personaDetail", { personaId: chatPersonaId });
   } else {
-    pushPage("profileEdit");
+    pushPage("profileDetail");
   }
 }
 

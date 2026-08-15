@@ -463,7 +463,7 @@ export function openPersonaMoments(personaId) {
 async function renderPersonaMoments(data) {
   const personaId = data?.personaId;
   if (!personaId) {
-    toast("角色无效", "error");
+    toast("作者无效", "error");
     return;
   }
 
@@ -479,10 +479,19 @@ async function renderPersonaMoments(data) {
   setTopBar("朋友圈", true, "");
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
 
+  const isUser = personaId === "user";
   let persona = null;
   try {
+    const personaRequest = isUser
+      ? Promise.resolve({
+          id: "user",
+          name: state.profile?.name || "我",
+          has_avatar: !!state.profile?.has_avatar,
+          avatar_version: state.profile?.avatar_version || "",
+        })
+      : api.get(`/api/personas/${encodeURIComponent(personaId)}`);
     const [p, stateRes, settingsRes, personasRes] = await Promise.all([
-      api.get(`/api/personas/${encodeURIComponent(personaId)}`),
+      personaRequest,
       api.get("/api/moments/state"),
       api.get("/api/moments/settings"),
       api.get("/api/personas"),
@@ -502,14 +511,16 @@ async function renderPersonaMoments(data) {
     };
   } catch (e) {
     toast("加载失败", "error");
-    content().innerHTML = `<div class="moments-empty">无法加载角色朋友圈</div>`;
+    content().innerHTML = `<div class="moments-empty">无法加载个人朋友圈</div>`;
     return;
   }
 
   _list.personaMeta = persona;
-  const name = persona.name || "角色";
-  const signature = (persona.signature || "").trim() || "这个人很神秘，什么都没写";
-  const avUrl = personaAvatarUrl(persona);
+  const name = persona.name || (isUser ? "我" : "角色");
+  const signature = isUser
+    ? ""
+    : ((persona.signature || "").trim() || "这个人很神秘，什么都没写");
+  const avUrl = isUser ? profileAvatarUrl(persona) : personaAvatarUrl(persona);
   const avatarBlock = avatarHtml(name, "lg", avUrl);
 
   content().innerHTML = `
@@ -519,7 +530,7 @@ async function renderPersonaMoments(data) {
         <div class="persona-moments-avatar">${avatarBlock}</div>
         <div class="persona-moments-name">${esc(name)}</div>
       </div>
-      <div class="persona-moments-signature">${esc(signature)}</div>
+      ${signature ? `<div class="persona-moments-signature">${esc(signature)}</div>` : ""}
       <div class="persona-moments-feed" id="pm-feed">
         <div class="loading-center"><div class="spinner"></div></div>
       </div>
@@ -700,7 +711,7 @@ export function momentsOpenAuthor(event, author) {
   if (event?.stopPropagation) event.stopPropagation();
   if (!author) return;
   if (author === "user") {
-    pushPage("profileEdit");
+    pushPage("profileDetail");
     return;
   }
   pushPage("personaDetail", { personaId: author });
@@ -1383,35 +1394,16 @@ async function renderMomentsSettings() {
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
   try {
     const res = await api.get("/api/moments/settings");
-    _settings.publishers = new Set(res.publishers || []);
-    _settings.repliers = new Set(res.repliers || []);
-    _settings.probabilities = Object.assign({}, res.reply_probabilities || {});
-    _settings.memoryEnabled = Object.assign({}, res.memory_enabled || {});
     _settings.promptPost = res.prompts?.post || "";
     _settings.promptReply = res.prompts?.reply || "";
     _settings.promptCounterReply = res.prompts?.counter_reply || "";
     _settings.promptPostDefault = res.prompts?.post_default || "";
     _settings.promptReplyDefault = res.prompts?.reply_default || "";
     _settings.promptCounterReplyDefault = res.prompts?.counter_reply_default || "";
-    _settings.personas = res.personas || [];
-    // Cache for avatar lookup.
-    _state.personasById = {};
-    for (const p of _settings.personas) _state.personasById[p.id] = p;
   } catch (e) { toast("加载失败", "error"); return; }
-
-  const personasHtml = _settings.personas.map(_personaSettingsRow).join("");
-
-  const personasBlock = _settings.personas.length === 0
-    ? `<div class="card-empty-hint">还没有角色，请先在通讯录新建。</div>`
-    : `<div class="moments-pp-list">${personasHtml}</div>`;
 
   content().innerHTML = `
     <div class="page">
-      <div class="card">
-        <div class="card-header">参与角色</div>
-        ${personasBlock}
-        <div class="form-hint" style="padding:6px 16px 14px">点击刷新按钮时会随机选择一位可发布朋友圈内容的角色生成朋友圈内容；其他角色会按照设置的概率触发回复该朋友圈内容</div>
-      </div>
       <div class="card">
         <div class="card-header-row">
           <span class="card-header" style="flex:1">文案生成提示词</span>
@@ -1446,60 +1438,6 @@ async function renderMomentsSettings() {
   `;
 }
 
-function _personaSettingsRow(p) {
-  const pid = esc(p.id);
-  const prob = Math.max(0, Math.min(100, parseInt(_settings.probabilities[p.id], 10) || 50));
-  const isReplier = _settings.repliers.has(p.id);
-  const isPublisher = _settings.publishers.has(p.id);
-  const isMemory = _settings.memoryEnabled[p.id] !== false;
-  const avatarUrl = personaAvatarUrl(p);
-  return `
-    <div class="moments-pp-row" data-pid="${pid}">
-      <div class="moments-pp-head">
-        ${avatarHtml(p.name || "?", "sm", avatarUrl)}
-        <div class="moments-pp-name">${esc(p.name)}</div>
-      </div>
-      <div class="moments-pp-controls">
-        <label class="moments-pp-toggle">
-          <span class="moments-pp-toggle-label">发布</span>
-          <span class="switch-wrap">
-            <input type="checkbox" class="moments-pp-pub" data-pid="${pid}" ${isPublisher ? "checked" : ""}>
-            <span class="switch-track"></span>
-          </span>
-        </label>
-        <label class="moments-pp-toggle">
-          <span class="moments-pp-toggle-label">回复</span>
-          <span class="switch-wrap">
-            <input type="checkbox" class="moments-pp-rep" data-pid="${pid}" ${isReplier ? "checked" : ""}>
-            <span class="switch-track"></span>
-          </span>
-        </label>
-        <label class="moments-pp-toggle">
-          <span class="moments-pp-toggle-label">写入记忆</span>
-          <span class="switch-wrap">
-            <input type="checkbox" class="moments-pp-mem" data-pid="${pid}" ${isMemory ? "checked" : ""}>
-            <span class="switch-track"></span>
-          </span>
-        </label>
-        <div class="moments-pp-prob">
-          <span class="moments-pp-prob-label">触发回复朋友圈概率</span>
-          <input type="range" class="moments-pp-prob-input" data-pid="${pid}" min="0" max="100" step="1" value="${prob}" oninput="PawzoChat.momentsOnProbInput(this)">
-          <span class="slider-val" data-prob-label="${pid}">${prob}%</span>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-export function momentsOnProbInput(input) {
-  const pid = input.dataset.pid;
-  if (!pid) return;
-  const v = Math.max(0, Math.min(100, parseInt(input.value, 10) || 0));
-  _settings.probabilities[pid] = v;
-  const lbl = document.querySelector(`[data-prob-label="${CSS.escape(pid)}"]`);
-  if (lbl) lbl.textContent = `${v}%`;
-}
-
 export function momentsResetPrompt(kind) {
   if (kind === "post") {
     const el = $("m-set-post");
@@ -1514,20 +1452,6 @@ export function momentsResetPrompt(kind) {
 }
 
 export async function momentsSaveSettings() {
-  const publishers = Array.from(document.querySelectorAll(".moments-pp-pub:checked")).map(el => el.dataset.pid);
-  const repliers = Array.from(document.querySelectorAll(".moments-pp-rep:checked")).map(el => el.dataset.pid);
-  const reply_probabilities = {};
-  for (const el of document.querySelectorAll(".moments-pp-prob-input")) {
-    const pid = el.dataset.pid;
-    if (!pid) continue;
-    reply_probabilities[pid] = Math.max(0, Math.min(100, parseInt(el.value, 10) || 0));
-  }
-  const memory_enabled = {};
-  for (const el of document.querySelectorAll(".moments-pp-mem")) {
-    const pid = el.dataset.pid;
-    if (!pid) continue;
-    memory_enabled[pid] = !!el.checked;
-  }
   const post = $("m-set-post")?.value || "";
   const reply = $("m-set-reply")?.value || "";
   const counter_reply = $("m-set-counter")?.value || "";
@@ -1535,10 +1459,6 @@ export async function momentsSaveSettings() {
   showLoading("保存中…");
   try {
     const res = await api.put("/api/moments/settings", {
-      publishers,
-      repliers,
-      reply_probabilities,
-      memory_enabled,
       prompts: { post, reply, counter_reply },
     });
     if (res.status >= 400) { toast(res.data?.error || "保存失败", "error"); return; }
