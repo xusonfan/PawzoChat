@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 import { avatarHtml, personaAvatarUrl, esc, CAP_ICONS, ILLEGAL_NAME_RE, voiceOptionsHtml, voiceCatalogFor } from "./utils.js";
+import { openImagePreview } from "./image_preview.js";
 import { api, downloadFile } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showLoading, hideLoading, showSheet, closeOverlay } from "./ui.js";
@@ -320,10 +321,15 @@ async function renderPersonaDetail(data) {
     const channel = channelNames[p.linked_channel] || p.linked_channel || "未绑定";
     const signature = (p.signature || "").trim() || "这个人很神秘，什么都没写";
     const detailAvUrl = personaAvatarUrl(p);
+    const detailAvatar = detailAvUrl
+      ? `<button class="persona-card-avatar-preview" type="button" aria-label="查看角色头像大图">
+          ${avatarHtml(p.name, "lg", detailAvUrl)}
+        </button>`
+      : avatarHtml(p.name, "lg", detailAvUrl);
 
     content().innerHTML = `<div class="page persona-card-page">
       <section class="persona-card-identity" aria-label="角色名片">
-        ${avatarHtml(p.name, "lg", detailAvUrl)}
+        ${detailAvatar}
         <div class="persona-card-name-wrap">
           <div class="persona-card-name">${esc(p.name)}</div>
           <div class="persona-card-subtitle">PawzoChat 角色</div>
@@ -345,6 +351,11 @@ async function renderPersonaDetail(data) {
         <button class="btn-primary" onclick="PawzoChat.chatWithPersona('${p.id}')">发消息</button>
       </div>
     </div>`;
+
+    content().querySelector(".persona-card-avatar-preview")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openImagePreview(detailAvUrl);
+    });
   } catch (e) { toast("加载失败", "error"); }
 }
 

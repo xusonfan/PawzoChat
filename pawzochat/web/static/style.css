@@ -559,6 +559,18 @@ body {
   font-size: 32px;
 }
 .persona-card-identity .avatar img { border-radius: 12px; }
+.persona-card-avatar-preview {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: zoom-in;
+}
+.persona-card-avatar-preview:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
 .persona-card-name-wrap { flex: 1; min-width: 0; }
 .persona-card-name {
   color: var(--text-1);
