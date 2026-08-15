@@ -170,9 +170,9 @@ import {
   momentsSubmitPublish,
   momentsOnProbInput, momentsResetPrompt, momentsSaveSettings,
   momentsOnUpdate, momentsOnGenerating,
+  openPersonaMoments, momentsOpenDetail,
 } from "./modules/moments.js";
 
-  openPersonaMoments, momentsOpenDetail,
 import {
   pwOnProviderChange, pwGenerate, pwCreatePersona,
 } from "./modules/persona_writer.js";
@@ -388,6 +388,7 @@ window.PawzoChat = {
   momentsPickPubImages, momentsOnPublishFiles, momentsRemovePubImage,
   momentsSubmitPublish,
   momentsOnProbInput, momentsResetPrompt, momentsSaveSettings,
+  openPersonaMoments, momentsOpenDetail,
   pwOnProviderChange, pwGenerate, pwCreatePersona,
 };
 
@@ -396,7 +397,6 @@ window.PawzoChat = {
 async function loadProfile() {
   try {
     const res = await api.get("/api/profile");
-  openPersonaMoments, momentsOpenDetail,
     state.profile = {
       name: res.name || "我",
       has_avatar: !!res.has_avatar,
