@@ -1178,6 +1178,8 @@ body {
   color: var(--text-1);
   background: none;
   text-align: right;
+  min-width: 0;
+  max-width: 100%;
 }
 .form-row input::placeholder { color: var(--text-3); }
 .form-row input[type="number"] { width: 80px; flex: none; margin-left: auto; }
@@ -1339,9 +1341,13 @@ body {
   cursor: pointer;
 }
 .status-card .avatar { margin-right: 0; }
-.status-card .info { flex: 1; }
+.status-card .info {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
 .status-card .app-name { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.status-card .version { font-size: 12px; color: var(--text-3); }
 
 /* ---- PWA Install ---- */
 .pwa-install-banner {
@@ -3627,97 +3633,6 @@ select.qs-field-input {
 
 /* Settings page */
 
-.moments-pp-list { padding: 4px 0; }
-.moments-pp-row {
-  padding: 12px 16px;
-  border-top: 1px solid var(--divider);
-}
-.moments-pp-row:first-child { border-top: none; }
-
-/* Row 1: avatar + name */
-.moments-pp-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.moments-pp-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Row 2: two toggles + label + slider; wraps to two rows in portrait */
-.moments-pp-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-}
-.moments-pp-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-.moments-pp-toggle-label {
-  font-size: 13px;
-  color: var(--text-2);
-}
-.moments-pp-toggle .switch-wrap {
-  transform: scale(0.78);
-  transform-origin: left center;
-}
-.moments-pp-prob-label {
-  font-size: 13px;
-  color: var(--text-2);
-  flex-shrink: 0;
-}
-.moments-pp-prob {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-@media (orientation: portrait) {
-  .moments-pp-prob {
-    flex-basis: 100%;
-    margin-left: 0;
-  }
-}
-.moments-pp-prob input[type="range"] {
-  flex: 1;
-  min-width: 0;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--divider);
-  outline: none;
-}
-.moments-pp-prob input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--primary);
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
-}
-.moments-pp-prob .slider-val {
-  font-size: 13px;
-  color: var(--text-2);
-  min-width: 38px;
-  text-align: right;
-}
 .moments-prompt-area {
   width: 100%;
   border: 1px solid var(--border);
