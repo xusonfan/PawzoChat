@@ -51,6 +51,11 @@ function _decodeDataValue(value) {
   }
 }
 
+function _momentProbability(settings, personaId) {
+  const parsed = Number.parseInt(settings?.reply_probabilities?.[personaId], 10);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 50;
+}
+
 function _bindPeWorldbookActions() {
   const host = $("pe-worldbook-bound");
   if (!host) return;
@@ -441,7 +446,10 @@ async function renderPersonaSettings(data) {
   setTopBar("角色设置", true, topBtns);
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
   try {
-    const p = await api.get(`/api/personas/${data.personaId}`);
+    const [p, momentsSettings] = await Promise.all([
+      api.get(`/api/personas/${data.personaId}`),
+      api.get("/api/moments/settings").catch(() => ({})),
+    ]);
     const prov = p.llm_provider || "未配置";
     const model = p.llm_model || "未选择";
 
@@ -453,6 +461,11 @@ async function renderPersonaSettings(data) {
     const proQuietText = qh.enabled !== false
       ? `${esc(qh.start || "22:00")} – ${esc(qh.end || "08:00")}`
       : "已关闭";
+
+    const momentCanPublish = (momentsSettings.publishers || []).includes(p.id);
+    const momentCanReply = (momentsSettings.repliers || []).includes(p.id);
+    const momentMemoryEnabled = momentsSettings.memory_enabled?.[p.id] !== false;
+    const momentProbability = _momentProbability(momentsSettings, p.id);
 
     const ig = p.image_generation || {};
     const igEnabled = !!ig.enabled;
@@ -492,6 +505,13 @@ async function renderPersonaSettings(data) {
         <div class="card-row" style="cursor:pointer" onclick="PawzoChat.pushPage('memoryManage',{personaId:'${p.id}'})">
           <span class="row-label">管理记忆</span><span class="row-arrow">›</span>
         </div>
+      </div>
+      <div class="card">
+        <div class="card-header">朋友圈</div>
+        <div class="card-row"><span class="row-label">允许发布</span><span class="row-value">${momentCanPublish ? '已开启' : '已关闭'}</span></div>
+        <div class="card-row"><span class="row-label">允许回复</span><span class="row-value">${momentCanReply ? '已开启' : '已关闭'}</span></div>
+        <div class="card-row"><span class="row-label">写入记忆</span><span class="row-value">${momentMemoryEnabled ? '已开启' : '已关闭'}</span></div>
+        <div class="card-row"><span class="row-label">触发回复概率</span><span class="row-value">${momentProbability}%</span></div>
       </div>
       <div class="card">
         <div class="card-header">主动消息</div>
@@ -574,18 +594,21 @@ async function renderPersonaEdit(data) {
   let imageProviders = [];
   let voiceProviders = [];
   let voicePresetVoices = {};
+  let momentsSettings = {};
   try {
-    const [provRes, emojiRes, imgRes, voiceRes] = await Promise.all([
+    const [provRes, emojiRes, imgRes, voiceRes, momentsRes] = await Promise.all([
       api.get("/api/providers"),
       api.get("/api/emoji/groups"),
       api.get("/api/image-providers"),
       api.get("/api/voice-providers"),
+      api.get("/api/moments/settings").catch(() => ({})),
     ]);
     providers = provRes.providers || [];
     emojiGroups = emojiRes.groups || [];
     imageProviders = (imgRes.providers || []).filter(pr => pr.api_key_set && (pr.models || []).length > 0);
     voiceProviders = (voiceRes.providers || []).filter(pr => pr.api_key_set && (pr.models || []).length > 0);
     voicePresetVoices = voiceRes.preset_voices || {};
+    momentsSettings = momentsRes || {};
   } catch (e) { /* silent */ }
 
   // Defaults for a brand-new persona. Keep proactive defaults in sync with
@@ -615,6 +638,11 @@ async function renderPersonaEdit(data) {
       p = await api.get(`/api/personas/${data.personaId}`);
     } catch (e) { /* silent */ }
   }
+
+  const momentPublishers = new Set(momentsSettings.publishers || []);
+  const momentRepliers = new Set(momentsSettings.repliers || []);
+  const momentProbability = _momentProbability(momentsSettings, p.id);
+  const momentMemoryEnabled = momentsSettings.memory_enabled?.[p.id] !== false;
 
   _peBoundWorldbooks = Array.isArray(p.bound_worldbooks) ? [...p.bound_worldbooks] : [];
   _peWorldbookSummary = await fetchWorldbookSummary();
@@ -773,6 +801,22 @@ async function renderPersonaEdit(data) {
       ${!isNew && p.id ? `<div style="padding:8px 16px 12px">
         <button class="btn-outline" onclick="PawzoChat.pushPage('memoryManage',{personaId:'${p.id}'})" style="width:100%">管理记忆 (${p.memory_count || 0} 条)</button>
       </div>` : ''}
+    </div>
+    <div class="card">
+      <div class="card-header">朋友圈</div>
+      <div class="form-group"><div class="form-row"><label>允许发布朋友圈</label>
+        <label class="switch-wrap"><input type="checkbox" id="pe-moments-publish" ${momentPublishers.has(p.id) ? "checked" : ""}><span class="switch-track"></span></label>
+      </div></div>
+      <div class="form-group"><div class="form-row"><label>允许回复朋友圈</label>
+        <label class="switch-wrap"><input type="checkbox" id="pe-moments-reply" ${momentRepliers.has(p.id) ? "checked" : ""}><span class="switch-track"></span></label>
+      </div></div>
+      <div class="form-group"><div class="form-row"><label>朋友圈写入记忆</label>
+        <label class="switch-wrap"><input type="checkbox" id="pe-moments-memory" ${momentMemoryEnabled ? "checked" : ""}><span class="switch-track"></span></label>
+      </div></div>
+      <div class="form-group"><div class="form-row"><label>触发回复概率</label>
+        <div class="slider-wrap"><input type="range" id="pe-moments-prob" min="0" max="100" step="1" value="${momentProbability}" oninput="this.nextElementSibling.textContent=this.value+'%'"><span class="slider-val">${momentProbability}%</span></div>
+      </div></div>
+      <div class="form-hint">发布用于刷新时生成朋友圈；回复概率仅在允许回复时生效</div>
     </div>
     ${(() => {
       const pro = p.proactive || {};
@@ -1198,12 +1242,21 @@ export async function savePersona(isNew) {
     };
   }
 
+  const momentsBody = {
+    can_publish: $("pe-moments-publish").checked,
+    can_reply: $("pe-moments-reply").checked,
+    memory_enabled: $("pe-moments-memory").checked,
+    reply_probability: parseInt($("pe-moments-prob").value, 10) || 0,
+  };
+
   showLoading("保存中…");
   try {
     let res;
+    let savedPersonaId;
     if (isNew) {
       res = await api.post("/api/personas", body);
       if (res.status >= 400) { toast(res.data.error, "error"); return; }
+      savedPersonaId = res.data.id;
       if (_pendingAvatarBlob && res.data.id) {
         const fd = new FormData();
         fd.append("avatar", _pendingAvatarBlob, "avatar.png");
@@ -1215,6 +1268,15 @@ export async function savePersona(isNew) {
       const pid = $("pe-id").value.trim();
       res = await api.put(`/api/personas/${pid}`, body);
       if (res.status >= 400) { toast(res.data.error, "error"); return; }
+      savedPersonaId = pid;
+    }
+    const momentsRes = await api.patch(
+      `/api/moments/settings/personas/${encodeURIComponent(savedPersonaId)}`,
+      momentsBody,
+    );
+    if (momentsRes.status >= 400) {
+      toast(momentsRes.data?.error || "朋友圈设置保存失败", "error");
+      return;
     }
     toast("已保存", "success");
     goBack();

@@ -183,7 +183,7 @@ import {
   momentsOnCoverFile, momentsCoverDelete,
   momentsPickPubImages, momentsOnPublishFiles, momentsRemovePubImage,
   momentsSubmitPublish,
-  momentsOnProbInput, momentsResetPrompt, momentsSaveSettings,
+  momentsResetPrompt, momentsSaveSettings,
   momentsOnUpdate, momentsOnGenerating,
   openPersonaMoments, momentsOpenDetail,
 } from "./modules/moments.js";
@@ -423,7 +423,7 @@ window.PawzoChat = {
   momentsOnCoverFile, momentsCoverDelete,
   momentsPickPubImages, momentsOnPublishFiles, momentsRemovePubImage,
   momentsSubmitPublish,
-  momentsOnProbInput, momentsResetPrompt, momentsSaveSettings,
+  momentsResetPrompt, momentsSaveSettings,
   openPersonaMoments, momentsOpenDetail,
   pwOnProviderChange, pwGenerate, pwCreatePersona,
 };

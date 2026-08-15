@@ -457,9 +457,10 @@ def get_settings():
 def update_settings():
     app = get_app()
     body = request.get_json(force=True, silent=True) or {}
+    current_cfg = app.config.get("moments", default={}) or {}
 
-    publishers_raw = body.get("publishers", [])
-    repliers_raw = body.get("repliers", [])
+    publishers_raw = body.get("publishers", current_cfg.get("publishers", []))
+    repliers_raw = body.get("repliers", current_cfg.get("repliers", []))
     if not isinstance(publishers_raw, list) or not isinstance(repliers_raw, list):
         return jsonify({"error": "publishers/repliers 必须为列表"}), 400
 
@@ -470,7 +471,9 @@ def update_settings():
     publishers = list(dict.fromkeys(publishers))
     repliers = list(dict.fromkeys(repliers))
 
-    probs_in = body.get("reply_probabilities", {}) or {}
+    probs_in = body.get(
+        "reply_probabilities", current_cfg.get("reply_probabilities", {})
+    ) or {}
     if not isinstance(probs_in, dict):
         return jsonify({"error": "reply_probabilities 必须为对象"}), 400
     probabilities: dict[str, int] = {}
@@ -483,7 +486,7 @@ def update_settings():
             continue
         probabilities[pid] = max(0, min(100, v))
 
-    mem_in = body.get("memory_enabled", {}) or {}
+    mem_in = body.get("memory_enabled", current_cfg.get("memory_enabled", {})) or {}
     if not isinstance(mem_in, dict):
         return jsonify({"error": "memory_enabled 必须为对象"}), 400
     memory_enabled: dict[str, bool] = {}
@@ -492,7 +495,7 @@ def update_settings():
             continue
         memory_enabled[pid] = bool(raw)
 
-    prompts_in = body.get("prompts", {}) or {}
+    prompts_in = body.get("prompts", current_cfg.get("prompts", {})) or {}
     if not isinstance(prompts_in, dict):
         return jsonify({"error": "prompts 必须为对象"}), 400
     post_prompt = (prompts_in.get("post") or "").strip()
@@ -526,6 +529,51 @@ def update_settings():
         }
         # Drop the legacy global-probability key if present so the saved
         # YAML stays clean.
+        moments_cfg.pop("reply_probability", None)
+        app.config._data["moments"] = moments_cfg
+        app.config.save()
+
+    return jsonify({"ok": True})
+
+
+@api_moments_bp.route("/settings/personas/<persona_id>", methods=["PATCH"])
+def update_persona_settings(persona_id: str):
+    app = get_app()
+    valid_ids = set((app.config.get("personas", default={}) or {}).keys())
+    if persona_id not in valid_ids:
+        return jsonify({"error": "persona not found"}), 404
+
+    body = request.get_json(force=True, silent=True) or {}
+    required = {"can_publish", "can_reply", "memory_enabled", "reply_probability"}
+    if not required.issubset(body):
+        return jsonify({"error": "朋友圈角色配置不完整"}), 400
+    if not all(isinstance(body[key], bool) for key in (
+        "can_publish", "can_reply", "memory_enabled",
+    )):
+        return jsonify({"error": "开关配置必须为布尔值"}), 400
+    try:
+        probability = int(body["reply_probability"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "回复概率必须为整数"}), 400
+    probability = max(0, min(100, probability))
+
+    with app.config.lock:
+        moments_cfg = dict(app.config.get("moments", default={}) or {})
+        publishers = list(moments_cfg.get("publishers", []) or [])
+        repliers = list(moments_cfg.get("repliers", []) or [])
+
+        def toggle_member(items: list[str], enabled: bool) -> list[str]:
+            without_persona = [item for item in items if item != persona_id]
+            return [*without_persona, persona_id] if enabled else without_persona
+
+        moments_cfg["publishers"] = toggle_member(publishers, body["can_publish"])
+        moments_cfg["repliers"] = toggle_member(repliers, body["can_reply"])
+        probabilities = dict(moments_cfg.get("reply_probabilities", {}) or {})
+        probabilities[persona_id] = probability
+        moments_cfg["reply_probabilities"] = probabilities
+        memory = dict(moments_cfg.get("memory_enabled", {}) or {})
+        memory[persona_id] = body["memory_enabled"]
+        moments_cfg["memory_enabled"] = memory
         moments_cfg.pop("reply_probability", None)
         app.config._data["moments"] = moments_cfg
         app.config.save()
