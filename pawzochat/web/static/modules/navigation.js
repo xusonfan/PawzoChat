@@ -312,6 +312,74 @@ window.addEventListener("pawzo:api-invalidated", () => {
 
 /* ---- Core navigation ---- */
 
+function _activateTab(tab) {
+  state.currentTab = tab;
+  document.querySelectorAll(".tab").forEach(t =>
+    t.classList.toggle("active", t.dataset.tab === tab)
+  );
+}
+
+function _showNavigationRoot({ renderDesktopTab = false } = {}) {
+  if (isDesktop()) {
+    if (renderDesktopTab) renderCurrentTab();
+    showDesktopWelcome();
+  } else {
+    $("tab-bar").classList.remove("hide");
+    if (!_restoreTabDom(state.currentTab)) {
+      renderCurrentTab();
+    }
+  }
+}
+
+function _restoreReturnState(returnState) {
+  _activateTab(returnState.tab);
+  state.pageStack = returnState.pages.map(page => ({ ...page }));
+
+  if (state.pageStack.length === 0) {
+    _showNavigationRoot({ renderDesktopTab: true });
+    return;
+  }
+
+  if (isDesktop()) renderCurrentTab();
+  $("tab-bar").classList.add("hide");
+  const previous = state.pageStack[state.pageStack.length - 1];
+  renderPage(previous.name, previous.data);
+}
+
+function _samePage(left, name, data) {
+  if (left?.name !== name) return false;
+  const leftData = left.data || {};
+  const rightData = data || {};
+  const keys = new Set([...Object.keys(leftData), ...Object.keys(rightData)]);
+  return [...keys].every(key => leftData[key] === rightData[key]);
+}
+
+export function navigateToPage(tab, name, data, { collapsePreviousTarget = false } = {}) {
+  const returnPages = state.pageStack.map(previous => ({ ...previous }));
+  if (collapsePreviousTarget && returnPages.length >= 2) {
+    const previousIndex = returnPages.length - 2;
+    if (_samePage(returnPages[previousIndex], name, data)) {
+      returnPages.splice(previousIndex, 1);
+    }
+  }
+
+  const page = {
+    name,
+    data,
+    returnState: {
+      tab: state.currentTab,
+      pages: returnPages,
+    },
+  };
+
+  _activateTab(tab);
+  state.pageStack = [page];
+  $("tab-bar").classList.add("hide");
+  if (isDesktop()) renderCurrentTab();
+  renderPage(name, data);
+  if (!isDesktop()) _writeBrowserRoute("push");
+}
+
 export function switchTab(tab) {
   if (isDesktop()) {
     state.sidebarScrollPos[state.currentTab] = sidebar()?.scrollTop || 0;
@@ -366,18 +434,13 @@ export function pushPage(name, data) {
 }
 
 function _renderPreviousPage() {
-  state.pageStack.pop();
+  const current = state.pageStack.pop();
+  if (current?.returnState) {
+    _restoreReturnState(current.returnState);
+    return;
+  }
   if (state.pageStack.length === 0) {
-    if (isDesktop()) {
-      // Sidebar already shows the tab root from before pushPage; just hide
-      // the top-bar and return to the welcome content.
-      showDesktopWelcome();
-    } else {
-      $("tab-bar").classList.remove("hide");
-      if (!_restoreTabDom(state.currentTab)) {
-        renderCurrentTab();
-      }
-    }
+    _showNavigationRoot();
   } else {
     const prev = state.pageStack[state.pageStack.length - 1];
     renderPage(prev.name, prev.data);

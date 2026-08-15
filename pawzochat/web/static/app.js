@@ -30,7 +30,8 @@ import {
 import { applyThemeFromState, watchSystemTheme } from "./modules/theme.js";
 
 import {
-  chatPersonaId, renderChatList, refreshChatMessages,
+  chatPersonaId, renderChatList, refreshChatMessages, refreshUnreadCounts,
+  isViewingChat, markConversationRead,
   filterConvs, newConversation, startChat, openChat,
   chatMore, clearChat, deleteChat,
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
@@ -228,7 +229,10 @@ function initSSE() {
       }
       if (data.type === "assistant_message") {
         if (data.is_last) state.processingPersonas.delete(data.persona_id);
-        if (data.persona_id === chatPersonaId) appendAssistantMessage(data.message, data.is_last);
+        if (isViewingChat(data.persona_id)) {
+          appendAssistantMessage(data.message, data.is_last);
+          markConversationRead(data.persona_id);
+        }
       }
       if (data.type === "new_message") {
         api.invalidate(k => k.startsWith("/api/conversations"));
@@ -236,14 +240,19 @@ function initSSE() {
       }
       if (data.type === "conversation_updated") {
         api.invalidate(k => k.startsWith("/api/conversations"));
+        // One path only: full list paint already applies unread atomically.
+        // Running refreshUnreadCounts + renderChatList together caused
+        // remove/rebuild badge flash and concurrent response races.
+        if (state.currentTab === "chat" && (isDesktop() || state.pageStack.length === 0)) {
+          renderChatList();
+        } else {
+          refreshUnreadCounts();
+        }
         if (data.persona_id === chatPersonaId) {
           const topPage = state.pageStack[state.pageStack.length - 1];
           if (topPage?.name === "chatWindow") {
             refreshChatMessages();
           }
-        }
-        if (state.currentTab === "chat" && (isDesktop() || state.pageStack.length === 0)) {
-          renderChatList();
         }
       }
       if (data.type === "update_progress") {
@@ -485,6 +494,13 @@ function _showUpdateFoundDialog(u) {
     </div>
   </div>`);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && isViewingChat()) {
+    markConversationRead();
+    refreshChatMessages();
+  }
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   loadProfile();

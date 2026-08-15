@@ -96,8 +96,18 @@ def create_conversation():
         "created_at": conv["created_at"],
         "updated_at": conv["updated_at"],
         "wechat_linked": False,
+        "unread_count": 0,
         "last_message": None,
     }), 201
+
+
+@api_conversations_bp.route("/<persona_id>/read", methods=["POST"])
+def mark_conversation_read(persona_id: str):
+    app = get_app()
+    if not app.conversation_store.mark_read(persona_id):
+        return jsonify({"error": "Conversation not found"}), 404
+    broadcast("conversation_updated", persona_id=persona_id)
+    return jsonify({"ok": True, "unread_count": 0})
 
 
 @api_conversations_bp.route("/<persona_id>/messages/dates", methods=["GET"])

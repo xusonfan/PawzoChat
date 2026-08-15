@@ -100,6 +100,30 @@ class ConversationStore:
     def _file_path(self, persona_id: str) -> Path:
         return self._data_dir / persona_id / f"{persona_id}.json"
 
+    def _prepare_read_state(self, data: dict) -> bool:
+        """Migrate message sequence/read metadata in memory.
+
+        Existing conversations are treated as fully read on first upgrade, so
+        installing unread support never turns the whole history into alerts.
+        """
+        changed = False
+        next_seq = 1
+        for message in data.get("messages", []):
+            seq = message.get("_seq")
+            if not isinstance(seq, int) or seq < next_seq:
+                message["_seq"] = next_seq
+                seq = next_seq
+                changed = True
+            next_seq = seq + 1
+        stored_next = data.get("next_message_seq")
+        if not isinstance(stored_next, int) or stored_next < next_seq:
+            data["next_message_seq"] = next_seq
+            changed = True
+        if "last_read_message_seq" not in data:
+            data["last_read_message_seq"] = next_seq - 1
+            changed = True
+        return changed
+
     def _load_all_metadata(self):
         """Scan existing conversation files to build caches."""
         for fp in self._data_dir.glob("*/*.json"):
@@ -109,7 +133,10 @@ class ConversationStore:
                 with open(fp, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 pid = data.get("persona_id", fp.stem)
-                self._cache[pid] = data
+                if self._prepare_read_state(data):
+                    self._write_file(pid, data)
+                else:
+                    self._cache[pid] = data
                 link = self._link_from_data(data)
                 if link and link.get("account_id"):
                     self._link_map[link["account_id"]] = pid
@@ -241,11 +268,18 @@ class ConversationStore:
                     "source": m.get("source", ""),
                     "timestamp": m.get("timestamp", ""),
                 }
+            last_read_seq = data.get("last_read_message_seq", 0)
+            unread_count = sum(
+                1 for message in messages
+                if message.get("role") == "assistant"
+                and message.get("_seq", 0) > last_read_seq
+            )
             link = self._link_from_data(data)
             summaries.append({
                 "persona_id": pid,
                 "created_at": data.get("created_at", ""),
                 "updated_at": data.get("updated_at", ""),
+                "unread_count": unread_count,
                 # Kept for chat.js back-compat; true for any bound channel.
                 "wechat_linked": bool(link),
                 "linked_channel": link.get("channel", "") if link else "",
@@ -272,6 +306,8 @@ class ConversationStore:
                 "updated_at": now,
                 "channel_link": None,
                 "wechat_link": None,
+                "next_message_seq": 1,
+                "last_read_message_seq": 0,
                 "messages": [],
             }
             self._write_file(persona_id, data)
@@ -291,6 +327,8 @@ class ConversationStore:
                 "updated_at": now,
                 "channel_link": None,
                 "wechat_link": None,
+                "next_message_seq": 1,
+                "last_read_message_seq": 0,
                 "messages": [],
             }
             self._write_file(persona_id, data)
@@ -332,7 +370,9 @@ class ConversationStore:
                 "content": content,
                 "source": source,
                 "timestamp": timestamp or _now_iso(),
+                "_seq": data.get("next_message_seq", 1),
             }
+            data["next_message_seq"] = msg["_seq"] + 1
             if quote:
                 msg["quote"] = quote
             data["messages"].append(msg)
@@ -378,6 +418,19 @@ class ConversationStore:
                 return list(messages)
             cut = starts[-count]
             return messages[cut:]
+
+    def mark_read(self, persona_id: str) -> bool:
+        """Advance the durable read marker to the latest stored message."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return False
+            latest_seq = data.get("next_message_seq", 1) - 1
+            if data.get("last_read_message_seq", 0) != latest_seq:
+                data["last_read_message_seq"] = latest_seq
+                self._write_file(persona_id, data)
+            return True
 
     def clear_messages(self, persona_id: str) -> bool:
         lock = self._get_lock(persona_id)

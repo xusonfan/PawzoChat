@@ -1,0 +1,112 @@
+/**
+ * Regression tests for detail -> chat return-state navigation.
+ * Run: node tests/test_navigation_return.mjs
+ */
+import assert from "node:assert/strict";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+class FakeClassList {
+  constructor() { this.values = new Set(); }
+  add(value) { this.values.add(value); }
+  remove(value) { this.values.delete(value); }
+  toggle(value, force) {
+    if (force === true) this.values.add(value);
+    else if (force === false) this.values.delete(value);
+    else if (this.values.has(value)) this.values.delete(value);
+    else this.values.add(value);
+  }
+  contains(value) { return this.values.has(value); }
+}
+
+function fakeElement() {
+  return {
+    classList: new FakeClassList(),
+    style: {},
+    dataset: {},
+    innerHTML: "",
+    textContent: "",
+    scrollTop: 0,
+    firstChild: null,
+  };
+}
+
+const elements = new Map([
+  ["top-bar", fakeElement()],
+  ["content-area", fakeElement()],
+  ["sidebar-body", fakeElement()],
+  ["tab-bar", fakeElement()],
+]);
+const tabs = ["chat", "contacts", "discover"].map(name => {
+  const element = fakeElement();
+  element.dataset.tab = name;
+  return element;
+});
+
+globalThis.window = {
+  matchMedia: () => ({ matches: true, addEventListener() {} }),
+  addEventListener() {},
+};
+globalThis.document = {
+  getElementById: id => elements.get(id) || null,
+  querySelectorAll: selector => selector === ".tab" ? tabs : [],
+};
+globalThis.history = { state: null };
+globalThis.location = { href: "http://localhost/" };
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const moduleUrl = name => pathToFileURL(
+  join(__dirname, `../pawzochat/web/static/modules/${name}.js`),
+).href;
+const { state } = await import(moduleUrl("state"));
+const {
+  goBack,
+  navigateToPage,
+  registerPageRenderer,
+  registerTabRenderer,
+} = await import(moduleUrl("navigation"));
+
+for (const tab of ["chat", "contacts", "discover"]) {
+  registerTabRenderer(tab, () => {});
+}
+const rendered = [];
+for (const page of ["chatWindow", "personaDetail", "momentsList"]) {
+  registerPageRenderer(page, data => rendered.push([page, data]));
+}
+
+function page(name, personaId) {
+  return { name, data: personaId ? { personaId } : {} };
+}
+
+// 聊天列表 -> 聊天 -> 资料 -> 发消息：返回栈里折叠旧聊天页，避免 chat/detail 循环。
+state.currentTab = "chat";
+state.pageStack = [page("chatWindow", "cat"), page("personaDetail", "cat")];
+navigateToPage("chat", "chatWindow", { personaId: "cat" }, { collapsePreviousTarget: true });
+assert.deepEqual(state.pageStack[0].returnState.pages, [page("personaDetail", "cat")]);
+goBack();
+assert.deepEqual(state.pageStack, [page("personaDetail", "cat")]);
+goBack();
+assert.deepEqual(state.pageStack, []);
+assert.equal(state.currentTab, "chat");
+
+// 联系人资料保留联系人来源，二次返回落回联系人根页。
+state.currentTab = "contacts";
+state.pageStack = [page("personaDetail", "cat")];
+navigateToPage("chat", "chatWindow", { personaId: "cat" }, { collapsePreviousTarget: true });
+goBack();
+assert.equal(state.currentTab, "contacts");
+assert.deepEqual(state.pageStack, [page("personaDetail", "cat")]);
+goBack();
+assert.deepEqual(state.pageStack, []);
+
+// 朋友圈资料保留朋友圈页面，资料返回后继续返回朋友圈而非聊天。
+state.currentTab = "discover";
+state.pageStack = [page("momentsList"), page("personaDetail", "cat")];
+navigateToPage("chat", "chatWindow", { personaId: "cat" }, { collapsePreviousTarget: true });
+goBack();
+assert.equal(state.currentTab, "discover");
+assert.deepEqual(state.pageStack, [page("momentsList"), page("personaDetail", "cat")]);
+goBack();
+assert.deepEqual(state.pageStack, [page("momentsList")]);
+
+console.log("navigation return-state tests passed");

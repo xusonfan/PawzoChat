@@ -21,7 +21,7 @@ import { api, downloadFile } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showLoading, hideLoading, showSheet, closeOverlay } from "./ui.js";
 import {
-  setTopBar, pushPage, goBack,
+  setTopBar, pushPage, goBack, navigateToPage,
   registerTabRenderer, registerPageRenderer,
   isDesktop, setSidebarBar, refreshSidebar,
 } from "./navigation.js";
@@ -460,13 +460,7 @@ export async function chatWithPersona(personaId) {
     await api.post("/api/conversations", { persona_id: personaId });
   }
 
-  state.currentTab = "chat";
-  state.pageStack = [];
-  document.querySelectorAll(".tab").forEach(t =>
-    t.classList.toggle("active", t.dataset.tab === "chat")
-  );
-  refreshSidebar();
-  pushPage("chatWindow", { personaId });
+  navigateToPage("chat", "chatWindow", { personaId }, { collapsePreviousTarget: true });
 }
 
 export async function deletePersona(personaId) {

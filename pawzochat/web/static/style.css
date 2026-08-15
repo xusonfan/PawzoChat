@@ -254,6 +254,7 @@ body {
   z-index: 10;
 }
 .tab {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -268,6 +269,30 @@ body {
 .tab svg, .tab .ui-icon { width: 24px; height: 24px; }
 .tab span { font-size: 10px; }
 .tab.active { color: var(--primary); }
+.tab-unread-badge,
+.conv-unread-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e5484d;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 0 0 2px var(--tab-bar-bg);
+}
+.tab-unread-badge {
+  position: absolute;
+  top: 5px;
+  left: calc(50% + 7px);
+  pointer-events: none;
+}
 
 /* ---- Page Containers ---- */
 .page { padding: 12px 16px 20px; }
@@ -365,6 +390,19 @@ body {
 }
 .conv-item:active { background: #F8EFE4; }
 .conv-item + .conv-item { border-top: 1px solid var(--divider); }
+.conv-avatar-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  margin-right: 12px;
+}
+.conv-avatar-wrap > .avatar { margin-right: 0; }
+.conv-unread-badge {
+  position: absolute;
+  z-index: 2;
+  top: -5px;
+  right: -6px;
+  box-shadow: 0 0 0 2px var(--card);
+}
 .avatar {
   width: 48px;
   height: 48px;

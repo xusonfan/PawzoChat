@@ -17,6 +17,10 @@
  */
 import { avatarHtml, personaAvatarUrl, profileAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
 import { renderTextMedia, summarizeConversationMessage } from "./message_content.js";
+import {
+  markConversationReadLocal, mergeConversationsPreserveUnread, unreadBadgeHtml,
+  updateChatTabUnread, updateConversationUnread,
+} from "./unread.js";
 import { api } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
@@ -30,6 +34,10 @@ export let chatPersonaId = null;
 let _pendingImages = [];
 let _pendingFiles = [];
 let _pendingQuote = "";
+// Monotonic token for conversation-list / unread fetches: only the latest
+// response may write state + DOM, so concurrent SSE refreshes cannot flash
+// badges by applying an older payload after a newer one.
+let _conversationsFetchGen = 0;
 
 let _mobileViewportReady = false;
 let _viewportSyncFrame = 0;
@@ -114,26 +122,7 @@ const _STANDARD_EMOJIS = [
 
 /* ---- Chat List (Tab) ---- */
 
-async function renderChatList() {
-  const desktop = isDesktop();
-  const target = desktop ? sidebar() : content();
-  const actionBtn = `<button class="top-btn" onclick="PawzoChat.newConversation()">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-  </button>`;
-
-  if (desktop) setSidebarBar("聊天", actionBtn);
-  else setTopBar("聊天", false, actionBtn);
-
-  target.innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
-  try {
-    const [res, pres] = await Promise.all([
-      api.get("/api/conversations"),
-      api.get("/api/personas"),
-    ]);
-    state.conversations = res.conversations || [];
-    state.personas = pres.personas || [];
-  } catch (e) { toast("加载失败", "error"); return; }
-
+function _paintChatList(target, desktop) {
   if (state.conversations.length === 0) {
     target.innerHTML = `
       <div class="empty-state" style="position:relative">
@@ -142,6 +131,7 @@ async function renderChatList() {
         <button onclick="PawzoChat.newConversation()">发起新对话</button>
         <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i*w*y*x*d*x*l</div>
       </div>`;
+    updateChatTabUnread(state.conversations);
     return;
   }
 
@@ -159,8 +149,9 @@ async function renderChatList() {
     const wechatBadge = c.wechat_linked
       ? `<span class="wechat-badge"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg></span>` : "";
     const active = (desktop && chatPersonaId === c.persona_id) ? " active" : "";
+    const unreadBadge = unreadBadgeHtml(c.unread_count, "conv-unread-badge");
     return `<div class="conv-item${active}" data-persona-id="${c.persona_id}" onclick="PawzoChat.openChat('${c.persona_id}')">
-      ${avatarHtml(pname, "", avUrl)}
+      <div class="conv-avatar-wrap">${avatarHtml(pname, "", avUrl)}${unreadBadge}</div>
       <div class="conv-info">
         <div class="conv-name">${esc(pname)} ${wechatBadge}</div>
         <div class="conv-preview">${esc(preview)}</div>
@@ -169,9 +160,50 @@ async function renderChatList() {
     </div>`;
   }).join("");
 
+  // Single write: session rows + unread badges from the same state snapshot.
   target.innerHTML = `<div class="page" id="conv-list-page" style="position:relative">${searchHtml}<div class="card" id="conv-list-items">${listHtml}</div>
     <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none">i*w*y*x*d*x*l</div>
   </div>`;
+  updateChatTabUnread(state.conversations);
+}
+
+async function renderChatList() {
+  const desktop = isDesktop();
+  const target = desktop ? sidebar() : content();
+  const actionBtn = `<button class="top-btn" onclick="PawzoChat.newConversation()">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  </button>`;
+
+  if (desktop) setSidebarBar("聊天", actionBtn);
+  else setTopBar("聊天", false, actionBtn);
+
+  // Keep the last painted list (and its badges) until fresh data arrives.
+  // Wiping to a spinner was the main avatar-badge flash on SSE refresh.
+  const hasListDom = !!(target.querySelector("#conv-list-page") || target.querySelector(".conv-item"));
+  if (!hasListDom) {
+    target.innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
+  }
+
+  const gen = ++_conversationsFetchGen;
+  try {
+    const [res, pres] = await Promise.all([
+      api.get("/api/conversations"),
+      api.get("/api/personas"),
+    ]);
+    if (gen !== _conversationsFetchGen) return;
+    state.conversations = mergeConversationsPreserveUnread(
+      state.conversations,
+      res.conversations || [],
+    );
+    state.personas = pres.personas || [];
+  } catch (e) {
+    if (gen !== _conversationsFetchGen) return;
+    if (!hasListDom) toast("加载失败", "error");
+    return;
+  }
+
+  if (gen !== _conversationsFetchGen) return;
+  _paintChatList(target, desktop);
 }
 
 export { renderChatList };
@@ -225,9 +257,26 @@ export async function startChat(personaId, hasConv) {
   openChat(personaId);
 }
 
+export function isViewingChat(personaId = chatPersonaId) {
+  if (!personaId || document.visibilityState !== "visible") return false;
+  const topPage = state.pageStack[state.pageStack.length - 1];
+  return chatPersonaId === personaId && topPage?.name === "chatWindow";
+}
+
+export async function markConversationRead(personaId = chatPersonaId) {
+  if (!isViewingChat(personaId)) return;
+  markConversationReadLocal(state.conversations, personaId);
+  updateConversationUnread(state.conversations);
+  updateChatTabUnread(state.conversations);
+  try {
+    await api.post(`/api/conversations/${encodeURIComponent(personaId)}/read`, {});
+  } catch (e) { /* the next list refresh restores server truth */ }
+}
+
 export async function openChat(personaId) {
   state.pageStack = [];
   pushPage("chatWindow", { personaId });
+  markConversationRead(personaId);
 
   if (isDesktop()) {
     document.querySelectorAll("#sidebar-body .conv-item").forEach(el => {
@@ -1223,8 +1272,9 @@ export function insertEmoji(emoji) {
   const newPos = start + emoji.length;
   inp.selectionStart = newPos;
   inp.selectionEnd = newPos;
-  inp.focus();
   onChatInput();
+  _closeEmojiPicker();
+  inp.focus();
 }
 
 export async function sendSticker(stickerUrl) {
@@ -1378,6 +1428,20 @@ export function openHistoryEdit() {
 }
 
 /* ---- SSE helper ---- */
+
+export async function refreshUnreadCounts() {
+  const gen = ++_conversationsFetchGen;
+  try {
+    const res = await api.get("/api/conversations", { bypassCache: true });
+    if (gen !== _conversationsFetchGen) return;
+    state.conversations = mergeConversationsPreserveUnread(
+      state.conversations,
+      res.conversations || [],
+    );
+    updateConversationUnread(state.conversations);
+    updateChatTabUnread(state.conversations);
+  } catch (e) { /* keep the last known counts */ }
+}
 
 export async function refreshChatMessages() {
   if (!chatPersonaId) return;
