@@ -33,6 +33,11 @@ import {
   createChatBottomAnchor,
 } from "./chat_scroll.js";
 import {
+  addPendingUserMessage, confirmPendingUserMessage,
+  mergePendingUserMessages, removePendingUserMessage,
+} from "./chat_pending.js";
+import { shouldShowMessageTime } from "./chat_message_time.js";
+import {
   setTopBar, pushPage, goBack, switchTab,
   registerTabRenderer, registerPageRenderer,
   isDesktop, setSidebarBar, refreshSidebar,
@@ -412,7 +417,7 @@ function renderContentBlocks(content, renderLinkedImages = false) {
     if (b.type === "image") {
       let src = "";
       if (b.url) {
-        src = /^https?:\/\//i.test(b.url) ? b.url : base + b.url;
+        src = /^(?:https?:\/\/|blob:|data:)/i.test(b.url) ? b.url : base + b.url;
       } else if (b.path) {
         const filename = b.path.split(/[\\/]/).pop();
         src = base + "/api/images/" + chatPersonaId + "/" + filename;
@@ -898,9 +903,20 @@ async function renderChatWindow(data) {
   }
 }
 
+function _messageTimeHtml(timestamp, previousTimestamp = null, attributes = "") {
+  if (!shouldShowMessageTime(timestamp, previousTimestamp)) return "";
+  return `<div class="msg-time"${attributes}>${formatMsgTime(timestamp)}</div>`;
+}
+
+function _lastRenderedMessageTimestamp(messagesEl) {
+  const rows = messagesEl.querySelectorAll(".msg-row[data-message-timestamp]");
+  return rows.length ? rows[rows.length - 1].dataset.messageTimestamp : null;
+}
+
 function renderMessages(messages) {
   const el = $("chat-msgs");
   if (!el) return;
+  messages = mergePendingUserMessages(chatPersonaId, messages);
   _closeQuotePop();  // a full in-place re-render (e.g. SSE refresh) detaches the popup anchor
 
   const renderState = _chatBottomAnchor.beginRender(el);
@@ -919,13 +935,10 @@ function renderMessages(messages) {
   const _userAvUrl = profileAvatarUrl(state.profile);
 
   let html = "";
-  let lastTime = 0;
+  let lastTimestamp = null;
   for (const m of messages) {
-    const mt = new Date(m.timestamp).getTime();
-    if (mt - lastTime > 300000) {
-      html += `<div class="msg-time">${formatMsgTime(m.timestamp)}</div>`;
-    }
-    lastTime = mt;
+    html += _messageTimeHtml(m.timestamp, lastTimestamp);
+    lastTimestamp = m.timestamp;
 
     const role = m.role;
     const av = role === "assistant"
@@ -934,7 +947,7 @@ function renderMessages(messages) {
     const source = sourceBadge(m.source);
     const bubbleHtml = renderContentBlocks(m.content, role === "assistant");
 
-    html += `<div class="msg-row ${role}">
+    html += `<div class="msg-row ${role}" data-message-timestamp="${escAttr(m.timestamp || "")}">
       ${av}
       <div>
         ${bubbleHtml}
@@ -1341,6 +1354,7 @@ export async function sendChat() {
   const hasFiles = _pendingFiles.length > 0;
   if (!text && !hasImages && !hasFiles) return;
 
+  const personaId = chatPersonaId;
   inp.value = "";
   onChatInput();
 
@@ -1363,7 +1377,29 @@ export async function sendChat() {
     </div>`;
   }
   const quoteToSend = _pendingQuote;
-  msgsEl.insertAdjacentHTML("beforeend", `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div>${userBubble}${renderQuoteBox(quoteToSend)}</div></div>`);
+  const optimisticContent = [];
+  if (text) optimisticContent.push({ type: "text", text });
+  for (const img of _pendingImages) {
+    optimisticContent.push({ type: "image", url: img.url });
+  }
+  for (const file of _pendingFiles) {
+    optimisticContent.push({ type: "file", name: file.name });
+  }
+  const optimisticMessage = {
+    role: "user",
+    content: optimisticContent,
+    source: "web",
+    timestamp: new Date().toISOString(),
+    ...(quoteToSend ? { quote: quoteToSend } : {}),
+  };
+  const pendingId = addPendingUserMessage(personaId, optimisticMessage);
+  const previousTimestamp = _lastRenderedMessageTimestamp(msgsEl);
+  const timeHtml = _messageTimeHtml(
+    optimisticMessage.timestamp,
+    previousTimestamp,
+    ` data-pending-time-id="${pendingId}"`,
+  );
+  msgsEl.insertAdjacentHTML("beforeend", `${timeHtml}<div class="msg-row user" data-pending-id="${pendingId}" data-message-timestamp="${escAttr(optimisticMessage.timestamp)}">${avatarHtml(_uName, "sm", _uAvUrl)}<div>${userBubble}${renderQuoteBox(quoteToSend)}</div></div>`);
   _scrollAfterInsert(msgsEl);
 
   const imagesToSend = [..._pendingImages];
@@ -1375,6 +1411,8 @@ export async function sendChat() {
   _renderFilePreviews();
   _renderQuotePreview();
 
+  let acceptedMessage = null;
+  let sendFailed = false;
   try {
     if (imagesToSend.length > 0 || filesToSend.length > 0) {
       const fd = new FormData();
@@ -1383,23 +1421,46 @@ export async function sendChat() {
       for (const img of imagesToSend) fd.append("images", img.file);
       for (const f of filesToSend) fd.append("files", f.file);
       const base = window.PAWZOCHAT_BASE || "";
-      const resp = await fetch(`${base}/api/conversations/${chatPersonaId}/messages`, {
+      const resp = await fetch(`${base}/api/conversations/${personaId}/messages`, {
         method: "POST",
         body: fd,
       });
       const res = await resp.json();
-      if (resp.status >= 400) toast(res.error || "发送失败", "error");
+      if (resp.status >= 400) {
+        sendFailed = true;
+        toast(res.error || "发送失败", "error");
+      } else if (res.message) {
+        acceptedMessage = res.message;
+      } else {
+        sendFailed = true;
+      }
     } else {
       const body = quoteToSend ? { text, quote: quoteToSend } : { text };
       const res = await api.post(
-        `/api/conversations/${chatPersonaId}/messages`,
+        `/api/conversations/${personaId}/messages`,
         body,
         { keepalive: true },
       );
-      if (res.status >= 400) toast(res.data.error || "发送失败", "error");
+      if (res.status >= 400) {
+        sendFailed = true;
+        toast(res.data.error || "发送失败", "error");
+      } else if (res.data.message) {
+        acceptedMessage = res.data.message;
+      } else {
+        sendFailed = true;
+      }
     }
   } catch (e) {
+    sendFailed = true;
     toast("网络错误", "error");
+  }
+
+  if (sendFailed) {
+    removePendingUserMessage(personaId, pendingId);
+    document.querySelector(`.msg-row[data-pending-id="${pendingId}"]`)?.remove();
+    document.querySelector(`.msg-time[data-pending-time-id="${pendingId}"]`)?.remove();
+  } else {
+    confirmPendingUserMessage(personaId, pendingId, acceptedMessage);
   }
 
   for (const img of imagesToSend) URL.revokeObjectURL(img.url);
@@ -1436,8 +1497,10 @@ export function appendAssistantMessage(message, isLast) {
   const avUrl = personaAvatarUrl(persona);
   const source = sourceBadge(message.source);
   const bubbleHtml = renderContentBlocks(message.content, true);
+  const previousTimestamp = _lastRenderedMessageTimestamp(msgsEl);
+  const timeHtml = _messageTimeHtml(message.timestamp, previousTimestamp);
 
-  msgsEl.insertAdjacentHTML("beforeend", `<div class="msg-row assistant">
+  msgsEl.insertAdjacentHTML("beforeend", `${timeHtml}<div class="msg-row assistant" data-message-timestamp="${escAttr(message.timestamp || "")}">
     ${avatarHtml(pname, "sm", avUrl)}
     <div>
       ${bubbleHtml}
