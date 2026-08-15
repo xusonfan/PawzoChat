@@ -96,6 +96,7 @@ let _emojiActiveTab = 0;
 /* ---- Plus Menu State ---- */
 
 let _plusMenuOpen = false;
+let _cameraStream = null;
 
 const _STANDARD_EMOJIS = [
   "\u{1F600}","\u{1F603}","\u{1F604}","\u{1F601}","\u{1F606}","\u{1F605}","\u{1F602}","\u{1F923}","\u{1F60A}","\u{1F607}",
@@ -786,7 +787,6 @@ async function renderChatWindow(data) {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
       </button>
     </div>
-    <input type="file" id="camera-file-input" accept="image/*" capture="environment" style="display:none" onchange="PawzoChat.onPhotoSelected(this)">
     <input type="file" id="img-file-input" accept="image/*" multiple style="display:none" onchange="PawzoChat.onImageSelected(this)">
     <input type="file" id="file-file-input" multiple style="display:none" onchange="PawzoChat.onFileSelected(this)">
   </div>`;
@@ -943,13 +943,65 @@ export function onChatKey(e) {
   if (hasContent) sendChat();
 }
 
-export function takePhoto() {
-  const input = $("camera-file-input");
-  if (input) input.click();
+function _stopCameraStream() {
+  if (!_cameraStream) return;
+  _cameraStream.getTracks().forEach(track => track.stop());
+  _cameraStream = null;
 }
 
-export function onPhotoSelected(input) {
-  onImageSelected(input);
+export async function takePhoto() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    toast("当前浏览器不支持直接调用摄像头，请使用 HTTPS 访问", "error");
+    return;
+  }
+
+  try {
+    _stopCameraStream();
+    _cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false,
+    });
+    showSheet(`
+      <div class="camera-sheet">
+        <div class="camera-sheet-title">拍照</div>
+        <video id="camera-preview" class="camera-preview" autoplay muted playsinline></video>
+        <div class="camera-sheet-actions">
+          <button class="camera-cancel-btn" onclick="PawzoChat.closeOverlay()">取消</button>
+          <button class="camera-capture-btn" onclick="PawzoChat.capturePhoto()" aria-label="拍摄照片"></button>
+        </div>
+      </div>`, _stopCameraStream);
+    const video = $("camera-preview");
+    if (video) video.srcObject = _cameraStream;
+  } catch (e) {
+    _stopCameraStream();
+    const message = e?.name === "NotAllowedError"
+      ? "摄像头权限被拒绝，请在浏览器设置中允许访问"
+      : "无法启动摄像头，请检查设备和浏览器权限";
+    toast(message, "error");
+  }
+}
+
+export function capturePhoto() {
+  const video = $("camera-preview");
+  if (!video?.videoWidth || !video.videoHeight) {
+    toast("摄像头正在准备，请稍后再拍", "error");
+    return;
+  }
+
+  const maxSide = 1920;
+  const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  closeOverlay();
+  canvas.toBlob(blob => {
+    if (!blob) {
+      toast("照片生成失败，请重试", "error");
+      return;
+    }
+    _addPendingImage(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
+  }, "image/jpeg", 0.9);
 }
 
 export function pickImage() {
