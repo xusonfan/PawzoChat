@@ -12,6 +12,10 @@ const appSource = await readFile(join(
   __dirname,
   "../pawzochat/web/static/app.js",
 ), "utf8");
+const apiSource = await readFile(join(
+  __dirname,
+  "../pawzochat/web/static/modules/api.js",
+), "utf8");
 const css = await readFile(join(
   __dirname,
   "../pawzochat/web/static/style.css",
@@ -53,6 +57,13 @@ assert.match(chatSource, /fetch\(`\$\{base\}\/api\/asr\/transcriptions`/);
 assert.match(chatSource, /await sendChat\(\)/, "识别文字应复用现有消息发送链路");
 assert.match(chatSource, /export function insertEmoji[\s\S]*?_closeEmojiPicker\(\);[\s\S]*?inp\.focus\(\);/);
 assert.match(chatSource, /export async function sendChat\(\)/, "公共发送逻辑应保留");
+assert.match(
+  chatSource,
+  /api\.post\([\s\S]*?\/messages`[\s\S]*?\{ keepalive: true \}/,
+  "纯文本消息应允许切后台后继续提交",
+);
+assert.match(apiSource, /async post\(url, body, \{ keepalive = false \} = \{\}\)/);
+assert.match(apiSource, /body: JSON\.stringify\(body\),\s*keepalive,/);
 assert.match(appSource, /onChatCompositionStart, onChatCompositionEnd/, "组合输入事件应暴露给页面");
 
 const keyHandlerMatch = chatSource.match(

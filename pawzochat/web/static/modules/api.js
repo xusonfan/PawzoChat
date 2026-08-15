@@ -100,11 +100,12 @@ export const api = {
   // Mutating helpers don't invalidate the cache directly — the fetch hook
   // installed below handles it uniformly for both `api.*` calls and the many
   // ad-hoc `fetch()` upload sites elsewhere in the codebase.
-  async post(url, body) {
+  async post(url, body, { keepalive = false } = {}) {
     const r = await fetch(BASE + url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      keepalive,
     });
     return { status: r.status, data: await r.json() };
   },

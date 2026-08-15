@@ -1385,7 +1385,11 @@ export async function sendChat() {
       if (resp.status >= 400) toast(res.error || "发送失败", "error");
     } else {
       const body = quoteToSend ? { text, quote: quoteToSend } : { text };
-      const res = await api.post(`/api/conversations/${chatPersonaId}/messages`, body);
+      const res = await api.post(
+        `/api/conversations/${chatPersonaId}/messages`,
+        body,
+        { keepalive: true },
+      );
       if (res.status >= 400) toast(res.data.error || "发送失败", "error");
     }
   } catch (e) {
