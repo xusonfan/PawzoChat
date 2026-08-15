@@ -17,7 +17,7 @@
  */
 /* PawzoChat SPA — Module entry point */
 
-import { esc, iconHtml } from "./modules/utils.js";
+import { esc, iconHtml, personaAvatarUrl } from "./modules/utils.js";
 import { api } from "./modules/api.js";
 import { state, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
@@ -29,6 +29,7 @@ import {
 } from "./modules/navigation.js";
 import { applyThemeFromState, watchSystemTheme } from "./modules/theme.js";
 import { notifyNewMessage } from "./modules/notification_feedback.js";
+import { initPwa, requestPwaInstall } from "./modules/pwa.js";
 
 import {
   chatPersonaId, renderChatList, refreshChatMessages, refreshUnreadCounts,
@@ -95,7 +96,7 @@ import {
   editVoiceModel, confirmEditVoiceModel, removeEditVoiceModel,
   openVoiceTest, onVoiceTestProviderChange, onVoiceTestModelChange, onVoiceTestVoiceChange, onVoiceTestTextInput, runVoiceTest,
   onTypingDelayToggle,
-  previewNewMessageSound,
+  previewNewMessageSound, enableSystemNotifications,
   saveSettingsChat, saveSettingsReply,
   onThemeModeChange, onThemeToggle, onThemeMove, onThemeDelete, saveSettingsTheme,
   themeImportPick, themeImportSubmit,
@@ -224,8 +225,13 @@ registerPageRenderer("discoverPlaceholder", renderPlaceholder);
 
 function initSSE() {
   if (state.sseSource) state.sseSource.close();
-  state.sseSource = new EventSource((window.PAWZOCHAT_BASE || "") + "/api/events");
-  state.sseSource.onmessage = (e) => {
+  const source = new EventSource((window.PAWZOCHAT_BASE || "") + "/api/events");
+  state.sseSource = source;
+  state.sseConnected = false;
+  source.onopen = () => {
+    if (state.sseSource === source) state.sseConnected = true;
+  };
+  source.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
       if (data.type === "processing") {
@@ -235,9 +241,13 @@ function initSSE() {
       if (data.type === "assistant_message") {
         if (data.is_last) state.processingPersonas.delete(data.persona_id);
         const viewingChat = isViewingChat(data.persona_id);
+        const persona = state.personas.find(item => item.id === data.persona_id);
         notifyNewMessage(data, {
           isViewing: viewingChat,
           settings: state.settings?.chat,
+          personaName: persona?.name || "PawzoChat",
+          iconUrl: personaAvatarUrl(persona),
+          baseUrl: window.PAWZOCHAT_BASE || "",
         });
         if (viewingChat) {
           appendAssistantMessage(data.message, data.is_last);
@@ -278,8 +288,10 @@ function initSSE() {
       }
     } catch (err) { /* silent */ }
   };
-  state.sseSource.onerror = () => {
-    setTimeout(initSSE, 5000);
+  source.onerror = () => {
+    if (state.sseSource === source) state.sseConnected = false;
+    // EventSource handles retries itself and preserves Last-Event-ID. Replacing
+    // it here would discard the cursor and make missed-event replay impossible.
   };
 }
 
@@ -287,6 +299,7 @@ function initSSE() {
 
 window.PawzoChat = {
   switchTab, goBack, pushPage,
+  requestPwaInstall,
   closeOverlay, closeConfirm,
   openImagePreview, closeImagePreview,
   newConversation, startChat, openChat,
@@ -340,7 +353,7 @@ window.PawzoChat = {
   editVoiceModel, confirmEditVoiceModel, removeEditVoiceModel,
   openVoiceTest, onVoiceTestProviderChange, onVoiceTestModelChange, onVoiceTestVoiceChange, onVoiceTestTextInput, runVoiceTest,
   onTypingDelayToggle,
-  previewNewMessageSound,
+  previewNewMessageSound, enableSystemNotifications,
   saveSettingsChat, saveSettingsReply,
   onThemeModeChange, onThemeToggle, onThemeMove, onThemeDelete, saveSettingsTheme,
   themeImportPick, themeImportSubmit,
@@ -512,18 +525,46 @@ function _showUpdateFoundDialog(u) {
   </div>`);
 }
 
+function openConversationFromNotification(personaId) {
+  if (!personaId) return;
+  switchTab("chat");
+  void openChat(personaId);
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", event => {
+    if (event.data?.type === "open_conversation") {
+      openConversationFromNotification(event.data.personaId);
+    }
+  });
+}
+
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && isViewingChat()) {
+  if (document.visibilityState !== "visible") return;
+  if (!state.sseSource || state.sseSource.readyState === EventSource.CLOSED) initSSE();
+  if (isViewingChat()) {
     markConversationRead();
     refreshChatMessages();
   }
 });
 
+window.addEventListener("online", () => {
+  if (!state.sseSource || state.sseSource.readyState === EventSource.CLOSED) initSSE();
+});
+
 document.addEventListener("DOMContentLoaded", () => {
   loadProfile();
   loadThemeSettings();
+  initPwa();
   initMobileTabSwipe();
   switchTab("chat");
+  const launchUrl = new URL(window.location.href);
+  const notificationPersonaId = launchUrl.searchParams.get("openChat");
+  if (notificationPersonaId) {
+    launchUrl.searchParams.delete("openChat");
+    history.replaceState(history.state, "", launchUrl.pathname + launchUrl.search + launchUrl.hash);
+    setTimeout(() => openConversationFromNotification(notificationPersonaId), 0);
+  }
   initSSE();
   checkAndShowSetup();
   checkUpdateOnStartup();

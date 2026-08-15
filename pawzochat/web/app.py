@@ -49,7 +49,14 @@ _MIME_MAP = {
     ".ico": "image/x-icon",
 }
 
-_AUTH_EXEMPT = frozenset(["/login", "/static/style.css", "/static/logo.png"])
+_AUTH_EXEMPT = frozenset([
+    "/login",
+    "/manifest.webmanifest",
+    "/sw.js",
+    "/static/style.css",
+    "/static/logo.png",
+    "/static/pwa-icon-192.png",
+])
 _STATEFUL_METHODS = frozenset(["POST", "PUT", "PATCH", "DELETE"])
 
 
@@ -222,7 +229,57 @@ def create_app(app_instance: App) -> Flask:
         session.clear()
         return redirect(url_for("login"))
 
-    # ---- Static files ----
+    # ---- PWA / Static files ----
+
+    @flask_app.route("/manifest.webmanifest")
+    def web_manifest():
+        base = request.script_root.rstrip("/")
+        manifest = {
+            "id": f"{base}/",
+            "name": "PawzoChat",
+            "short_name": "PawzoChat",
+            "description": "多平台大语言模型聊天助手",
+            "lang": "zh-CN",
+            "start_url": f"{base}/",
+            "scope": f"{base}/",
+            "display": "standalone",
+            "background_color": "#F7F1E8",
+            "theme_color": "#FFFDF8",
+            "icons": [
+                {
+                    "src": f"{base}/static/pwa-icon-192.png",
+                    "sizes": "192x192",
+                    "type": "image/png",
+                    "purpose": "any maskable",
+                },
+                {
+                    "src": f"{base}/static/logo.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable",
+                },
+            ],
+        }
+        response = Response(
+            json.dumps(manifest, ensure_ascii=False),
+            content_type="application/manifest+json; charset=utf-8",
+        )
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    @flask_app.route("/sw.js")
+    def service_worker():
+        response = send_from_directory(
+            _STATIC_DIR,
+            "service-worker.js",
+            conditional=True,
+            etag=True,
+            max_age=0,
+        )
+        response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Service-Worker-Allowed"] = f"{request.script_root.rstrip('/')}/"
+        return response
 
     @flask_app.route("/static/<path:filename>")
     def serve_static(filename):
@@ -434,7 +491,18 @@ def create_app(app_instance: App) -> Flask:
 
     @flask_app.route("/api/events")
     def events():
-        return Response(sse_stream(), mimetype="text/event-stream")
+        raw_last_event_id = request.headers.get("Last-Event-ID", "").strip()
+        try:
+            last_event_id = int(raw_last_event_id) if raw_last_event_id else None
+        except ValueError:
+            last_event_id = None
+        response = Response(
+            sse_stream(last_event_id),
+            mimetype="text/event-stream",
+        )
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
 
     # ---- Update API ----
 

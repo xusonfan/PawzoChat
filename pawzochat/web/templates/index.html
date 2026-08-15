@@ -19,11 +19,18 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+<meta name="theme-color" content="#FFFDF8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PawzoChat">
 <meta name="author" content="iwyxdxl">
 <meta name="pawzo-source" content="https://github.com/iwyxdxl/PawzoChat">
 <title>PawzoChat</title>
 <link rel="icon" type="image/png" href="{{ request.script_root }}/static/logo.png">
+<link rel="apple-touch-icon" href="{{ request.script_root }}/static/pwa-icon-192.png">
+<link rel="manifest" href="{{ request.script_root }}/manifest.webmanifest">
 <link rel="stylesheet" href="{{ request.script_root }}/static/style.css">
 <link rel="stylesheet" href="{{ request.script_root }}/static/desktop.css">
 <script data-base="{{ request.script_root }}">window.PAWZOCHAT_BASE = document.currentScript.dataset.base;</script>
@@ -50,6 +57,9 @@
         document.head.appendChild(el);
       }
     }
+    var themeMeta = document.querySelector('meta[name="theme-color"]');
+    var topBarColor = getComputedStyle(document.documentElement).getPropertyValue("--card").trim();
+    if (themeMeta && topBarColor) themeMeta.setAttribute("content", topBarColor);
   } catch (e) {}
 })();
 </script>

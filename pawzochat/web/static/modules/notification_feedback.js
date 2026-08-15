@@ -171,21 +171,94 @@ export function notificationMessageKey(event) {
   return `${personaId}:${message._seq}`;
 }
 
+export function systemNotificationPermission() {
+  if (
+    typeof Notification === "undefined" ||
+    typeof window === "undefined" ||
+    typeof navigator === "undefined" ||
+    !window.isSecureContext ||
+    !("serviceWorker" in navigator)
+  ) {
+    return "unsupported";
+  }
+  return Notification.permission;
+}
+
+export async function requestSystemNotificationPermission() {
+  const state = systemNotificationPermission();
+  if (state === "unsupported" || state === "granted") return state;
+  if (state === "denied") return state;
+  try {
+    return await Notification.requestPermission();
+  } catch (e) {
+    return "unsupported";
+  }
+}
+
+function _notificationBody(message) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = blocks
+    .filter(block => block?.type === "text" && block.text)
+    .map(block => block.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  if (text) return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+  if (blocks.some(block => block?.type === "image")) return "[图片]";
+  if (blocks.some(block => block?.type === "voice" || block?.type === "audio")) return "[语音]";
+  if (blocks.some(block => block?.type === "emoji")) return "[表情]";
+  return "收到一条新消息";
+}
+
+export async function showSystemNotification(event, options = {}) {
+  const NotificationApi = options.notificationApi ?? (typeof Notification !== "undefined" ? Notification : null);
+  const navigatorObject = options.navigatorObject ?? (typeof navigator !== "undefined" ? navigator : null);
+  if (NotificationApi?.permission !== "granted" || !navigatorObject?.serviceWorker) return false;
+
+  try {
+    const registration = options.registration ?? await navigatorObject.serviceWorker.ready;
+    const base = (options.baseUrl ?? (typeof window !== "undefined" ? window.PAWZOCHAT_BASE : "") ?? "").replace(/\/$/, "");
+    const payload = {
+      body: _notificationBody(event?.message),
+      icon: options.iconUrl || `${base}/static/logo.png`,
+      badge: `${base}/static/pwa-icon-192.png`,
+      tag: notificationMessageKey(event) || undefined,
+      renotify: false,
+      data: { personaId: event?.persona_id || "" },
+    };
+    try {
+      await registration.showNotification(options.personaName || "PawzoChat", payload);
+    } catch (error) {
+      if (!options.iconUrl) throw error;
+      await registration.showNotification(options.personaName || "PawzoChat", {
+        ...payload,
+        icon: `${base}/static/logo.png`,
+      });
+    }
+    return true;
+  } catch (e) {
+    console.warn("系统通知展示失败", e);
+    return false;
+  }
+}
+
 export function notifyNewMessage(event, options = {}) {
   const key = notificationMessageKey(event);
   if (!key || _handledMessageKeys.has(key)) return false;
   _handledMessageKeys.add(key);
 
-  if (options.isViewing) return false;
+  const isViewing = options.isViewing === true;
   const settings = options.settings || {};
   const soundEnabled = settings.new_message_sound !== false;
   const vibrationEnabled = settings.new_message_vibration !== false;
+  const NotificationApi = options.notificationApi ?? (typeof Notification !== "undefined" ? Notification : null);
+  const systemNotificationEnabled = NotificationApi?.permission === "granted" && !isViewing;
+  if (systemNotificationEnabled) void showSystemNotification(event, options);
   if (soundEnabled) {
     void _playNotificationFile(options.audioFactory)
       .catch(() => _playSound(options.audioContextFactory));
   }
   if (vibrationEnabled) _vibrate(options.navigatorObject);
-  return soundEnabled || vibrationEnabled;
+  return soundEnabled || vibrationEnabled || systemNotificationEnabled;
 }
 
 export function resetNotificationFeedbackForTests() {

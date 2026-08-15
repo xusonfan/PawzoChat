@@ -157,7 +157,18 @@ body {
   box-shadow: 0 0 40px rgba(0,0,0,0.08);
 }
 @media (max-width: 420px) {
+  html, body { background: var(--card); }
   #phone-shell { width: 100vw; border-radius: 0; }
+  #top-bar::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -1px;
+    height: calc(env(safe-area-inset-top) + 2px);
+    background: var(--card);
+    pointer-events: none;
+  }
 }
 
 /* ---- Sidebar (hidden on mobile, shown on desktop via desktop.css) ---- */
@@ -173,12 +184,12 @@ body {
 
 /* ---- Top Bar ---- */
 #top-bar {
-  height: var(--bar-h-top);
-  min-height: var(--bar-h-top);
+  height: calc(var(--bar-h-top) + env(safe-area-inset-top));
+  min-height: calc(var(--bar-h-top) + env(safe-area-inset-top));
   background: var(--card);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: env(safe-area-inset-top) 12px 0;
   border-bottom: 1px solid var(--divider);
   z-index: 10;
   position: relative;
@@ -244,8 +255,9 @@ body {
 
 /* ---- Tab Bar ---- */
 #tab-bar {
-  height: var(--bar-h-bottom);
-  min-height: var(--bar-h-bottom);
+  height: calc(var(--bar-h-bottom) + env(safe-area-inset-bottom));
+  min-height: calc(var(--bar-h-bottom) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
   background: var(--tab-bar-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -1211,6 +1223,41 @@ body {
 .status-card .app-name { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .status-card .version { font-size: 12px; color: var(--text-3); }
 
+/* ---- PWA Install ---- */
+.pwa-install-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--bar-h-bottom) + env(safe-area-inset-bottom) + 12px);
+  transform: translateX(-50%);
+  width: min(366px, calc(100vw - 24px));
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 8px 28px rgba(78,58,46,0.2);
+}
+.pwa-install-banner img { width: 42px; height: 42px; border-radius: 10px; flex: 0 0 auto; }
+.pwa-install-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.pwa-install-copy strong { font-size: 14px; color: var(--text-1); }
+.pwa-install-copy span { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pwa-install-action {
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 11px;
+  color: #fff;
+  background: var(--primary);
+  font: 500 13px var(--font);
+  cursor: pointer;
+}
+.pwa-install-close { border: 0; background: none; color: var(--text-3); font-size: 22px; line-height: 1; cursor: pointer; }
+@media (min-width: 769px) {
+  .pwa-install-banner { bottom: 20px; }
+}
+
 /* ---- Overlay & Sheets ---- */
 #overlay {
   position: fixed;
@@ -1244,7 +1291,7 @@ body {
   border-radius: 2px;
   margin: 10px auto 6px;
 }
-#sheet-content { padding: 8px 0 24px; }
+#sheet-content { padding: 8px 0 calc(24px + env(safe-area-inset-bottom)); }
 .sheet-title {
   padding: 8px 20px 12px;
   font-size: 16px;

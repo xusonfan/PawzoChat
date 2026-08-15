@@ -29,8 +29,15 @@ function resolveMode(mode) {
   return mode === "dark" ? "dark" : "light";
 }
 
+function syncBrowserChrome() {
+  const color = getComputedStyle(document.documentElement).getPropertyValue("--card").trim();
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (color && meta) meta.setAttribute("content", color);
+}
+
 function applyMode(mode) {
   document.documentElement.dataset.theme = resolveMode(mode);
+  syncBrowserChrome();
 }
 
 async function fetchCss(name) {
@@ -84,6 +91,7 @@ export async function applyThemeFromState() {
   const theme = state.settings?.theme || { mode: "light", active: [] };
   applyMode(theme.mode);
   await applyCustomThemes(theme.active || []);
+  syncBrowserChrome();
   cacheForEarlyInject(theme);
 }
 

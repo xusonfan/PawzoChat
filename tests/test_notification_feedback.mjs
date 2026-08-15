@@ -133,6 +133,52 @@ await settle();
 assert.equal(audio.calls.starts, 2);
 assert.deepEqual(vibrations, [80]);
 
+// Granted system notifications use the service worker and carry conversation routing data.
+mod.resetNotificationFeedbackForTests();
+const shownNotifications = [];
+const notificationRegistration = {
+  async showNotification(title, payload) { shownNotifications.push({ title, payload }); },
+};
+const systemEvent = event(70, {
+  message: {
+    role: "assistant",
+    _seq: 70,
+    content: [{ type: "text", text: "系统通知正文" }],
+  },
+});
+assert.equal(await mod.showSystemNotification(systemEvent, {
+  notificationApi: { permission: "granted" },
+  navigatorObject: { serviceWorker: {} },
+  registration: notificationRegistration,
+  personaName: "小猫",
+  iconUrl: "/secret/api/personas/cat/avatar?v=7",
+  baseUrl: "/secret",
+}), true);
+assert.equal(shownNotifications.length, 1);
+assert.equal(shownNotifications[0].title, "小猫");
+assert.equal(shownNotifications[0].payload.body, "系统通知正文");
+assert.equal(shownNotifications[0].payload.icon, "/secret/api/personas/cat/avatar?v=7");
+assert.equal(shownNotifications[0].payload.data.personaId, "cat");
+
+const fallbackNotifications = [];
+let fallbackAttempt = 0;
+assert.equal(await mod.showSystemNotification(systemEvent, {
+  notificationApi: { permission: "granted" },
+  navigatorObject: { serviceWorker: {} },
+  registration: {
+    async showNotification(title, payload) {
+      fallbackAttempt += 1;
+      if (fallbackAttempt === 1) throw new Error("avatar unavailable");
+      fallbackNotifications.push({ title, payload });
+    },
+  },
+  personaName: "小猫",
+  iconUrl: "/secret/api/personas/cat/avatar?v=7",
+  baseUrl: "/secret",
+}), true);
+assert.equal(fallbackAttempt, 2);
+assert.equal(fallbackNotifications[0].payload.icon, "/secret/static/logo.png");
+
 // Independent switches.
 mod.resetNotificationFeedbackForTests();
 const soundOnly = fakeAudio();
@@ -229,13 +275,14 @@ assert.deepEqual(fallbackVibrations, [80]);
 assert.equal(liveRejectedHtml.calls.plays, 1);
 assert.equal(brokenPlayback.calls.starts, 0);
 
-// History, own messages and current visible conversation do not alert.
+// History and own messages do not alert; a visible conversation still keeps local sound and vibration.
 mod.resetNotificationFeedbackForTests();
 assert.equal(mod.notifyNewMessage({ type: "history_loaded", persona_id: "cat", message: { role: "assistant", _seq: 10 } }, options), false);
 assert.equal(mod.notifyNewMessage(event(11, { message: { role: "user", _seq: 11 } }), options), false);
-assert.equal(mod.notifyNewMessage(event(12), { ...options, isViewing: true }), false);
-assert.equal(audio.calls.starts, 2);
-assert.deepEqual(vibrations, [80]);
+assert.equal(mod.notifyNewMessage(event(12), { ...options, isViewing: true }), true);
+await settle();
+assert.equal(audio.calls.starts, 4);
+assert.deepEqual(vibrations, [80, 80]);
 
 // Missing platform capabilities and failed audio construction degrade silently.
 mod.resetNotificationFeedbackForTests();
@@ -250,6 +297,10 @@ const settingsSource = await readFile(join(
   __dirname,
   "../pawzochat/web/static/modules/settings.js",
 ), "utf8");
+assert.match(settingsSource, /系统通知/);
+assert.match(settingsSource, /PawzoChat\.enableSystemNotifications\(\)/);
+assert.match(settingsSource, /export async function enableSystemNotifications\(\)/);
+assert.match(settingsSource, /requestSystemNotificationPermission\(\)/);
 assert.match(settingsSource, /id="sc-sound"[^>]*role="switch"/);
 assert.match(settingsSource, /aria-label="试听新消息提示音"/);
 assert.match(settingsSource, /export function previewNewMessageSound\(\)[\s\S]*const playback = previewNotificationSound\(\)/);
@@ -269,6 +320,17 @@ assert.match(settingsSource, /api\.patch\("\/api\/settings",\s*\{ chat: patch \}
 assert.match(settingsSource, /export async function saveAsrSettings\(\)[\s\S]*api\.patch\("\/api\/asr\/settings",\s*patch\)/);
 assert.match(settingsSource, /function renderSettingsVoiceProviders\(\)[\s\S]*语音输出（TTS）/);
 assert.doesNotMatch(settingsSource, /sc-asr-/, "ASR 设置不应继续挂在对话设置表单中");
+
+const serviceWorkerSource = await readFile(join(
+  __dirname,
+  "../pawzochat/web/static/service-worker.js",
+), "utf8");
+assert.match(serviceWorkerSource, /notificationclick/);
+assert.match(serviceWorkerSource, /getNotifications\(\)/);
+assert.match(serviceWorkerSource, /notification\.data\?\.personaId === personaId/);
+assert.match(serviceWorkerSource, /notification\.close\(\)/);
+assert.match(serviceWorkerSource, /open_conversation/);
+assert.match(serviceWorkerSource, /openChat=/);
 
 const configSource = await readFile(join(__dirname, "../pawzochat/core/config.py"), "utf8");
 assert.match(configSource, /"new_message_sound": True/);

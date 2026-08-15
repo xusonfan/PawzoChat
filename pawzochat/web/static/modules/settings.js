@@ -26,7 +26,11 @@ import {
 } from "./navigation.js";
 import { applyThemeFromState, invalidateCache } from "./theme.js";
 import { renderVerifyInput, clearVerifyInput } from "./qr_verify.js";
-import { previewNotificationSound } from "./notification_feedback.js";
+import {
+  previewNotificationSound,
+  requestSystemNotificationPermission,
+  systemNotificationPermission,
+} from "./notification_feedback.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -143,6 +147,10 @@ async function renderSettings() {
         <div class="row-icon cyan">${iconHtml("ri-global-line")}</div>
         <span class="row-label">网络设置</span><span class="row-arrow">›</span>
       </div>` : ''}
+      <div class="card-row" onclick="PawzoChat.requestPwaInstall()">
+        <div class="row-icon green">${iconHtml("ri-download-2-line")}</div>
+        <span class="row-label">安装到桌面</span><span class="row-value">全屏使用</span><span class="row-arrow">›</span>
+      </div>
       <div class="card-row" onclick="PawzoChat.pushPage('settingsAbout')">
         <div class="row-icon neutral">${iconHtml("ri-information-line")}</div>
         <span class="row-label">关于 PawzoChat</span>${updateDot}<span class="row-arrow">›</span>
@@ -2145,6 +2153,13 @@ function renderSettingsChat() {
   );
   const s = state.settings?.chat || {};
   const maxRounds = s.max_context_rounds || 5;
+  const systemPermission = systemNotificationPermission();
+  const systemNotificationLabel = {
+    granted: "已开启",
+    denied: "已拒绝",
+    default: "开启",
+    unsupported: "不支持",
+  }[systemPermission] || "开启";
   content().innerHTML = `<div class="page" id="settings-chat-page">
     <style>
       #settings-chat-page .notification-setting-row {
@@ -2208,6 +2223,15 @@ function renderSettingsChat() {
       <div class="card-header">新消息提醒</div>
       <div class="form-group"><div class="form-row notification-setting-row">
         <div class="notification-setting-copy">
+          <span class="notification-setting-title">系统通知</span>
+          <div class="notification-setting-hint">PawzoChat 在后台运行时，通过系统通知栏显示未查看会话的新消息</div>
+        </div>
+        <div class="notification-setting-actions">
+          <button type="button" class="btn-text notification-sound-preview" onclick="PawzoChat.enableSystemNotifications()">${systemNotificationLabel}</button>
+        </div>
+      </div></div>
+      <div class="form-group"><div class="form-row notification-setting-row">
+        <div class="notification-setting-copy">
           <label class="notification-setting-title" id="sc-sound-label" for="sc-sound">新消息提示音</label>
           <div class="notification-setting-hint">收到当前未查看会话的角色新消息时播放短提示音；试听不受开关影响</div>
         </div>
@@ -2234,6 +2258,23 @@ function renderSettingsChat() {
       <div class="form-hint">收到消息后等待合并的时间</div>
     </div>
   </div>`;
+}
+
+export async function enableSystemNotifications() {
+  const current = systemNotificationPermission();
+  if (current === "unsupported") {
+    toast("当前环境不支持系统通知，请使用 HTTPS 并安装或更新浏览器", "error");
+    return;
+  }
+  if (current === "denied") {
+    toast("通知权限已被拒绝，请在系统或浏览器的网站设置中重新开启", "error");
+    return;
+  }
+  const permission = await requestSystemNotificationPermission();
+  if (permission === "granted") toast("系统通知已开启", "success");
+  else if (permission === "denied") toast("未获得通知权限", "error");
+  else toast("当前环境不支持系统通知", "error");
+  renderSettingsChat();
 }
 
 export function previewNewMessageSound() {
