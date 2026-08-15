@@ -48,6 +48,7 @@ let _viewportSyncFrame = 0;
 let _pinBottomForKeyboard = false;
 let _keyboardBlurTimer = 0;
 
+let _chatInputComposing = false;
 const _chatScrollState = {
   el: null,
   followBottom: true,
@@ -151,8 +152,6 @@ function _paintChatList(target, desktop) {
     const avUrl = personaAvatarUrl(persona);
     const preview = summarizeConversationMessage(c.last_message);
     const time = c.last_message ? formatTime(c.last_message.timestamp) : "";
-    const wechatBadge = c.wechat_linked
-      ? `<span class="wechat-badge"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg></span>` : "";
     const active = (desktop && chatPersonaId === c.persona_id) ? " active" : "";
     const unreadBadge = unreadBadgeHtml(c.unread_count, "conv-unread-badge");
     const pinnedBadge = c.pinned
@@ -160,7 +159,7 @@ function _paintChatList(target, desktop) {
     return `<div class="conv-item${active}" data-persona-id="${escAttr(c.persona_id)}" tabindex="0" role="button" aria-haspopup="menu" aria-label="打开与${escAttr(pname)}的对话">
       <div class="conv-avatar-wrap">${avatarHtml(pname, "", avUrl)}${unreadBadge}</div>
       <div class="conv-info">
-        <div class="conv-name">${esc(pname)} ${wechatBadge}</div>
+        <div class="conv-name">${esc(pname)}</div>
         <div class="conv-preview">${esc(preview)}</div>
       </div>
       <div class="conv-meta"><div class="conv-time">${time}</div>${pinnedBadge}</div>
@@ -831,15 +830,12 @@ async function renderChatWindow(data) {
     <div id="emoji-picker-panel" class="emoji-picker-panel" style="display:none"></div>
     <div id="plus-menu-panel" class="plus-menu-panel" style="display:none"></div>
     <div class="chat-input-bar">
-      <button class="img-upload-btn" id="emoji-picker-btn" onclick="PawzoChat.toggleEmojiPicker()" title="表情">
+      <textarea class="chat-input" id="chat-input" rows="1" placeholder="输入消息…" aria-label="消息输入框" enterkeyhint="send" oninput="PawzoChat.onChatInput()" onkeydown="PawzoChat.onChatKey(event)" oncompositionstart="PawzoChat.onChatCompositionStart()" oncompositionend="PawzoChat.onChatCompositionEnd()"></textarea>
+      <button class="img-upload-btn" id="emoji-picker-btn" onclick="PawzoChat.toggleEmojiPicker()" title="表情" aria-label="打开表情面板">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
       </button>
-      <button class="img-upload-btn" id="plus-menu-btn" onclick="PawzoChat.togglePlusMenu()" title="更多">
+      <button class="img-upload-btn" id="plus-menu-btn" onclick="PawzoChat.togglePlusMenu()" title="更多" aria-label="打开附件面板">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
-      </button>
-      <textarea class="chat-input" id="chat-input" rows="1" placeholder="输入消息…" oninput="PawzoChat.onChatInput()" onkeydown="PawzoChat.onChatKey(event)"></textarea>
-      <button class="send-btn" id="send-btn" onclick="PawzoChat.sendChat()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
     <input type="file" id="img-file-input" accept="image/*" multiple style="display:none" onchange="PawzoChat.onImageSelected(this)">
@@ -896,6 +892,7 @@ async function renderChatWindow(data) {
   _emojiActiveTab = 0;
   _plusMenuOpen = false;
 
+  _chatInputComposing = false;
   if (cachedMessages) renderMessages(cachedMessages.messages || []);
 
   try {
@@ -986,18 +983,32 @@ function renderMessages(messages) {
 
 export function onChatInput() {
   const inp = $("chat-input");
-  const btn = $("send-btn");
   inp.style.height = "auto";
   inp.style.height = Math.min(inp.scrollHeight, 100) + "px";
-  btn.classList.toggle("active", inp.value.trim().length > 0 || _pendingImages.length > 0 || _pendingFiles.length > 0);
   if (_pinBottomForKeyboard && document.activeElement === inp) {
     const msgsEl = $("chat-msgs");
     if (msgsEl) requestAnimationFrame(() => _scrollAfterInsert(msgsEl));
   }
 }
 
+export function onChatCompositionStart() {
+  _chatInputComposing = true;
+}
+
+export function onChatCompositionEnd() {
+  _chatInputComposing = false;
+}
+
 export function onChatKey(e) {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  if (e.key !== "Enter" || e.shiftKey) return;
+  if (_chatInputComposing || e.isComposing || e.keyCode === 229) return;
+
+  e.preventDefault();
+  const inp = $("chat-input");
+  const hasContent = inp?.value.trim().length > 0
+    || _pendingImages.length > 0
+    || _pendingFiles.length > 0;
+  if (hasContent) sendChat();
 }
 
 export function pickImage() {

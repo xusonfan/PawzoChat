@@ -485,14 +485,6 @@ body {
   outline: none;
   background: var(--bg);
 }
-.wechat-badge {
-  display: inline-flex;
-  align-items: center;
-  color: var(--success);
-  font-size: 11px;
-  gap: 2px;
-}
-.wechat-badge svg, .wechat-badge .ui-icon { width: 12px; height: 12px; }
 
 /* ---- Chat Window ---- */
 .chat-container {
@@ -575,13 +567,15 @@ body {
 .chat-input-bar {
   display: flex;
   align-items: flex-end;
+  min-width: 0;
   padding: 8px 10px;
   background: var(--card);
   border-top: 1px solid var(--divider);
   gap: 4px;
 }
 .chat-input {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   border: none;
   outline: none;
   background: var(--search-bg);
@@ -595,22 +589,7 @@ body {
   line-height: 1.4;
 }
 .chat-input::placeholder { color: var(--text-3); }
-.send-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: none;
-  background: var(--text-3);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: background 0.2s;
-}
-.send-btn.active { background: var(--primary); }
-.send-btn svg { width: 20px; height: 20px; }
+.chat-input:focus-visible { box-shadow: 0 0 0 2px var(--primary-light); }
 
 /* ---- Persona Card / Settings ---- */
 .persona-card-page {
@@ -2008,6 +1987,12 @@ select.qs-field-input {
   width:36px; height:36px;
 }
 .img-upload-btn:hover { color:var(--primary); }
+.img-upload-btn:focus-visible {
+  color:var(--primary);
+  outline:2px solid var(--primary);
+  outline-offset:-2px;
+  border-radius:50%;
+}
 
 .img-preview-bar {
   display:flex; gap:8px; padding:8px 16px; overflow-x:auto;
