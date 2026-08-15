@@ -56,6 +56,90 @@ export function isDesktop() {
   return _desktopMQ.matches;
 }
 
+/* ---- Mobile tab swipe ---- */
+
+const _tabSwipe = {
+  minDistance: 56,
+  axisRatio: 1.25,
+};
+let _tabSwipeInitialized = false;
+
+function _isSwipeExcludedTarget(target, boundary) {
+  if (!(target instanceof Element)) return true;
+  if (target.closest("input, textarea, select, button, a, [contenteditable], [role='slider'], [data-no-tab-swipe]")) return true;
+
+  for (let el = target; el && el !== boundary; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    const scrollsHorizontally = el.scrollWidth > el.clientWidth
+      && (style.overflowX === "auto" || style.overflowX === "scroll");
+    if (scrollsHorizontally) return true;
+  }
+  return false;
+}
+
+function _adjacentTab(delta) {
+  const tabs = [...document.querySelectorAll("#tab-bar .tab")].map(tab => tab.dataset.tab);
+  const currentIndex = tabs.indexOf(state.currentTab);
+  return tabs[currentIndex + delta] || null;
+}
+
+export function initMobileTabSwipe() {
+  if (_tabSwipeInitialized) return;
+  const area = content();
+  if (!area) return;
+  _tabSwipeInitialized = true;
+
+  let gesture = null;
+
+  const reset = () => { gesture = null; };
+
+  area.addEventListener("touchstart", event => {
+    if (isDesktop() || state.pageStack.length !== 0 || event.touches.length !== 1) {
+      reset();
+      return;
+    }
+    const touch = event.touches[0];
+    gesture = _isSwipeExcludedTarget(event.target, area)
+      ? null
+      : { startX: touch.clientX, startY: touch.clientY, horizontal: false };
+  }, { passive: true });
+
+  area.addEventListener("touchmove", event => {
+    if (!gesture || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - gesture.startX;
+    const dy = touch.clientY - gesture.startY;
+
+    if (!gesture.horizontal) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+        reset();
+        return;
+      }
+      gesture.horizontal = Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy);
+    }
+    if (gesture.horizontal) event.preventDefault();
+  }, { passive: false });
+
+  area.addEventListener("touchend", event => {
+    if (!gesture || event.changedTouches.length !== 1) {
+      reset();
+      return;
+    }
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - gesture.startX;
+    const dy = touch.clientY - gesture.startY;
+    const isHorizontalSwipe = Math.abs(dx) >= _tabSwipe.minDistance
+      && Math.abs(dx) >= Math.abs(dy) * _tabSwipe.axisRatio;
+    reset();
+
+    if (!isHorizontalSwipe || isDesktop() || state.pageStack.length !== 0) return;
+    const nextTab = _adjacentTab(dx < 0 ? 1 : -1);
+    if (nextTab) switchTab(nextTab);
+  }, { passive: true });
+
+  area.addEventListener("touchcancel", reset, { passive: true });
+}
+
 /* ---- Top / Sidebar bar helpers ---- */
 
 export function setTopBar(title, showBack, actionsHtml, leftHtml) {

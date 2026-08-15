@@ -25,7 +25,7 @@ import { openImagePreview, closeImagePreview } from "./modules/image_preview.js"
 import {
   setTopBar, switchTab, goBack, pushPage,
   registerTabRenderer, registerPageRenderer,
-  isDesktop, setSidebarBar,
+  isDesktop, setSidebarBar, initMobileTabSwipe,
 } from "./modules/navigation.js";
 import { applyThemeFromState, watchSystemTheme } from "./modules/theme.js";
 
@@ -489,6 +489,7 @@ function _showUpdateFoundDialog(u) {
 document.addEventListener("DOMContentLoaded", () => {
   loadProfile();
   loadThemeSettings();
+  initMobileTabSwipe();
   switchTab("chat");
   initSSE();
   checkAndShowSetup();
