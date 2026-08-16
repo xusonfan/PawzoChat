@@ -241,6 +241,7 @@ export function initMobileTabSwipe() {
       : {
           startX: touch.clientX,
           startY: touch.clientY,
+          origin: event.target,
           lastX: touch.clientX,
           lastTime: event.timeStamp,
           velocityX: 0,
@@ -263,6 +264,7 @@ export function initMobileTabSwipe() {
       if (Math.abs(dx) < _tabSwipe.startDistance
         || Math.abs(dx) < Math.abs(dy) * _tabSwipe.axisRatio) return;
       gesture.horizontal = true;
+      gesture.origin?.dispatchEvent(new CustomEvent("pawzo:tab-swipe-start", { bubbles: true }));
       gesture.stage = _createSwipeStage(dx < 0 ? 1 : -1);
     }
 

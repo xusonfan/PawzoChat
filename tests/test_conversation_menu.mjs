@@ -73,6 +73,17 @@ assert.equal(tracker.consumeClick(dogRow), false);
 opened += 1;
 assert.equal(opened, 2);
 
+// Tab 横滑接管手势时立即取消长按，并吞掉同一次触摸产生的尾随点击。
+const foxRow = { id: "fox" };
+tracker.beginInput();
+tracker.start(foxRow, 40, 40, { personaId: "fox" });
+tracker.cancelAndSuppress();
+assert.equal(tracker.pending, false);
+runTimers();
+assert.equal(fired.length, 1);
+assert.equal(tracker.consumeClick(foxRow), true);
+assert.equal(tracker.consumeClick(foxRow), false);
+
 // An ordinary short press is never suppressed.
 tracker.beginInput();
 tracker.start(dogRow, 0, 0, {});
@@ -92,6 +103,8 @@ assert.equal(opened, 3);
 // and do not add another activation requirement to an ordinary click.
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
+const originalHistory = globalThis.history;
+const originalLocation = globalThis.location;
 const delegated = new Map();
 const documentListeners = new Map();
 const windowListeners = new Map();
@@ -117,7 +130,7 @@ const menu = {
   remove() { this.isConnected = false; },
 };
 globalThis.document = {
-  body: { appendChild(node) { appendedMenu = node; } },
+  body: { appendChild(node) { appendedMenu = node; node.isConnected = true; } },
   activeElement: null,
   createElement() { return menu; },
   getSelection() { return selection; },
@@ -131,6 +144,15 @@ globalThis.window = {
   addEventListener(type, handler) { windowListeners.set(type, handler); },
   removeEventListener(type) { windowListeners.delete(type); },
 };
+const baseHistoryState = { navigation: "root" };
+let historyPushes = 0;
+let historyBacks = 0;
+globalThis.history = {
+  state: baseHistoryState,
+  pushState(state) { this.state = state; historyPushes += 1; },
+  back() { this.state = baseHistoryState; historyBacks += 1; },
+};
+globalThis.location = { href: "http://localhost/" };
 const row = {
   dataset: { personaId: "cat" },
   isConnected: true,
@@ -167,6 +189,29 @@ prevented = false;
 delegated.get("dragstart")({ target: image, preventDefault() { prevented = true; } });
 assert.equal(prevented, true);
 
+// 横向 Tab 手势在导航层确认后，必须取消列表长按且不能打开对话。
+delegated.get("pointerdown")({
+  target: row,
+  pointerType: "touch",
+  isPrimary: true,
+  clientX: 20,
+  clientY: 30,
+});
+assert.equal(typeof delegatedTimer, "function");
+delegated.get("pawzo:tab-swipe-start")();
+assert.equal(delegatedTimer, null);
+let swipeClickPrevented = false;
+let swipeClickStopped = false;
+delegated.get("click")({
+  target: row,
+  button: 0,
+  preventDefault() { swipeClickPrevented = true; },
+  stopPropagation() { swipeClickStopped = true; },
+});
+assert.equal(swipeClickPrevented, true);
+assert.equal(swipeClickStopped, true);
+assert.equal(delegatedOpened, 0);
+
 // Right-click opening remains supported but does not touch an existing selection.
 delegated.get("contextmenu")({
   target: row,
@@ -176,6 +221,8 @@ delegated.get("contextmenu")({
 });
 assert.equal(appendedMenu, menu);
 assert.equal(removedRanges, 0);
+assert.equal(historyPushes, 1);
+assert.ok(history.state.pawzoConversationMenu?.token);
 
 // Only a long-press menu that actually opens clears the intersecting selection.
 delegated.get("pointerdown")({
@@ -187,6 +234,15 @@ delegated.get("pointerdown")({
 });
 delegatedTimer();
 assert.equal(removedRanges, 1);
+assert.equal(historyPushes, 1, "替换已打开的菜单不能重复压入历史");
+
+// 手机返回键弹出菜单历史层，只关闭菜单，不再触发额外 history.back。
+const onMenuPopState = windowListeners.get("popstate");
+history.state = baseHistoryState;
+onMenuPopState({ state: baseHistoryState });
+assert.equal(menu.isConnected, false);
+assert.equal(historyBacks, 0);
+assert.equal(windowListeners.has("popstate"), false);
 
 // A fresh ordinary pointer gesture plus one click performs exactly one open action.
 delegated.get("pointerdown")({
@@ -202,5 +258,7 @@ detach();
 assert.equal(delegated.size, 0);
 globalThis.document = originalDocument;
 globalThis.window = originalWindow;
+globalThis.history = originalHistory;
+globalThis.location = originalLocation;
 
 console.log("conversation menu tests passed");

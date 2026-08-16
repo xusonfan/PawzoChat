@@ -6,6 +6,9 @@ const VIEWPORT_GAP = 8;
 
 let activeMenu = null;
 let activeCleanup = null;
+let activeHistoryToken = "";
+let historySequence = 0;
+const HISTORY_KEY = "pawzoConversationMenu";
 
 export function longPressMoved(startX, startY, x, y) {
   return Math.abs(x - startX) > MOVE_CANCEL_PX
@@ -41,6 +44,10 @@ export function createLongPressTracker({
     if (pending?.timer != null) clearTimer(pending.timer);
     pending = null;
   };
+  const cancelAndSuppress = () => {
+    if (pending) suppressedTarget = pending.target;
+    cancel();
+  };
   return {
     beginInput() {
       // A synthetic click generated after pointerup has no new pointerdown.
@@ -63,6 +70,7 @@ export function createLongPressTracker({
       if (pending && longPressMoved(pending.x, pending.y, x, y)) cancel();
     },
     cancel,
+    cancelAndSuppress,
     consumeClick(target) {
       if (target !== suppressedTarget) return false;
       suppressedTarget = null;
@@ -93,18 +101,40 @@ export function clearConversationSelection(row, selection = null) {
   return true;
 }
 
-export function closeConversationMenu({ restoreFocus = false } = {}) {
+export function closeConversationMenu({ restoreFocus = false, fromHistory = false } = {}) {
   if (!activeMenu) return;
   const trigger = activeMenu._trigger;
+  const ownsHistoryEntry = !!activeHistoryToken
+    && history.state?.[HISTORY_KEY]?.token === activeHistoryToken;
+  activeHistoryToken = "";
   activeCleanup?.();
   activeMenu.remove();
   activeMenu = null;
   activeCleanup = null;
   if (restoreFocus && trigger?.isConnected) trigger.focus();
+  if (!fromHistory && ownsHistoryEntry) history.back();
+}
+
+function pushConversationMenuHistory(reuseToken = "") {
+  if (reuseToken && history.state?.[HISTORY_KEY]?.token === reuseToken) {
+    activeHistoryToken = reuseToken;
+    return;
+  }
+  const token = `${Date.now()}-${++historySequence}`;
+  try {
+    history.pushState({
+      ...(history.state || {}),
+      [HISTORY_KEY]: { token },
+    }, "", location.href);
+    activeHistoryToken = token;
+  } catch (_) {
+    activeHistoryToken = "";
+  }
 }
 
 function openConversationMenu(row, conversation, point, actions, { clearSelection = false } = {}) {
-  closeConversationMenu();
+  const reusableHistoryToken = activeHistoryToken;
+  closeConversationMenu({ fromHistory: true });
   const labels = conversationMenuLabels(!!conversation.pinned);
   const menu = document.createElement("div");
   menu.className = "conversation-context-menu";
@@ -154,20 +184,26 @@ function openConversationMenu(row, conversation, point, actions, { clearSelectio
       items[event.key === "Home" ? 0 : items.length - 1]?.focus();
     }
   };
+  const onPopState = event => {
+    if (event.state?.[HISTORY_KEY]?.token === activeHistoryToken) return;
+    closeConversationMenu({ fromHistory: true });
+  };
+  const onPageHide = () => closeConversationMenu({ fromHistory: true });
   menu.addEventListener("click", onMenuClick);
   document.addEventListener("pointerdown", onOutside, true);
   document.addEventListener("click", onOutside, true);
   document.addEventListener("keydown", onKey);
-  window.addEventListener("popstate", closeConversationMenu);
-  window.addEventListener("pagehide", closeConversationMenu);
+  window.addEventListener("popstate", onPopState);
+  window.addEventListener("pagehide", onPageHide);
   activeMenu = menu;
+  pushConversationMenuHistory(reusableHistoryToken);
   activeCleanup = () => {
     menu.removeEventListener("click", onMenuClick);
     document.removeEventListener("pointerdown", onOutside, true);
     document.removeEventListener("click", onOutside, true);
     document.removeEventListener("keydown", onKey);
-    window.removeEventListener("popstate", closeConversationMenu);
-    window.removeEventListener("pagehide", closeConversationMenu);
+    window.removeEventListener("popstate", onPopState);
+    window.removeEventListener("pagehide", onPageHide);
   };
   // Some mobile engines create a native selection before CSS suppression takes
   // effect. Clear it only after this row's long-press menu has actually opened.
@@ -190,6 +226,10 @@ export function attachConversationMenu(list, conversations, actions, longPressTi
   });
 
   const cancelGesture = () => tracker.cancel();
+  const cancelForTabSwipe = () => {
+    tracker.cancelAndSuppress();
+    closeConversationMenu();
+  };
   const rowFrom = target => target?.closest?.(".conv-item[data-persona-id]");
   const conversationFor = row => row ? byId.get(row.dataset.personaId) : null;
 
@@ -263,6 +303,7 @@ export function attachConversationMenu(list, conversations, actions, longPressTi
   list.addEventListener("pointermove", onPointerMove, { passive: true });
   list.addEventListener("pointerup", cancelGesture, { passive: true });
   list.addEventListener("pointercancel", cancelGesture, { passive: true });
+  list.addEventListener("pawzo:tab-swipe-start", cancelForTabSwipe);
   list.addEventListener("click", onClick);
   list.addEventListener("contextmenu", onContextMenu);
   list.addEventListener("keydown", onKeyDown);
@@ -277,6 +318,7 @@ export function attachConversationMenu(list, conversations, actions, longPressTi
     list.removeEventListener("pointermove", onPointerMove);
     list.removeEventListener("pointerup", cancelGesture);
     list.removeEventListener("pointercancel", cancelGesture);
+    list.removeEventListener("pawzo:tab-swipe-start", cancelForTabSwipe);
     list.removeEventListener("click", onClick);
     list.removeEventListener("contextmenu", onContextMenu);
     list.removeEventListener("keydown", onKeyDown);
