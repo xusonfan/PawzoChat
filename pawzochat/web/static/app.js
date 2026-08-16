@@ -278,12 +278,9 @@ function initSSE() {
         } else {
           refreshUnreadCounts();
         }
-        if (data.persona_id === chatPersonaId) {
-          const topPage = state.pageStack[state.pageStack.length - 1];
-          if (topPage?.name === "chatWindow") {
-            refreshChatMessages();
-          }
-        }
+        // This event only invalidates conversation metadata. Message bodies
+        // have their own new_message / assistant_message events; refreshing
+        // them here rebuilds the just-appended final reply multiple times.
       }
       if (data.type === "update_progress") {
         onUpdateProgress(data);

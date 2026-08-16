@@ -37,6 +37,7 @@ import {
   mergePendingUserMessages, removePendingUserMessage,
 } from "./chat_pending.js";
 import { shouldShowMessageTime } from "./chat_message_time.js";
+import { hasRenderedMessage, messageSequence } from "./chat_message_identity.js";
 import {
   setTopBar, pushPage, goBack, switchTab,
   registerTabRenderer, registerPageRenderer,
@@ -946,8 +947,12 @@ function renderMessages(messages) {
       : avatarHtml(_userName, "sm", _userAvUrl);
     const source = sourceBadge(m.source);
     const bubbleHtml = renderContentBlocks(m.content, role === "assistant");
+    const sequence = messageSequence(m);
+    const sequenceAttr = sequence
+      ? ` data-message-seq="${escAttr(sequence)}"`
+      : "";
 
-    html += `<div class="msg-row ${role}" data-message-timestamp="${escAttr(m.timestamp || "")}">
+    html += `<div class="msg-row ${role}"${sequenceAttr} data-message-timestamp="${escAttr(m.timestamp || "")}">
       ${av}
       <div>
         ${bubbleHtml}
@@ -1490,6 +1495,11 @@ export function appendAssistantMessage(message, isLast) {
   const msgsEl = $("chat-msgs");
   if (!msgsEl) return;
 
+  if (hasRenderedMessage(msgsEl, message)) {
+    if (isLast) hideTypingIndicator();
+    return;
+  }
+
   const wasAtBottom = _chatBottomAnchor.followsBottom(msgsEl);
 
   const persona = state.personas.find(p => p.id === chatPersonaId);
@@ -1499,8 +1509,12 @@ export function appendAssistantMessage(message, isLast) {
   const bubbleHtml = renderContentBlocks(message.content, true);
   const previousTimestamp = _lastRenderedMessageTimestamp(msgsEl);
   const timeHtml = _messageTimeHtml(message.timestamp, previousTimestamp);
+  const sequence = messageSequence(message);
+  const sequenceAttr = sequence
+    ? ` data-message-seq="${escAttr(sequence)}"`
+    : "";
 
-  msgsEl.insertAdjacentHTML("beforeend", `${timeHtml}<div class="msg-row assistant" data-message-timestamp="${escAttr(message.timestamp || "")}">
+  msgsEl.insertAdjacentHTML("beforeend", `${timeHtml}<div class="msg-row assistant"${sequenceAttr} data-message-timestamp="${escAttr(message.timestamp || "")}">
     ${avatarHtml(pname, "sm", avUrl)}
     <div>
       ${bubbleHtml}
