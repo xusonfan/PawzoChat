@@ -22,6 +22,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pawzochat.core.extensions.hooks import ReplyPreSendEvent, ReplySentEvent
+from pawzochat.services.image_cache import cache_external_images
 from pawzochat.utils.message_text import clean_assistant_reply_text
 from pawzochat.web.sse import broadcast
 
@@ -67,6 +68,10 @@ class ReplyDispatcher:
                 continue
 
             message = self._normalize_message(pre_send.message)
+            message["content"] = cache_external_images(
+                persona_id,
+                message.get("content", []),
+            )
             stored = self._app.conversation_store.add_message(
                 persona_id,
                 message.get("role", "assistant"),
