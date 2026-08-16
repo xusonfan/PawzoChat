@@ -17,6 +17,7 @@
  */
 import { esc, escAttr, formatMsgTime, iconHtml } from "./utils.js";
 import { renderTextMedia } from "./message_content.js";
+import { imageLayoutAttributes } from "./image_layout_cache.js";
 import { api } from "./api.js";
 import { $, content } from "./state.js";
 import { toast, confirm, showLoading, hideLoading } from "./ui.js";
@@ -74,7 +75,11 @@ function _renderContent(blocks, renderLinkedImages = false) {
   const emojiBlocks = blocks.filter(b => b.type === "emoji");
   if (emojiBlocks.length > 0) {
     return emojiBlocks
-      .map(b => `<div class="he-media"><img src="${esc(base + b.url)}" alt="emoji" onclick="PawzoChat.openImagePreview(this.src)"></div>`)
+      .map(b => {
+        const src = base + b.url;
+        const layout = imageLayoutAttributes(src, { maxWidth: 160, maxHeight: 160 });
+        return `<div class="he-media"><img src="${escAttr(src)}" alt="emoji"${layout} onload="PawzoChat.rememberImageLayout(this)" onclick="PawzoChat.openImagePreview(this.src)"></div>`;
+      })
       .join("");
   }
 
@@ -89,7 +94,9 @@ function _renderContent(blocks, renderLinkedImages = false) {
         src = base + "/api/images/" + _personaId + "/" + filename;
       }
       if (src) {
-        parts += `<div class="he-media"><img src="${esc(src)}" alt="image" loading="lazy" onclick="PawzoChat.openImagePreview(this.src)"></div>`;
+        const safeSrc = escAttr(src);
+        const layout = imageLayoutAttributes(src, { maxWidth: 160, maxHeight: 160 });
+        parts += `<div class="he-media"><img src="${safeSrc}" alt="image" loading="lazy"${layout} onload="PawzoChat.rememberImageLayout(this)" onclick="PawzoChat.openImagePreview(this.src)"></div>`;
       }
     } else if (b.type === "file") {
       const diskName = (b.path || "").split(/[\\/]/).pop() || "";
@@ -112,7 +119,12 @@ function _renderContent(blocks, renderLinkedImages = false) {
       }
     } else if (b.type === "text" && b.text) {
       parts += renderLinkedImages
-        ? renderTextMedia(b.text, { textClass: "he-text", imageClass: "he-media" })
+        ? renderTextMedia(b.text, {
+          textClass: "he-text",
+          imageClass: "he-media",
+          imageMaxWidth: 160,
+          imageMaxHeight: 160,
+        })
         : `<div class="he-text">${esc(b.text)}</div>`;
     }
   }

@@ -6,15 +6,20 @@ export function createChatBottomAnchor({
   threshold = 80,
   requestFrame = callback => requestAnimationFrame(callback),
   cancelFrame = frame => cancelAnimationFrame(frame),
+  createResizeObserver = typeof ResizeObserver !== "undefined"
+    ? callback => new ResizeObserver(callback)
+    : null,
 } = {}) {
   let el = null;
   let followBottom = true;
   let initialAnchor = false;
   let epoch = 0;
+  let bindingVersion = 0;
   let userScrollVersion = 0;
   let alignFrame = 0;
   let scrollCleanup = null;
   let disconnectObserver = null;
+  let resizeObserver = null;
   let mediaCleanups = [];
 
   const isNearBottom = target => (
@@ -28,6 +33,17 @@ export function createChatBottomAnchor({
 
   function clearMedia() {
     for (const cleanup of mediaCleanups.splice(0)) cleanup();
+  }
+
+  function clearResizeObserver() {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+  }
+
+  function watchLayout(root, target = el, targetEpoch = epoch) {
+    if (!resizeObserver || !root || !target || el !== target || epoch !== targetEpoch) return;
+    const roots = root === target ? Array.from(root.children || []) : [root];
+    for (const observedRoot of roots) resizeObserver.observe(observedRoot);
   }
 
   function scrollToBottom(target = el) {
@@ -56,13 +72,16 @@ export function createChatBottomAnchor({
     if (scrollCleanup) scrollCleanup();
     if (disconnectObserver) disconnectObserver.disconnect();
     disconnectObserver = null;
+    clearResizeObserver();
     clearMedia();
     cancelFrames();
     epoch += 1;
+    bindingVersion += 1;
     el = target;
     followBottom = true;
     initialAnchor = initial;
     userScrollVersion = 0;
+    const targetBindingVersion = bindingVersion;
 
     const onScroll = () => {
       if (el !== target) return;
@@ -73,6 +92,12 @@ export function createChatBottomAnchor({
     };
     target.addEventListener("scroll", onScroll, { passive: true });
     scrollCleanup = () => target.removeEventListener("scroll", onScroll);
+
+    if (createResizeObserver) {
+      resizeObserver = createResizeObserver(() => {
+        if (el === target && bindingVersion === targetBindingVersion) scheduleBottom(target);
+      });
+    }
 
     if (lifecycleRoot && typeof MutationObserver !== "undefined") {
       disconnectObserver = new MutationObserver(() => {
@@ -93,6 +118,7 @@ export function createChatBottomAnchor({
       epoch: ++epoch,
     };
     clearMedia();
+    resizeObserver?.disconnect();
     cancelFrames();
     return snapshot;
   }
@@ -134,6 +160,7 @@ export function createChatBottomAnchor({
       if (snapshot.follow) scrollToBottom(snapshot.target);
       else snapshot.target.scrollTop = snapshot.scrollTop;
     }
+    watchLayout(root, snapshot.target, snapshot.epoch);
     watchMedia(root, snapshot.target, snapshot.epoch);
   }
 
@@ -141,7 +168,10 @@ export function createChatBottomAnchor({
     if (!target || el !== target) return;
     if (followBottom || initialAnchor || isNearBottom(target)) scrollToBottom(target);
     scheduleBottom(target);
-    if (root) watchMedia(root, target, epoch);
+    if (root) {
+      watchLayout(root, target, epoch);
+      watchMedia(root, target, epoch);
+    }
   }
 
   function followsBottom(target = el) {
@@ -153,9 +183,11 @@ export function createChatBottomAnchor({
     scrollCleanup = null;
     if (disconnectObserver) disconnectObserver.disconnect();
     disconnectObserver = null;
+    clearResizeObserver();
     clearMedia();
     cancelFrames();
     epoch += 1;
+    bindingVersion += 1;
     el = null;
     initialAnchor = false;
     followBottom = false;

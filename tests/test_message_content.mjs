@@ -13,7 +13,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Minimal browser globals used by utils.js / message_content.js
 globalThis.window = { PAWZOCHAT_BASE: "" };
+const storedValues = new Map();
+globalThis.localStorage = {
+  getItem(key) { return storedValues.get(key) ?? null; },
+  setItem(key, value) { storedValues.set(key, String(value)); },
+};
 globalThis.document = {
+  baseURI: "http://pawzochat.local/app/",
   createElement() {
     let text = "";
     return {
@@ -38,6 +44,10 @@ const modUrl = pathToFileURL(
   join(__dirname, "../pawzochat/web/static/modules/message_content.js"),
 ).href;
 const { parseTextMedia, renderTextMedia } = await import(modUrl);
+const imageLayoutModUrl = pathToFileURL(
+  join(__dirname, "../pawzochat/web/static/modules/image_layout_cache.js"),
+).href;
+const { imageLayoutAttributes, rememberImageLayout } = await import(imageLayoutModUrl);
 
 function types(segments) {
   return segments.map((s) => s.type);
@@ -118,8 +128,42 @@ function imageUrls(segments) {
   assert.match(html, /class="linked-image-fallback"/);
   assert.match(html, /hidden/);
   assert.match(html, /loading="lazy"/);
+  assert.match(html, /onload="PawzoChat\.rememberImageLayout\(this\)"/);
   assert.match(html, /alt="图片"/);
   assert.doesNotMatch(html, /event\.stopPropagation/);
+}
+
+// 已加载图片的天然尺寸会被持久化；角色再次渲染时立即预留空间。
+{
+  const source = "https://cdn.example.com/wide.png#preview";
+  assert.equal(imageLayoutAttributes(source), "");
+  assert.equal(rememberImageLayout({
+    currentSrc: source,
+    naturalWidth: 1200,
+    naturalHeight: 600,
+  }), true);
+  assert.equal(
+    imageLayoutAttributes("https://cdn.example.com/wide.png"),
+    ' style="width:240px;height:auto;aspect-ratio:1200 / 600"',
+  );
+
+  const html = renderTextMedia("![宽图](https://cdn.example.com/wide.png)", {
+    textClass: "msg-bubble",
+    imageClass: "msg-image",
+  });
+  assert.match(html, /style="width:240px;height:auto;aspect-ratio:1200 \/ 600"/);
+  assert.ok(storedValues.has("pawzochat-image-layout-v1"));
+}
+
+// 同一尺寸元数据按当前场景约束缩放，朋友圈缩略图不会使用聊天宽度。
+{
+  assert.equal(
+    imageLayoutAttributes("https://cdn.example.com/wide.png", {
+      maxWidth: 96,
+      maxHeight: 96,
+    }),
+    ' style="width:96px;height:auto;aspect-ratio:1200 / 600"',
+  );
 }
 
 // ---- renderTextMedia (moments comment mode) ----

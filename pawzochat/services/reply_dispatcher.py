@@ -100,6 +100,7 @@ class ReplyDispatcher:
                 persona_id=persona_id,
                 message=stored,
                 is_last=is_last,
+                unread_count=self._app.conversation_store.unread_count(persona_id),
             )
             # Only count as delivered when the channel actually accepted
             # it — lets callers (e.g. ProactiveService) detect wechat send

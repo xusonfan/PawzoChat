@@ -17,9 +17,11 @@
  */
 import { avatarHtml, personaAvatarUrl, profileAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
 import { renderTextMedia, summarizeConversationMessage } from "./message_content.js";
+import { imageLayoutAttributes } from "./image_layout_cache.js";
 import {
-  markConversationReadLocal, mergeConversationsPreserveUnread, unreadBadgeHtml,
-  updateChatTabUnread, updateConversationUnread,
+  isConversationReadContext, markConversationReadLocal,
+  mergeConversationsPreserveUnread, setConversationUnreadCount,
+  unreadBadgeHtml, updateChatTabUnread, updateConversationUnread,
 } from "./unread.js";
 import { api } from "./api.js";
 import { prepareNotificationIcons } from "./notification_feedback.js";
@@ -34,7 +36,8 @@ import {
 } from "./chat_scroll.js";
 import {
   addPendingUserMessage, confirmPendingUserMessage,
-  mergePendingUserMessages, removePendingUserMessage,
+  mergePendingUserMessages, projectPendingConversationSummaries,
+  removePendingUserMessage,
 } from "./chat_pending.js";
 import { shouldShowMessageTime } from "./chat_message_time.js";
 import { hasRenderedMessage, messageSequence } from "./chat_message_identity.js";
@@ -52,6 +55,18 @@ let _pendingQuote = "";
 // response may write state + DOM, so concurrent SSE refreshes cannot flash
 // badges by applying an older payload after a newer one.
 let _conversationsFetchGen = 0;
+
+function _newReadAuditId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+const _readPageId = _newReadAuditId();
+let _readClientId = _readPageId;
+try {
+  _readClientId = localStorage.getItem("pawzoReadClientId") || _newReadAuditId();
+  localStorage.setItem("pawzoReadClientId", _readClientId);
+} catch (e) { /* storage may be unavailable in private/embedded contexts */ }
 
 let _mobileViewportReady = false;
 let _viewportSyncFrame = 0;
@@ -152,6 +167,12 @@ const _STANDARD_EMOJIS = [
 
 /* ---- Chat List (Tab) ---- */
 
+function _mergeConversationState(incoming) {
+  return projectPendingConversationSummaries(
+    mergeConversationsPreserveUnread(state.conversations, incoming || []),
+  );
+}
+
 function _paintChatList(target, desktop) {
   closeConversationMenu();
   if (state.conversations.length === 0) {
@@ -245,10 +266,8 @@ async function renderChatList() {
       api.get("/api/personas"),
     ]);
     if (gen !== _conversationsFetchGen) return;
-    state.conversations = mergeConversationsPreserveUnread(
-      state.conversations,
-      res.conversations || [],
-    );
+    state.conversations = _mergeConversationState(res.conversations);
+    if (isViewingChat()) markConversationReadLocal(state.conversations, chatPersonaId);
     state.personas = pres.personas || [];
     void prepareNotificationIcons(state.personas);
   } catch (e) {
@@ -276,10 +295,7 @@ async function _reloadConversationList() {
   const desktop = isDesktop();
   const target = desktop ? sidebar() : content();
   const res = await api.get("/api/conversations", { bypassCache: true });
-  state.conversations = mergeConversationsPreserveUnread(
-    state.conversations,
-    res.conversations || [],
-  );
+  state.conversations = _mergeConversationState(res.conversations);
   _paintConversationListIfOwned(target, desktop);
 }
 
@@ -366,19 +382,40 @@ export async function startChat(personaId, hasConv) {
 }
 
 export function isViewingChat(personaId = chatPersonaId) {
-  if (!personaId || document.visibilityState !== "visible") return false;
-  const topPage = state.pageStack[state.pageStack.length - 1];
-  return chatPersonaId === personaId && topPage?.name === "chatWindow";
+  const activePage = state.pageStack[state.pageStack.length - 1];
+  return isConversationReadContext({
+    personaId,
+    activePersonaId: chatPersonaId,
+    currentTab: state.currentTab,
+    visibilityState: document.visibilityState,
+    hasFocus: document.hasFocus(),
+    activePage,
+  }) && !!$("chat-msgs");
 }
 
-export async function markConversationRead(personaId = chatPersonaId) {
+export async function markConversationRead(personaId = chatPersonaId, throughSeq = null) {
   if (!isViewingChat(personaId)) return;
   markConversationReadLocal(state.conversations, personaId);
   updateConversationUnread(state.conversations);
   updateChatTabUnread(state.conversations);
+  if (!Number.isInteger(throughSeq) || throughSeq < 0) return;
   try {
-    await api.post(`/api/conversations/${encodeURIComponent(personaId)}/read`, {});
+    await api.post(`/api/conversations/${encodeURIComponent(personaId)}/read`, {
+      through_seq: throughSeq,
+      client_id: _readClientId,
+      page_id: _readPageId,
+    });
   } catch (e) { /* the next list refresh restores server truth */ }
+}
+
+export function applyAssistantUnread(personaId, unreadCount) {
+  const count = isViewingChat(personaId) ? 0 : unreadCount;
+  if (!setConversationUnreadCount(state.conversations, personaId, count)) {
+    void refreshUnreadCounts();
+    return;
+  }
+  updateConversationUnread(state.conversations);
+  updateChatTabUnread(state.conversations);
 }
 
 export async function openChat(personaId, { restored = false } = {}) {
@@ -409,7 +446,11 @@ function renderContentBlocks(content, renderLinkedImages = false) {
   if (emojiBlocks.length > 0) {
     const base = window.PAWZOCHAT_BASE || "";
     return emojiBlocks
-      .map(b => `<div class="msg-emoji"><img src="${esc(base + b.url)}" alt="emoji" data-message-media onclick="PawzoChat.openImagePreview(this.src)"></div>`)
+      .map(b => {
+        const src = base + b.url;
+        const layout = imageLayoutAttributes(src, { maxWidth: 160, maxHeight: 160 });
+        return `<div class="msg-emoji"><img src="${escAttr(src)}" alt="emoji" data-message-media${layout} onload="PawzoChat.rememberImageLayout(this)" onclick="PawzoChat.openImagePreview(this.src)"></div>`;
+      })
       .join("");
   }
   const base = window.PAWZOCHAT_BASE || "";
@@ -425,8 +466,10 @@ function renderContentBlocks(content, renderLinkedImages = false) {
       }
       if (src) {
         const safeSrc = escAttr(src);
+        const layout = imageLayoutAttributes(src);
         parts += `<div class="msg-image linked-image">
-          <img src="${safeSrc}" alt="image" loading="lazy" data-message-media
+          <img src="${safeSrc}" alt="image" loading="lazy" data-message-media${layout}
+            onload="PawzoChat.rememberImageLayout(this)"
             onclick="PawzoChat.openImagePreview(this.src)"
             onerror="this.hidden=true;this.nextElementSibling.hidden=false">
           <a class="linked-image-fallback" href="${safeSrc}" target="_blank" rel="noopener noreferrer" hidden>图片加载失败，打开原链接</a>
@@ -882,18 +925,18 @@ async function renderChatWindow(data) {
   _plusMenuOpen = false;
   _chatInputComposing = false;
 
-  if (cachedMessages) renderMessages(cachedMessages.messages || []);
+  if (cachedMessages) {
+    const cached = cachedMessages.messages || [];
+    renderMessages(cached);
+    markRenderedMessagesRead(renderedPersonaId, cached);
+  }
 
   try {
-    const res = await api.get(messagesUrl, {
-      onUpdate: fresh => {
-        if (_isActiveChatWindow(renderedPersonaId)) {
-          renderMessages(fresh.messages || []);
-        }
-      },
-    });
-    if (!cachedMessages && _isActiveChatWindow(renderedPersonaId)) {
-      renderMessages(res.messages || []);
+    const res = await api.get(messagesUrl, { bypassCache: true });
+    if (_isActiveChatWindow(renderedPersonaId)) {
+      const messages = res.messages || [];
+      renderMessages(messages);
+      markRenderedMessagesRead(renderedPersonaId, messages);
     }
   } catch (e) {
     if (!cachedMessages) toast("加载消息失败", "error");
@@ -963,6 +1006,17 @@ function renderMessages(messages) {
   }
   el.innerHTML = html;
   requestAnimationFrame(() => _chatBottomAnchor.finishRender(renderState, el));
+}
+
+function markRenderedMessagesRead(personaId, messages) {
+  if (!isViewingChat(personaId)) return;
+  const latestSequence = (messages || []).reduce(
+    (latest, message) => Number.isInteger(message?._seq)
+      ? Math.max(latest, message._seq)
+      : latest,
+    0,
+  );
+  if (latestSequence > 0) void markConversationRead(personaId, latestSequence);
 }
 
 export function onChatInput() {
@@ -1821,7 +1875,7 @@ export async function doLinkWechat(accountId) {
     if (res.status >= 400) { toast(res.data.error, "error"); return; }
     toast("已链接账号", "success");
     const convRes = await api.get("/api/conversations");
-    state.conversations = convRes.conversations || [];
+    state.conversations = _mergeConversationState(convRes.conversations);
   } catch (e) { toast("操作失败", "error"); }
   finally { hideLoading(); }
 }
@@ -1835,7 +1889,7 @@ export async function unlinkWechat() {
     await api.del(`/api/conversations/${chatPersonaId}/wechat-link`);
     toast("已断开", "success");
     const convRes = await api.get("/api/conversations");
-    state.conversations = convRes.conversations || [];
+    state.conversations = _mergeConversationState(convRes.conversations);
   } catch (e) { toast("操作失败", "error"); }
   finally { hideLoading(); }
 }
@@ -1862,21 +1916,25 @@ export async function refreshUnreadCounts() {
   try {
     const res = await api.get("/api/conversations", { bypassCache: true });
     if (gen !== _conversationsFetchGen) return;
-    state.conversations = mergeConversationsPreserveUnread(
-      state.conversations,
-      res.conversations || [],
-    );
+    state.conversations = _mergeConversationState(res.conversations);
+    if (isViewingChat()) markConversationReadLocal(state.conversations, chatPersonaId);
     updateConversationUnread(state.conversations);
     updateChatTabUnread(state.conversations);
   } catch (e) { /* keep the last known counts */ }
 }
 
-export async function refreshChatMessages() {
-  if (!chatPersonaId) return;
+export async function refreshChatMessages(personaId = chatPersonaId) {
+  if (!personaId || !isViewingChat(personaId)) return;
   hideTypingIndicator();
   try {
-    const res = await api.get(`/api/conversations/${chatPersonaId}/messages?rounds=10`);
-    renderMessages(res.messages || []);
+    const res = await api.get(
+      `/api/conversations/${personaId}/messages?rounds=10`,
+      { bypassCache: true },
+    );
+    if (!isViewingChat(personaId)) return;
+    const messages = res.messages || [];
+    renderMessages(messages);
+    markRenderedMessagesRead(personaId, messages);
   } catch (e) { /* silent */ }
 }
 

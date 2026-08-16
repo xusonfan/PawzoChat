@@ -38,10 +38,31 @@ export function readBadgeCount(badgeEl) {
   return normalizeUnreadCount(text);
 }
 
+export function isConversationReadContext({
+  personaId,
+  activePersonaId,
+  currentTab,
+  visibilityState,
+  hasFocus,
+  activePage,
+}) {
+  return !!personaId
+    && personaId === activePersonaId
+    && currentTab === "chat"
+    && visibilityState === "visible"
+    && hasFocus === true
+    && activePage?.name === "chatWindow"
+    && activePage?.data?.personaId === personaId;
+}
+
 export function markConversationReadLocal(conversations, personaId) {
+  return setConversationUnreadCount(conversations, personaId, 0);
+}
+
+export function setConversationUnreadCount(conversations, personaId, count) {
   const conversation = (conversations || []).find(item => item.persona_id === personaId);
   if (!conversation) return false;
-  conversation.unread_count = 0;
+  conversation.unread_count = normalizeUnreadCount(count);
   return true;
 }
 

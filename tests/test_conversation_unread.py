@@ -26,13 +26,41 @@ class ConversationUnreadTests(unittest.TestCase):
         store.add_message("cat", "assistant", _text("two"), "llm")
 
         self.assertEqual(store.list_conversations()[0]["unread_count"], 2)
+        self.assertEqual(store.unread_count("cat"), 2)
         self.assertTrue(store.mark_read("cat"))
         self.assertEqual(store.list_conversations()[0]["unread_count"], 0)
+        self.assertEqual(store.unread_count("cat"), 0)
 
         store.add_message("cat", "user", _text("again"), "web")
         self.assertEqual(store.list_conversations()[0]["unread_count"], 0)
         store.add_message("cat", "assistant", _text("three"), "llm")
         self.assertEqual(store.list_conversations()[0]["unread_count"], 1)
+
+    def test_read_marker_only_advances_through_displayed_message(self):
+        store = ConversationStore(self.root)
+        store.create_conversation("cat")
+        first = store.add_message("cat", "assistant", _text("one"), "llm")
+        store.add_message("cat", "assistant", _text("two"), "llm")
+
+        self.assertTrue(store.mark_read("cat", through_seq=first["_seq"]))
+        self.assertEqual(store.unread_count("cat"), 1)
+
+        store.add_message("cat", "assistant", _text("three"), "llm")
+        self.assertTrue(store.mark_read("cat", through_seq=first["_seq"]))
+        self.assertEqual(store.unread_count("cat"), 2)
+
+    def test_future_read_marker_is_ignored_instead_of_clamped(self):
+        store = ConversationStore(self.root)
+        store.create_conversation("cat")
+        store.add_message("cat", "assistant", _text("one"), "llm")
+        store.add_message("cat", "assistant", _text("two"), "llm")
+
+        self.assertTrue(store.mark_read("cat", through_seq=999))
+        self.assertEqual(store.unread_count("cat"), 2)
+        self.assertEqual(
+            store.get_conversation("cat")["last_read_message_seq"],
+            0,
+        )
 
     def test_read_marker_survives_refresh(self):
         store = ConversationStore(self.root)

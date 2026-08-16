@@ -22,6 +22,7 @@ import { api } from "./modules/api.js";
 import { state, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
 import { openImagePreview, closeImagePreview } from "./modules/image_preview.js";
+import { rememberImageLayout } from "./modules/image_layout_cache.js";
 import {
   setTopBar, switchTab, goBack, pushPage,
   registerTabRenderer, registerPageRenderer,
@@ -36,7 +37,7 @@ import { initPwa, requestPwaInstall } from "./modules/pwa.js";
 
 import {
   chatPersonaId, renderChatList, refreshChatMessages, refreshUnreadCounts,
-  isViewingChat, markConversationRead,
+  applyAssistantUnread, isViewingChat, markConversationRead,
   filterConvs, newConversation, startChat, openChat,
   chatMore, clearChat, deleteChat,
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
@@ -251,6 +252,7 @@ function initSSE() {
       if (data.type === "assistant_message") {
         if (data.is_last) state.processingPersonas.delete(data.persona_id);
         const viewingChat = isViewingChat(data.persona_id);
+        applyAssistantUnread(data.persona_id, data.unread_count);
         const persona = state.personas.find(item => item.id === data.persona_id);
         notifyNewMessage(data, {
           isViewing: viewingChat,
@@ -261,7 +263,7 @@ function initSSE() {
         });
         if (viewingChat) {
           appendAssistantMessage(data.message, data.is_last);
-          markConversationRead(data.persona_id);
+          markConversationRead(data.persona_id, data.message?._seq);
         }
       }
       if (data.type === "new_message") {
@@ -308,7 +310,7 @@ window.PawzoChat = {
   switchTab, goBack, pushPage,
   requestPwaInstall,
   closeOverlay, closeConfirm,
-  openImagePreview, closeImagePreview,
+  openImagePreview, closeImagePreview, rememberImageLayout,
   newConversation, startChat, openChat,
   filterConvs, chatMore, clearChat, deleteChat,
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
@@ -547,14 +549,19 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+function syncFocusedChatReadState() {
+  if (!isViewingChat()) return;
+  markConversationRead();
+  refreshChatMessages();
+}
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (!state.sseSource || state.sseSource.readyState === EventSource.CLOSED) initSSE();
-  if (isViewingChat()) {
-    markConversationRead();
-    refreshChatMessages();
-  }
+  syncFocusedChatReadState();
 });
+
+window.addEventListener("focus", syncFocusedChatReadState);
 
 window.addEventListener("online", () => {
   if (!state.sseSource || state.sseSource.readyState === EventSource.CLOSED) initSSE();

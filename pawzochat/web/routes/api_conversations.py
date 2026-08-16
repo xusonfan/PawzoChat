@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from pawzochat.web.routes import get_app
 from pawzochat.web.sse import broadcast
 
 api_conversations_bp = Blueprint("api_conversations", __name__)
+logger = logging.getLogger(__name__)
+
 
 def _images_dir(persona_id: str) -> Path:
     return CHATS_DIR / persona_id / "images"
@@ -136,8 +139,45 @@ def set_conversation_visibility(persona_id: str):
 @api_conversations_bp.route("/<persona_id>/read", methods=["POST"])
 def mark_conversation_read(persona_id: str):
     app = get_app()
-    if not app.conversation_store.mark_read(persona_id):
+    data = request.get_json(silent=True) or {}
+    through_seq = data.get("through_seq")
+    if through_seq is None:
+        logger.warning(
+            "忽略缺少消息序号的已读请求 persona=%s remote=%s ua=%s",
+            persona_id,
+            request.remote_addr or "",
+            str(request.user_agent)[:160],
+        )
+        unread_count = app.conversation_store.unread_count(persona_id)
+        if unread_count is None:
+            return jsonify({"error": "Conversation not found"}), 404
+        return jsonify({
+            "ok": True,
+            "ignored": True,
+            "unread_count": unread_count,
+        })
+    if not isinstance(through_seq, int) or isinstance(through_seq, bool) or through_seq < 0:
+        return jsonify({"error": "through_seq must be a non-negative integer"}), 400
+
+    conversation = app.conversation_store.get_conversation(persona_id)
+    if conversation is None:
         return jsonify({"error": "Conversation not found"}), 404
+    previous_seq = conversation.get("last_read_message_seq", 0)
+    latest_seq = conversation.get("next_message_seq", 1) - 1
+
+    if not app.conversation_store.mark_read(persona_id, through_seq=through_seq):
+        return jsonify({"error": "Conversation not found"}), 404
+    logger.info(
+        "已读请求 persona=%s through=%s previous=%s latest=%s client=%s page=%s remote=%s ua=%s",
+        persona_id,
+        through_seq,
+        previous_seq,
+        latest_seq,
+        str(data.get("client_id", ""))[:64],
+        str(data.get("page_id", ""))[:64],
+        request.remote_addr or "",
+        str(request.user_agent)[:160],
+    )
     broadcast("conversation_updated", persona_id=persona_id)
     return jsonify({"ok": True, "unread_count": 0})
 

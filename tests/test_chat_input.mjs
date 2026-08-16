@@ -59,6 +59,16 @@ assert.match(chatSource, /export function insertEmoji[\s\S]*?_closeEmojiPicker\(
 assert.match(chatSource, /export async function sendChat\(\)/, "公共发送逻辑应保留");
 assert.match(
   chatSource,
+  /const res = await api\.get\(messagesUrl, \{ bypassCache: true \}\)/,
+  "聊天窗口展示缓存后必须再请求一次权威消息快照",
+);
+assert.doesNotMatch(
+  chatSource,
+  /api\.get\(messagesUrl, \{[\s\S]*?onUpdate:/,
+  "已读写入可能使后台重验证失效，聊天窗口不能依赖 onUpdate 获取最新消息",
+);
+assert.match(
+  chatSource,
   /api\.post\([\s\S]*?\/messages`[\s\S]*?\{ keepalive: true \}/,
   "纯文本消息应允许切后台后继续提交",
 );

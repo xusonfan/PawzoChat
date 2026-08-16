@@ -43,6 +43,7 @@ class FakeScroller {
     this.clientHeight = 200;
     this.scrollHeight = 1000;
     this.images = images;
+    this.children = [];
     this.listeners = new Map();
     this.lastElementChild = null;
   }
@@ -60,13 +61,37 @@ class FakeScroller {
   }
 }
 
-function harness() {
+class FakeResizeObserver {
+  constructor(callback) {
+    this.callback = callback;
+    this.targets = new Set();
+    this.disconnectCount = 0;
+  }
+  observe(target) { this.targets.add(target); }
+  disconnect() {
+    this.disconnectCount += 1;
+    this.targets.clear();
+  }
+  notify(target) {
+    if (this.targets.has(target)) this.callback([{ target }]);
+  }
+}
+
+function harness({ withResizeObserver = false } = {}) {
   const frames = frameQueue();
+  const observers = [];
   const anchor = createChatBottomAnchor({
     requestFrame: callback => frames.request(callback),
     cancelFrame: id => frames.cancel(id),
+    createResizeObserver: withResizeObserver
+      ? callback => {
+        const observer = new FakeResizeObserver(callback);
+        observers.push(observer);
+        return observer;
+      }
+      : null,
   });
-  return { anchor, frames };
+  return { anchor, frames, observers };
 }
 
 // 初始历史里的延迟图片完成后继续锚定底部。
@@ -146,6 +171,72 @@ function harness() {
   frames.flush();
   assert.equal(oldImage.listeners.size, 0);
   assert.equal(newScroller.scrollTop, 200);
+}
+
+// 消息行在图片事件之后继续变高时，只要仍贴底就再次校正。
+{
+  const row = {};
+  const scroller = new FakeScroller();
+  scroller.children = [row];
+  scroller.lastElementChild = row;
+  const { anchor, frames, observers } = harness({ withResizeObserver: true });
+  anchor.bind(scroller, { initial: true });
+  const render = anchor.beginRender(scroller);
+  anchor.finishRender(render, scroller);
+  assert.equal(observers.length, 1);
+  assert.equal(observers[0].targets.has(row), true);
+  scroller.scrollHeight = 1800;
+  observers[0].notify(row);
+  frames.flush();
+  assert.equal(scroller.scrollTop, 1800);
+}
+
+// 用户主动上滑后，后续尺寸变化不能强制拉回底部。
+{
+  const row = {};
+  const scroller = new FakeScroller();
+  scroller.children = [row];
+  const { anchor, frames, observers } = harness({ withResizeObserver: true });
+  anchor.bind(scroller, { initial: true });
+  const render = anchor.beginRender(scroller);
+  anchor.finishRender(render, scroller);
+  scroller.userScroll(100);
+  scroller.scrollHeight = 1800;
+  observers[0].notify(row);
+  frames.flush();
+  assert.equal(scroller.scrollTop, 100);
+  assert.equal(frames.size, 0);
+}
+
+// 重绑和销毁都会断开旧观察器，已排队的旧回调也不能再生效。
+{
+  const oldRow = {};
+  const newRow = {};
+  const scroller = new FakeScroller();
+  scroller.children = [oldRow];
+  const { anchor, frames, observers } = harness({ withResizeObserver: true });
+  anchor.bind(scroller, { initial: true });
+  const oldRender = anchor.beginRender(scroller);
+  anchor.finishRender(oldRender, scroller);
+  const oldObserver = observers[0];
+
+  anchor.bind(scroller, { initial: true });
+  assert.equal(oldObserver.disconnectCount, 2);
+  scroller.scrollTop = 100;
+  oldObserver.callback([{ target: oldRow }]);
+  frames.flush();
+  assert.equal(scroller.scrollTop, 100);
+
+  scroller.children = [newRow];
+  const newRender = anchor.beginRender(scroller);
+  anchor.finishRender(newRender, scroller);
+  const activeObserver = observers[1];
+  anchor.dispose();
+  assert.equal(activeObserver.disconnectCount, 2);
+  scroller.scrollTop = 120;
+  activeObserver.callback([{ target: newRow }]);
+  frames.flush();
+  assert.equal(scroller.scrollTop, 120);
 }
 
 // 页面根节点替换时，生命周期观察器立即释放旧媒体监听。

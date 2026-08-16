@@ -135,6 +135,8 @@ function _replyTextHtml(text) {
     // Drop newlines that only sit at text↔image edges (avoids blank <br> rows).
     trimMediaBoundaryNewlines: true,
     stopPropagation: true,
+    imageMaxWidth: 96,
+    imageMaxHeight: 96,
   });
 }
 

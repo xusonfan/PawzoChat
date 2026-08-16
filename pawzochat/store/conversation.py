@@ -480,16 +480,40 @@ class ConversationStore:
             cut = starts[-count]
             return messages[cut:]
 
-    def mark_read(self, persona_id: str) -> bool:
-        """Advance the durable read marker to the latest stored message."""
+    def unread_count(self, persona_id: str) -> int | None:
+        """Return the current assistant-message unread count for one chat."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return None
+            last_read_seq = data.get("last_read_message_seq", 0)
+            return sum(
+                1 for message in data.get("messages", [])
+                if message.get("role") == "assistant"
+                and message.get("_seq", 0) > last_read_seq
+            )
+
+    def mark_read(self, persona_id: str, through_seq: int | None = None) -> bool:
+        """Advance the durable read marker through an actually displayed message."""
         lock = self._get_lock(persona_id)
         with lock:
             data = self._read_file(persona_id)
             if data is None:
                 return False
             latest_seq = data.get("next_message_seq", 1) - 1
-            if data.get("last_read_message_seq", 0) != latest_seq:
-                data["last_read_message_seq"] = latest_seq
+            if through_seq is not None and through_seq > latest_seq:
+                logger.warning(
+                    "忽略超出会话范围的已读序号 persona=%s through=%s latest=%s",
+                    persona_id,
+                    through_seq,
+                    latest_seq,
+                )
+                return True
+            target_seq = latest_seq if through_seq is None else through_seq
+            target_seq = max(data.get("last_read_message_seq", 0), target_seq, 0)
+            if data.get("last_read_message_seq", 0) != target_seq:
+                data["last_read_message_seq"] = target_seq
                 self._write_file(persona_id, data)
             return True
 

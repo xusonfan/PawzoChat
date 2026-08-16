@@ -56,6 +56,60 @@ export function mergePendingUserMessages(personaId, serverMessages) {
   return [...serverMessages, ...remaining.map(entry => entry.message)];
 }
 
+function toConversationLastMessage(message) {
+  const content = Array.isArray(message?.content) ? message.content : [];
+  const first = content.find(block => block && typeof block === "object");
+  let text = "";
+  if (first?.type === "emoji") text = "[表情]";
+  else if (first?.type === "image") text = "[图片]";
+  else if (first?.type === "file") text = "[文件]";
+  else if (first?.type === "voice") text = "[语音]";
+  else text = first?.text || "";
+  return {
+    role: message?.role || "user",
+    text,
+    has_image: content.some(block => block?.type === "image"),
+    source: message?.source || "web",
+    timestamp: message?.timestamp || "",
+  };
+}
+
+function timestampValue(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function projectPendingConversationSummaries(conversations) {
+  const projected = (conversations || []).map(conversation => {
+    const pending = pendingByPersona.get(conversation.persona_id) || [];
+    if (!pending.length) return conversation;
+
+    const serverTimestamp = timestampValue(
+      conversation.last_message?.timestamp || conversation.updated_at,
+    );
+    const remaining = pending.filter(
+      entry => timestampValue(entry.message?.timestamp) > serverTimestamp,
+    );
+    if (remaining.length) pendingByPersona.set(conversation.persona_id, remaining);
+    else {
+      pendingByPersona.delete(conversation.persona_id);
+      return conversation;
+    }
+
+    const latest = remaining[remaining.length - 1].message;
+    return {
+      ...conversation,
+      updated_at: latest.timestamp || conversation.updated_at,
+      last_message: toConversationLastMessage(latest),
+    };
+  });
+  return projected.sort((left, right) => {
+    const pinOrder = Number(!!right.pinned) - Number(!!left.pinned);
+    if (pinOrder) return pinOrder;
+    return timestampValue(right.updated_at) - timestampValue(left.updated_at);
+  });
+}
+
 export function clearPendingUserMessages(personaId) {
   pendingByPersona.delete(personaId);
 }

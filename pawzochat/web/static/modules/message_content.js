@@ -8,6 +8,7 @@
  * (at your option) any later version.
  */
 import { esc, escAttr } from "./utils.js";
+import { imageLayoutAttributes } from "./image_layout_cache.js";
 
 const MARKDOWN_IMAGE_PATTERNS = [
   {
@@ -180,6 +181,7 @@ function normalizeMediaBoundaryNewlines(segments) {
  * - preserveNewlines: convert \n to <br> in text segments
  * - trimMediaBoundaryNewlines: strip newlines at text↔image edges (moments)
  * - stopPropagation: stop click bubbling before openImagePreview / fallback link
+ * - imageMaxWidth / imageMaxHeight: reserve the cached rendered image footprint
  */
 export function renderTextMedia(text, {
   textClass,
@@ -188,6 +190,8 @@ export function renderTextMedia(text, {
   preserveNewlines = false,
   trimMediaBoundaryNewlines = false,
   stopPropagation = false,
+  imageMaxWidth = 240,
+  imageMaxHeight = imageMaxWidth,
 } = {}) {
   const clickPrefix = stopPropagation ? "event.stopPropagation();" : "";
   const fallbackClick = stopPropagation
@@ -212,10 +216,15 @@ export function renderTextMedia(text, {
 
     const url = escAttr(segment.url);
     const alt = escAttr(segment.alt || "图片");
+    const layout = imageLayoutAttributes(segment.url, {
+      maxWidth: imageMaxWidth,
+      maxHeight: imageMaxHeight,
+    });
     // Compact markup: leading whitespace text nodes inside inline-block +
     // block img create an extra empty line above the thumbnail.
     return `<${wrapTag} class="${imageClass} linked-image">`
-      + `<img src="${url}" alt="${alt}" loading="lazy" data-message-media`
+      + `<img src="${url}" alt="${alt}" loading="lazy" data-message-media${layout}`
+      + ` onload="PawzoChat.rememberImageLayout(this)"`
       + ` onclick="${clickPrefix}PawzoChat.openImagePreview(this.src)"`
       + ` onerror="this.hidden=true;this.nextElementSibling.hidden=false">`
       + `<a class="linked-image-fallback" href="${url}" target="_blank" rel="noopener noreferrer" hidden${fallbackClick}>图片加载失败，打开原链接</a>`

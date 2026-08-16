@@ -117,6 +117,26 @@ const mod = await import(pathToFileURL(
 assert.equal(mod.formatUnreadCount(0), "0");
 assert.equal(mod.formatUnreadCount(99), "99");
 assert.equal(mod.formatUnreadCount(100), "99+");
+const readContext = {
+  personaId: "cat",
+  activePersonaId: "cat",
+  currentTab: "chat",
+  visibilityState: "visible",
+  hasFocus: true,
+  activePage: { name: "chatWindow", data: { personaId: "cat" } },
+};
+assert.equal(mod.isConversationReadContext(readContext), true);
+assert.equal(mod.isConversationReadContext({ ...readContext, currentTab: "contacts" }), false);
+assert.equal(mod.isConversationReadContext({ ...readContext, visibilityState: "hidden" }), false);
+assert.equal(mod.isConversationReadContext({ ...readContext, hasFocus: false }), false);
+assert.equal(mod.isConversationReadContext({
+  ...readContext,
+  activePage: { name: "chatWindow", data: { personaId: "dog" } },
+}), false);
+assert.equal(mod.isConversationReadContext({
+  ...readContext,
+  activePage: { name: "memoryManage", data: { personaId: "cat" } },
+}), false);
 const conversations = [
   { persona_id: "cat", unread_count: 2 },
   { persona_id: "dog", unread_count: 5 },
@@ -125,7 +145,10 @@ const conversations = [
 assert.equal(mod.totalUnread(conversations), 7);
 assert.equal(mod.markConversationReadLocal(conversations, "cat"), true);
 assert.equal(conversations[0].unread_count, 0);
-assert.equal(mod.totalUnread(conversations), 5);
+assert.equal(mod.setConversationUnreadCount(conversations, "cat", 3), true);
+assert.equal(conversations[0].unread_count, 3);
+assert.equal(mod.setConversationUnreadCount(conversations, "missing", 8), false);
+assert.equal(mod.totalUnread(conversations), 8);
 assert.equal(mod.unreadBadgeHtml(0), "");
 assert.match(mod.unreadBadgeHtml(3), /role="status"/);
 assert.match(mod.unreadBadgeHtml(3), /data-count="3"/);
