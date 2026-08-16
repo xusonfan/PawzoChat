@@ -189,6 +189,7 @@ async function renderMcpServerDetail(data) {
   } else {
     infoRows += `<div class="form-group"><div class="form-row"><label>URL</label><span style="${vs};word-break:break-all;font-size:12px">${esc(server.url || "—")}</span></div></div>`;
   }
+  infoRows += `<div class="form-group"><div class="form-row"><label>工具超时</label><span style="${vs}">${server.timeout_seconds ? `${server.timeout_seconds} 秒` : "默认（30 秒）"}</span></div></div>`;
   infoRows += `<div class="form-group"><div class="form-row"><label>工具数</label><span style="${vs}">${server.tool_count}</span></div></div>`;
 
   const actionsHtml = _isPublic ? "" : `<div class="mcp-actions">
@@ -258,7 +259,7 @@ async function renderMcpServerEdit(data) {
 async function _renderFormMode(isNew, oldName) {
   let server = {
     name: "", transport: "stdio", command: "", args: [], env_keys: [],
-    env_has_value: {}, url: "", enabled: true,
+    env_has_value: {}, url: "", enabled: true, timeout_seconds: null,
   };
 
   if (!isNew && oldName) {
@@ -327,6 +328,12 @@ async function _renderFormMode(isNew, oldName) {
         <label>启用</label>
         <label class="switch-wrap"><input type="checkbox" id="mcp-enabled" ${server.enabled ? "checked" : ""}><span class="switch-track"></span></label>
       </div></div>
+      <div class="form-group"><div class="form-row">
+        <label>工具超时（秒）</label>
+        <input type="number" id="mcp-timeout" min="1" max="600" step="1"
+          value="${server.timeout_seconds ?? ""}" placeholder="默认 30">
+      </div></div>
+      <div class="form-hint">单次工具调用的最长等待时间，留空使用默认 30 秒</div>
     </div>
     <div style="padding:0 16px;margin-top:12px">
       <button class="btn-outline btn-test" id="mcp-test-btn" onclick="PawzoChat.mcpTestConnection('${esc(isNew ? "" : oldName)}')">测试连接</button>
@@ -910,6 +917,10 @@ function _buildServerBody() {
     transport,
     enabled: $("mcp-enabled")?.checked ?? true,
   };
+  const timeoutRaw = $("mcp-timeout")?.value.trim() || "";
+  const timeoutNum = Math.trunc(Number(timeoutRaw));
+  body.timeout_seconds = (timeoutRaw && Number.isFinite(timeoutNum) && timeoutNum > 0)
+    ? timeoutNum : null;
   if (transport === "stdio") {
     body.command = $("mcp-command")?.value.trim() || "";
     body.args = ($("mcp-args")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);

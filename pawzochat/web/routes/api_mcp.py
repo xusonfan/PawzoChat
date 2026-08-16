@@ -52,6 +52,20 @@ def _validate_name(name: str) -> str | None:
     return None
 
 
+_TIMEOUT_MAX_SECONDS = 600
+
+
+def _parse_timeout_seconds(value) -> int | None:
+    """Parse per-server tool-call timeout; None means unset (default 30s)."""
+    if value is None or isinstance(value, bool) or value == "":
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
 def _server_summary(name: str, cfg: dict, runtime: dict | None) -> dict:
     """Build a JSON-safe summary for one MCP server."""
     transport = cfg.get("transport", "stdio")
@@ -62,6 +76,10 @@ def _server_summary(name: str, cfg: dict, runtime: dict | None) -> dict:
         "connected": False,
         "tool_count": 0,
     }
+
+    timeout_seconds = _parse_timeout_seconds(cfg.get("timeout_seconds"))
+    if timeout_seconds is not None:
+        out["timeout_seconds"] = timeout_seconds
 
     if transport == "stdio":
         out["command"] = cfg.get("command", "")
@@ -121,6 +139,10 @@ def create_server():
         "enabled": data.get("enabled", True),
     }
 
+    timeout_seconds = _parse_timeout_seconds(data.get("timeout_seconds"))
+    if timeout_seconds is not None:
+        entry["timeout_seconds"] = min(timeout_seconds, _TIMEOUT_MAX_SECONDS)
+
     if transport == "stdio":
         entry["command"] = data.get("command", "")
         entry["args"] = list(data.get("args", []))
@@ -164,6 +186,14 @@ def update_server(name: str):
         "transport": transport,
         "enabled": data.get("enabled", old_cfg.get("enabled", True)),
     }
+
+    raw_timeout = (
+        data["timeout_seconds"] if "timeout_seconds" in data
+        else old_cfg.get("timeout_seconds")
+    )
+    timeout_seconds = _parse_timeout_seconds(raw_timeout)
+    if timeout_seconds is not None:
+        entry["timeout_seconds"] = min(timeout_seconds, _TIMEOUT_MAX_SECONDS)
 
     if transport == "stdio":
         entry["command"] = data.get("command", old_cfg.get("command", ""))
@@ -290,6 +320,10 @@ def batch_create_servers():
             "transport": transport,
             "enabled": cfg.get("enabled", True),
         }
+
+        timeout_seconds = _parse_timeout_seconds(cfg.get("timeout_seconds"))
+        if timeout_seconds is not None:
+            entry["timeout_seconds"] = min(timeout_seconds, _TIMEOUT_MAX_SECONDS)
 
         if transport == "stdio":
             entry["command"] = cfg.get("command", "")

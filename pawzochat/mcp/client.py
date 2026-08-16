@@ -144,6 +144,18 @@ class MCPClient:
         return self.config.get("transport", "stdio")
 
     @property
+    def configured_timeout(self) -> float | None:
+        """Per-server tool-call timeout (seconds); None means unset."""
+        raw = self.config.get("timeout_seconds")
+        if raw is None or isinstance(raw, bool):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return val if val > 0 else None
+
+    @property
     def is_connected(self) -> bool:
         return self._session is not None
 

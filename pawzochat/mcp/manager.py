@@ -192,7 +192,8 @@ class MCPManager:
         ``timeout`` bounds the wait in seconds; on expiry the underlying
         future is cancelled and a clearly-labelled timeout block is returned
         so the LLM can see it was a timeout (not a malformed result) and
-        stop hammering the tool.
+        stop hammering the tool. Servers may pin their own ``timeout_seconds``
+        in config, which overrides the caller-supplied value.
 
         Returns structured ``ContentBlock`` list.
         """
@@ -203,6 +204,10 @@ class MCPManager:
 
         if not self._loop:
             return [ContentBlock(type="text", text="MCP event loop not running")]
+
+        server_timeout = client.configured_timeout
+        if server_timeout is not None:
+            timeout = server_timeout
 
         future = asyncio.run_coroutine_threadsafe(
             client.call_tool(tool_name, arguments), self._loop,
