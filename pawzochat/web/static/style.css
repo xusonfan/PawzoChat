@@ -372,6 +372,23 @@ body {
 .card-row + .card-row { border-top: 1px solid var(--divider); margin-left: 0; }
 .card-row .row-label { flex: 1; font-size: 15px; }
 .card-row .row-value { font-size: 14px; color: var(--text-2); margin-right: 4px; }
+.card-row.card-row-multiline {
+  align-items: flex-start;
+  gap: 16px;
+}
+.card-row-multiline .row-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.card-row-multiline .row-value {
+  flex: 1;
+  min-width: 0;
+  margin-right: 0;
+  line-height: 1.5;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 .row-arrow {
   color: var(--text-3);
   font-size: 14px;

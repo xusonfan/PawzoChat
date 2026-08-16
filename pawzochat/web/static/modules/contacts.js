@@ -525,7 +525,7 @@ async function renderPersonaSettings(data) {
         <div class="card-row"><span class="row-label">状态</span><span class="row-value">${igEnabled ? '已开启' : '已关闭'}</span></div>
         <div class="card-row"><span class="row-label">服务商</span><span class="row-value" style="${truncStyle(ig.provider, 0)}">${esc(ig.provider || "未配置")}</span></div>
         <div class="card-row"><span class="row-label">模型</span><span class="row-value" style="${truncStyle(ig.model, 0)}">${esc(ig.model || "未选择")}</span></div>
-        <div class="card-row"><span class="row-label">画面风格</span><span class="row-value" style="${truncStyle(ig.art_style, 0)}">${trunc(ig.art_style, 40)}</span></div>
+        <div class="card-row card-row-multiline"><span class="row-label">画面风格</span><span class="row-value" style="${truncStyle(ig.art_style, 0)}">${trunc(ig.art_style, 40)}</span></div>
         <div class="card-row"><span class="row-label">负面提示词</span><span class="row-value">${ig.negative_enabled !== false ? '已开启' : '已关闭'}</span></div>
         <div class="card-row"><span class="row-label">参考图模式</span><span class="row-value">${esc(refModeText)}</span></div>
         ${refImgRow}
