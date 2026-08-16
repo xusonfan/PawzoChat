@@ -29,8 +29,14 @@ export const state = {
   profile: { name: "我", has_avatar: false },
 };
 
+let _mobileTabContentTarget = null;
+
+export function setMobileTabContentTarget(target) {
+  _mobileTabContentTarget = target;
+}
+
 export const $ = id => document.getElementById(id);
-export const content = () => $("content-area");
+export const content = () => _mobileTabContentTarget || $("content-area");
 export const sidebar = () => $("sidebar-body");
 export const topTitle = () => $("top-bar-title");
 export const topBack = () => $("top-bar-back");

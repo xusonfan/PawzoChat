@@ -15,7 +15,10 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-import { state, $, content, sidebar, topTitle, topBack, topActions } from "./state.js";
+import {
+  state, $, content, sidebar, topTitle, topBack, topActions,
+  setMobileTabContentTarget,
+} from "./state.js";
 
 const tabRenderers = {};
 const pageRenderers = {};
@@ -59,10 +62,14 @@ export function isDesktop() {
 /* ---- Mobile tab swipe ---- */
 
 const _tabSwipe = {
-  minDistance: 56,
-  axisRatio: 1.25,
+  startDistance: 8,
+  axisRatio: 1.18,
+  commitRatio: 0.24,
+  commitVelocity: 0.38,
+  settleDuration: 180,
 };
 let _tabSwipeInitialized = false;
+let _activeTabSettle = null;
 
 function _isSwipeExcludedTarget(target, boundary) {
   if (!(target instanceof Element)) return true;
@@ -77,31 +84,169 @@ function _isSwipeExcludedTarget(target, boundary) {
   return false;
 }
 
+function _tabNames() {
+  return [...document.querySelectorAll("#tab-bar .tab")].map(tab => tab.dataset.tab);
+}
+
 function _adjacentTab(delta) {
-  const tabs = [...document.querySelectorAll("#tab-bar .tab")].map(tab => tab.dataset.tab);
+  const tabs = _tabNames();
   const currentIndex = tabs.indexOf(state.currentTab);
   return tabs[currentIndex + delta] || null;
 }
 
+function _clampSwipeDistance(dx, direction, width) {
+  if (direction > 0) return Math.max(-width, Math.min(0, dx));
+  return Math.min(width, Math.max(0, dx));
+}
+
+function _setSwipePosition(stage, dx) {
+  const offset = _clampSwipeDistance(dx, stage.direction, stage.width);
+  stage.offset = offset;
+  stage.track.style.transform = `translate3d(${stage.baseOffset + offset}px, 0, 0)`;
+}
+
+function _createSwipeStage(direction) {
+  const viewport = $("content-area");
+  const currentPanel = _currentMobileTabPanel();
+  const targetTab = _adjacentTab(direction);
+  if (!viewport || !currentPanel || !targetTab) return null;
+
+  const currentChrome = _snapshotChrome();
+  const targetEntry = _takeTabEntry(targetTab);
+  const rendered = targetEntry || _renderMobileTabPanel(targetTab, currentPanel, currentChrome);
+  if (!rendered?.panel) return null;
+
+  const track = document.createElement("div");
+  track.className = "mobile-tab-swipe-track";
+  if (direction > 0) {
+    track.append(currentPanel, rendered.panel);
+  } else {
+    track.append(rendered.panel, currentPanel);
+  }
+  viewport.innerHTML = "";
+  viewport.appendChild(track);
+  viewport.classList.add("mobile-tab-swipe-active");
+  requestAnimationFrame(() => { rendered.panel.scrollTop = rendered.scroll || 0; });
+
+  const width = Math.max(1, viewport.clientWidth);
+  const stage = {
+    viewport,
+    track,
+    width,
+    direction,
+    baseOffset: direction > 0 ? 0 : -width,
+    offset: 0,
+    currentTab: state.currentTab,
+    currentPanel,
+    currentChrome,
+    targetTab,
+    targetPanel: rendered.panel,
+    targetChrome: rendered.chrome,
+  };
+  _setSwipePosition(stage, 0);
+  return stage;
+}
+
+function _cacheSwipePanel(tab, panel, chrome) {
+  _tabCache.set(tab, {
+    panel,
+    scroll: panel.scrollTop,
+    mode: "mobile",
+    chrome,
+  });
+}
+
+function _finishSwipeStage(stage, committed) {
+  const selectedPanel = committed ? stage.targetPanel : stage.currentPanel;
+  const discardedPanel = committed ? stage.currentPanel : stage.targetPanel;
+  const selectedTab = committed ? stage.targetTab : stage.currentTab;
+  const discardedTab = committed ? stage.currentTab : stage.targetTab;
+  const selectedChrome = committed ? stage.targetChrome : stage.currentChrome;
+  const discardedChrome = committed ? stage.currentChrome : stage.targetChrome;
+
+  selectedPanel.remove();
+  discardedPanel.remove();
+  stage.track.remove();
+  stage.viewport.classList.remove("mobile-tab-swipe-active");
+  stage.viewport.appendChild(selectedPanel);
+  setMobileTabContentTarget(selectedPanel);
+  _cacheSwipePanel(discardedTab, discardedPanel, discardedChrome);
+  _restoreChrome(selectedChrome);
+
+  if (committed) {
+    state.tabScrollPos[stage.currentTab] = stage.currentPanel.scrollTop;
+    _activateTab(selectedTab);
+    _writeBrowserRoute("replace");
+  }
+}
+
+function _settleSwipeStage(stage, committed) {
+  const destination = committed ? -stage.direction * stage.width : 0;
+  const remaining = Math.abs(destination - stage.offset);
+  if (remaining < 1) {
+    _finishSwipeStage(stage, committed);
+    return;
+  }
+
+  const duration = Math.round(Math.max(
+    70,
+    _tabSwipe.settleDuration * Math.min(1, remaining / stage.width),
+  ));
+  stage.track.style.setProperty("--tab-swipe-settle-duration", `${duration}ms`);
+  stage.track.classList.add("settling");
+
+  let finished = false;
+  let fallbackTimer = null;
+  const onTransitionEnd = event => {
+    if (event.target === stage.track && event.propertyName === "transform") finish();
+  };
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+    stage.track.removeEventListener("transitionend", onTransitionEnd);
+    if (_activeTabSettle?.finish === finish) _activeTabSettle = null;
+    _finishSwipeStage(stage, committed);
+  };
+  _activeTabSettle = { finish };
+  stage.track.addEventListener("transitionend", onTransitionEnd);
+  requestAnimationFrame(() => _setSwipePosition(stage, destination));
+  fallbackTimer = setTimeout(finish, duration + 40);
+}
+
+function _finishActiveTabSettle() {
+  _activeTabSettle?.finish();
+}
+
 export function initMobileTabSwipe() {
   if (_tabSwipeInitialized) return;
-  const area = content();
+  const area = $("content-area");
   if (!area) return;
   _tabSwipeInitialized = true;
 
   let gesture = null;
-
   const reset = () => { gesture = null; };
 
   area.addEventListener("touchstart", event => {
-    if (isDesktop() || state.pageStack.length !== 0 || event.touches.length !== 1) {
+    _finishActiveTabSettle();
+    if (isDesktop()
+      || state.pageStack.length !== 0
+      || event.touches.length !== 1) {
       reset();
       return;
     }
     const touch = event.touches[0];
     gesture = _isSwipeExcludedTarget(event.target, area)
       ? null
-      : { startX: touch.clientX, startY: touch.clientY, horizontal: false };
+      : {
+          startX: touch.clientX,
+          startY: touch.clientY,
+          lastX: touch.clientX,
+          lastTime: event.timeStamp,
+          velocityX: 0,
+          horizontal: false,
+          stage: null,
+        };
   }, { passive: true });
 
   area.addEventListener("touchmove", event => {
@@ -111,13 +256,22 @@ export function initMobileTabSwipe() {
     const dy = touch.clientY - gesture.startY;
 
     if (!gesture.horizontal) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+      if (Math.abs(dy) > _tabSwipe.startDistance && Math.abs(dy) >= Math.abs(dx)) {
         reset();
         return;
       }
-      gesture.horizontal = Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy);
+      if (Math.abs(dx) < _tabSwipe.startDistance
+        || Math.abs(dx) < Math.abs(dy) * _tabSwipe.axisRatio) return;
+      gesture.horizontal = true;
+      gesture.stage = _createSwipeStage(dx < 0 ? 1 : -1);
     }
-    if (gesture.horizontal) event.preventDefault();
+
+    event.preventDefault();
+    const elapsed = Math.max(1, event.timeStamp - gesture.lastTime);
+    gesture.velocityX = (touch.clientX - gesture.lastX) / elapsed;
+    gesture.lastX = touch.clientX;
+    gesture.lastTime = event.timeStamp;
+    if (gesture.stage) _setSwipePosition(gesture.stage, dx);
   }, { passive: false });
 
   area.addEventListener("touchend", event => {
@@ -125,19 +279,21 @@ export function initMobileTabSwipe() {
       reset();
       return;
     }
-    const touch = event.changedTouches[0];
-    const dx = touch.clientX - gesture.startX;
-    const dy = touch.clientY - gesture.startY;
-    const isHorizontalSwipe = Math.abs(dx) >= _tabSwipe.minDistance
-      && Math.abs(dx) >= Math.abs(dy) * _tabSwipe.axisRatio;
+    const { stage, velocityX } = gesture;
     reset();
+    if (!stage || isDesktop() || state.pageStack.length !== 0) return;
 
-    if (!isHorizontalSwipe || isDesktop() || state.pageStack.length !== 0) return;
-    const nextTab = _adjacentTab(dx < 0 ? 1 : -1);
-    if (nextTab) switchTab(nextTab);
+    const progress = Math.abs(stage.offset) / stage.width;
+    const velocityCommits = Math.abs(velocityX) >= _tabSwipe.commitVelocity
+      && Math.sign(velocityX) === -stage.direction;
+    _settleSwipeStage(stage, progress >= _tabSwipe.commitRatio || velocityCommits);
   }, { passive: true });
 
-  area.addEventListener("touchcancel", reset, { passive: true });
+  area.addEventListener("touchcancel", () => {
+    const stage = gesture?.stage;
+    reset();
+    if (stage) _settleSwipeStage(stage, false);
+  }, { passive: true });
 }
 
 /* ---- Top / Sidebar bar helpers ---- */
@@ -186,7 +342,7 @@ function resetContentScroll() {
 function renderCurrentTab() {
   resetContentScroll();
   const fn = tabRenderers[state.currentTab];
-  if (fn) fn();
+  return fn ? fn() : undefined;
 }
 
 function renderPage(name, data) {
@@ -216,10 +372,12 @@ export function refreshSidebar() {
 /* ---- Desktop welcome screen ---- */
 
 function showDesktopWelcome() {
+  setMobileTabContentTarget(null);
+  const viewport = $("content-area");
   $("top-bar").classList.add("desktop-hidden");
-  content().style.overflow = "";
+  viewport.style.overflow = "";
   const base = window.PAWZOCHAT_BASE || "";
-  content().innerHTML = `<div class="desktop-welcome">
+  viewport.innerHTML = `<div class="desktop-welcome">
     <div class="welcome-icon"><img src="${base}/static/logo.png" alt="PawzoChat"></div>
     <div class="welcome-title">PawzoChat</div>
   </div>`;
@@ -227,21 +385,72 @@ function showDesktopWelcome() {
 
 /* ---- Tab DOM cache ---- */
 
-// Detach the rendered tab root before navigating away so the next visit can
-// restore it instantly — preserves scroll position, input state, and event
-// listeners that were attached to the live nodes. Snapshots are dropped
-// wholesale on any api.invalidate (see the `pawzo:api-invalidated` listener
-// below) so they can never serve data that's been overwritten by a write.
-const _tabCache = new Map(); // tab -> { container, fragment, scroll, mode, chrome }
+// Detach each rendered tab root before navigating away so the next visit can
+// restore it instantly. Mobile roots remain independent scroll panels; desktop
+// roots remain document fragments. Both preserve input state and event listeners.
+// Snapshots are dropped on api.invalidate so stale server data is never restored.
+const _tabCache = new Map();
 
 function _activeMode() {
   return isDesktop() ? "desktop" : "mobile";
 }
 
-function _tabContainer() {
-  // On desktop the tab body lives in the sidebar; on mobile, in the content
-  // area. Both are populated by the renderer's `target = desktop ? sidebar() : content()` pattern.
-  return isDesktop() ? sidebar() : content();
+function _createMobileTabPanel(tab) {
+  const panel = document.createElement("div");
+  panel.className = "mobile-tab-panel";
+  panel.dataset.tabPanel = tab;
+  return panel;
+}
+
+function _currentMobileTabPanel() {
+  const target = content();
+  return target?.classList?.contains("mobile-tab-panel") ? target : null;
+}
+
+function _preparePageContent() {
+  if (isDesktop()) return;
+  setMobileTabContentTarget(null);
+  const viewport = $("content-area");
+  viewport.classList.remove("mobile-tab-swipe-active");
+  viewport.innerHTML = "";
+}
+
+function _takeTabEntry(tab) {
+  const entry = _tabCache.get(tab);
+  if (!entry) return null;
+  _tabCache.delete(tab);
+  if (entry.mode !== _activeMode()) return null;
+  return entry;
+}
+
+function _renderMobileTabPanel(tab, returnPanel = null, returnChrome = null) {
+  const panel = _createMobileTabPanel(tab);
+  const previousTab = state.currentTab;
+  state.currentTab = tab;
+  setMobileTabContentTarget(panel);
+  const fn = tabRenderers[tab];
+  if (fn) fn();
+  const chrome = _snapshotChrome();
+  state.currentTab = previousTab;
+  setMobileTabContentTarget(returnPanel);
+  if (returnChrome) _restoreChrome(returnChrome);
+  return {
+    panel,
+    chrome,
+    mode: "mobile",
+    scroll: state.tabScrollPos[tab] || 0,
+  };
+}
+
+function _mountFreshMobileTab(tab) {
+  const viewport = $("content-area");
+  const panel = _createMobileTabPanel(tab);
+  viewport.classList.remove("mobile-tab-swipe-active");
+  viewport.innerHTML = "";
+  viewport.appendChild(panel);
+  setMobileTabContentTarget(panel);
+  renderCurrentTab();
+  panel.scrollTop = state.tabScrollPos[tab] || 0;
 }
 
 function _snapshotChrome() {
@@ -286,10 +495,23 @@ function _restoreChrome(chrome) {
 }
 
 function _saveTabDom(tab) {
-  // Only snapshot tab roots — sub-pages are cheap to rebuild and may hold
-  // stale form state that's confusing to "restore".
   if (state.pageStack.length !== 0) return;
-  const container = _tabContainer();
+
+  if (!isDesktop()) {
+    const panel = _currentMobileTabPanel();
+    if (!panel) return;
+    panel.remove();
+    _tabCache.set(tab, {
+      panel,
+      scroll: panel.scrollTop,
+      mode: "mobile",
+      chrome: _snapshotChrome(),
+    });
+    setMobileTabContentTarget(null);
+    return;
+  }
+
+  const container = sidebar();
   if (!container || !container.firstChild) return;
   const fragment = document.createDocumentFragment();
   while (container.firstChild) fragment.appendChild(container.firstChild);
@@ -297,27 +519,31 @@ function _saveTabDom(tab) {
     container,
     fragment,
     scroll: container.scrollTop,
-    mode: _activeMode(),
+    mode: "desktop",
     chrome: _snapshotChrome(),
   });
 }
 
 function _restoreTabDom(tab) {
-  const entry = _tabCache.get(tab);
+  const entry = _takeTabEntry(tab);
   if (!entry) return false;
-  if (entry.mode !== _activeMode()) {
-    // Layout flipped (e.g., window resize crossed the breakpoint) —
-    // discard the stale snapshot and force a re-render.
-    _tabCache.delete(tab);
-    return false;
+
+  if (!isDesktop()) {
+    const viewport = $("content-area");
+    viewport.classList.remove("mobile-tab-swipe-active");
+    viewport.innerHTML = "";
+    viewport.appendChild(entry.panel);
+    setMobileTabContentTarget(entry.panel);
+    _restoreChrome(entry.chrome);
+    requestAnimationFrame(() => { entry.panel.scrollTop = entry.scroll; });
+    return true;
   }
-  const container = _tabContainer();
+
+  const container = sidebar();
   if (!container) return false;
   container.innerHTML = "";
   container.appendChild(entry.fragment);
   _restoreChrome(entry.chrome);
-  _tabCache.delete(tab);
-  // Scroll restoration must wait for the freshly-attached subtree to lay out.
   requestAnimationFrame(() => { container.scrollTop = entry.scroll; });
   return true;
 }
@@ -347,7 +573,7 @@ function _showNavigationRoot({ renderDesktopTab = false } = {}) {
   } else {
     $("tab-bar").classList.remove("hide");
     if (!_restoreTabDom(state.currentTab)) {
-      renderCurrentTab();
+      _mountFreshMobileTab(state.currentTab);
     }
   }
 }
@@ -362,6 +588,7 @@ function _restoreReturnState(returnState) {
   }
 
   if (isDesktop()) renderCurrentTab();
+  else _preparePageContent();
   $("tab-bar").classList.add("hide");
   const previous = state.pageStack[state.pageStack.length - 1];
   renderPage(previous.name, previous.data);
@@ -393,6 +620,11 @@ export function navigateToPage(tab, name, data, { collapsePreviousTarget = false
     },
   };
 
+  if (!isDesktop() && state.pageStack.length === 0) {
+    state.tabScrollPos[state.currentTab] = content()?.scrollTop || 0;
+    _saveTabDom(state.currentTab);
+  }
+  if (!isDesktop()) _preparePageContent();
   _activateTab(tab);
   state.pageStack = [page];
   $("tab-bar").classList.add("hide");
@@ -403,13 +635,11 @@ export function navigateToPage(tab, name, data, { collapsePreviousTarget = false
 
 export function switchTab(tab) {
   if (isDesktop()) {
+    setMobileTabContentTarget(null);
     state.sidebarScrollPos[state.currentTab] = sidebar()?.scrollTop || 0;
     _saveTabDom(state.currentTab);
-    state.currentTab = tab;
+    _activateTab(tab);
     state.pageStack = [];
-    document.querySelectorAll(".tab").forEach(t =>
-      t.classList.toggle("active", t.dataset.tab === tab)
-    );
     if (!_restoreTabDom(tab)) {
       renderCurrentTab();
       requestAnimationFrame(() => {
@@ -417,20 +647,16 @@ export function switchTab(tab) {
         if (sb) sb.scrollTop = state.sidebarScrollPos[tab] || 0;
       });
     }
-    // Tab roots always show the welcome screen in the content area on desktop.
     showDesktopWelcome();
   } else {
-    state.tabScrollPos[state.currentTab] = content().scrollTop;
+    const currentPanel = _currentMobileTabPanel();
+    state.tabScrollPos[state.currentTab] = currentPanel?.scrollTop || 0;
     _saveTabDom(state.currentTab);
-    state.currentTab = tab;
+    _activateTab(tab);
     state.pageStack = [];
-    document.querySelectorAll(".tab").forEach(t =>
-      t.classList.toggle("active", t.dataset.tab === tab)
-    );
     $("tab-bar").classList.remove("hide");
     if (!_restoreTabDom(tab)) {
-      renderCurrentTab();
-      content().scrollTop = state.tabScrollPos[tab] || 0;
+      _mountFreshMobileTab(tab);
     }
     _writeBrowserRoute("replace");
   }
@@ -444,10 +670,11 @@ export function pushPage(name, data) {
     $("top-bar").classList.remove("desktop-hidden");
     renderPage(name, data);
   } else {
-    // Mobile sub-pages overwrite the same container that holds the tab root,
-    // so snapshot it first to enable instant restoration on goBack.
+    const rootScrollTop = content()?.scrollTop || 0;
+    state.tabScrollPos[state.currentTab] = rootScrollTop;
     _saveTabDom(state.currentTab);
-    state.pageStack.push({ name, data, scrollTop: content().scrollTop });
+    state.pageStack.push({ name, data, scrollTop: rootScrollTop });
+    _preparePageContent();
     $("tab-bar").classList.add("hide");
     renderPage(name, data);
     _writeBrowserRoute("push");
@@ -503,8 +730,11 @@ window.addEventListener("popstate", event => {
 
 _desktopMQ.addEventListener("change", () => {
   if (!$("phone-shell")) return;
-  // Drop every snapshot — they're tied to the previous layout mode.
   _tabCache.clear();
+  setMobileTabContentTarget(null);
+  const viewport = $("content-area");
+  viewport.classList.remove("mobile-tab-swipe-active");
+  viewport.innerHTML = "";
   const savedPages = [...state.pageStack];
   switchTab(state.currentTab);
   for (const p of savedPages) {

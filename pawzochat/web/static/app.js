@@ -19,7 +19,7 @@
 
 import { esc, iconHtml } from "./modules/utils.js";
 import { api } from "./modules/api.js";
-import { state, sidebar } from "./modules/state.js";
+import { state, content, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
 import { choicePickerSelect } from "./modules/choice_picker.js";
 import { openImagePreview, closeImagePreview } from "./modules/image_preview.js";
@@ -211,7 +211,7 @@ import {
 
 function renderDiscover() {
   const desktop = isDesktop();
-  const target = desktop ? sidebar() : document.getElementById("content-area");
+  const target = desktop ? sidebar() : content();
 
   if (desktop) setSidebarBar("发现", "");
   else setTopBar("发现", false, "");

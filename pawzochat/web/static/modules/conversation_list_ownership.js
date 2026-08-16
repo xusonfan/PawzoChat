@@ -7,8 +7,9 @@ export function ownsConversationListTarget({
   contentTarget,
   sidebarTarget,
 }) {
-  if (!target || !target.isConnected || currentTab !== "chat") return false;
-  if (desktop !== currentDesktop) return false;
-  if (desktop) return target === sidebarTarget;
-  return pageDepth === 0 && target === contentTarget;
+  if (!target || desktop !== currentDesktop) return false;
+  if (desktop) return target.isConnected && currentTab === "chat" && target === sidebarTarget;
+  if (target.dataset?.tabPanel) return target.dataset.tabPanel === "chat";
+  if (pageDepth !== 0) return false;
+  return target.isConnected && currentTab === "chat" && target === contentTarget;
 }

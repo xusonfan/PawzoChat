@@ -87,4 +87,29 @@ assert.equal(ownsConversationListTarget({
   sidebarTarget: desktop.sidebarTarget,
 }), false);
 
+// 移动端根 Tab 使用独立面板；即使暂时离屏，异步响应仍应写回自己的缓存面板。
+const cachedChatPanel = target();
+cachedChatPanel.isConnected = false;
+cachedChatPanel.dataset = { tabPanel: "chat" };
+assert.equal(ownsConversationListTarget({
+  target: cachedChatPanel,
+  desktop: false,
+  currentDesktop: false,
+  currentTab: "contacts",
+  pageDepth: 1,
+  contentTarget: target(),
+  sidebarTarget: target(),
+}), true);
+const cachedContactsPanel = target();
+cachedContactsPanel.dataset = { tabPanel: "contacts" };
+assert.equal(ownsConversationListTarget({
+  target: cachedContactsPanel,
+  desktop: false,
+  currentDesktop: false,
+  currentTab: "chat",
+  pageDepth: 0,
+  contentTarget: target(),
+  sidebarTarget: target(),
+}), false);
+
 console.log("conversation list ownership race tests passed");
