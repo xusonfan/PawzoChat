@@ -89,6 +89,14 @@ class ExternalImageCacheTests(unittest.TestCase):
             )
         self.assertEqual(content, [cached])
 
+    def test_proxy_fake_ip_destination_is_allowed(self):
+        with patch.object(
+            image_cache.socket,
+            "getaddrinfo",
+            return_value=[(2, 1, 6, "", ("198.18.5.115", 443))],
+        ):
+            self.assertTrue(image_cache._is_public_http_url("https://cdn.example/a.png"))
+
     def test_private_destination_is_rejected(self):
         with patch.object(
             image_cache.socket,

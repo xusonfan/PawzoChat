@@ -33,6 +33,13 @@ _MAX_IMAGES_PER_MESSAGE = 8
 _MAX_REDIRECTS = 4
 _REQUEST_TIMEOUT = (4, 12)
 
+# Clash/Mihomo 等透明代理默认会把公网域名映射到基准测试网段，实际连接仍由
+# 代理转发到公网。只兼容这个无真实主机语义的专用网段；RFC1918、回环、链路本地
+# 等地址仍然拒绝，避免把图片缓存变成内网请求入口。
+_PROXY_FAKE_IP_NETWORKS = (
+    ipaddress.ip_network("198.18.0.0/15"),
+)
+
 _MARKDOWN_IMAGE_RE = re.compile(
     r"!\[[^\]\r\n]*\]\(\s*(https?://[^\s)]+)(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'))?\s*\)",
     re.IGNORECASE,
@@ -62,8 +69,13 @@ _FORMATS = {
 }
 
 
+def _is_fetchable_address(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+    return ip.is_global or any(ip in network for network in _PROXY_FAKE_IP_NETWORKS)
+
+
 def _is_public_http_url(url: str) -> bool:
-    """Reject non-HTTP and non-public destinations before server-side fetching."""
+    """Reject non-HTTP and unsafe destinations before server-side fetching."""
     try:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -89,7 +101,7 @@ def _is_public_http_url(url: str) -> bool:
         return False
 
     try:
-        return all(ipaddress.ip_address(address).is_global for address in addresses)
+        return all(_is_fetchable_address(address) for address in addresses)
     except ValueError:
         return False
 
