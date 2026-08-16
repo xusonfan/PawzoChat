@@ -151,13 +151,21 @@ def resolve_base_url(provider_cfg: dict) -> str:
     return info["base_url"] if info else provider_cfg.get("base_url", "")
 
 
+def model_type_supports_reference_images(model_type: str) -> bool:
+    provider_class = IMAGE_PROVIDER_CLASSES.get(model_type)
+    return bool(provider_class and provider_class.supports_reference_images)
+
+
 def ensure_image_models_list(provider_cfg: dict) -> list[dict]:
-    """Return the models list with each entry's type resolved (for API output)."""
+    """Return models with resolved routing type and capabilities."""
     return [
         {
             "id": m.get("id", ""),
             "name": m.get("name", m.get("id", "")),
             "type": resolve_model_type(provider_cfg, m),
+            "supports_reference_images": model_type_supports_reference_images(
+                resolve_model_type(provider_cfg, m),
+            ),
         }
         for m in (provider_cfg.get("models") or [])
     ]
@@ -225,6 +233,13 @@ class ImageManager:
         if model_entry is None:
             return None
         return resolve_model_type(cfg, model_entry)
+
+    def model_supports_reference_images(self, name: str, model_id: str) -> bool:
+        """Return the declared reference-image capability for one model."""
+        model_type = self.get_model_type(name, model_id)
+        return bool(
+            model_type and model_type_supports_reference_images(model_type)
+        )
 
     @property
     def available_providers(self) -> list[str]:

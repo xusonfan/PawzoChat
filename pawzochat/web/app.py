@@ -142,7 +142,7 @@ def create_app(app_instance: App) -> Flask:
         is_public = request.environ.get("pawzochat.is_public", False)
         if not is_public:
             return None
-        if request.path in _AUTH_EXEMPT:
+        if request.path in _AUTH_EXEMPT or request.path.startswith("/static/pwa/"):
             return None
         if session.get("authenticated"):
             return None
@@ -243,20 +243,26 @@ def create_app(app_instance: App) -> Flask:
             "start_url": f"{base}/",
             "scope": f"{base}/",
             "display": "standalone",
-            "background_color": "#F7F1E8",
+            "background_color": "#FFFDF8",
             "theme_color": "#FFFDF8",
             "icons": [
                 {
-                    "src": f"{base}/static/pwa-icon-192.png",
+                    "src": f"{base}/static/pwa-icon-192.png?v=2",
                     "sizes": "192x192",
                     "type": "image/png",
-                    "purpose": "any maskable",
+                    "purpose": "any",
                 },
                 {
-                    "src": f"{base}/static/logo.png",
+                    "src": f"{base}/static/pwa/icon-512.png",
                     "sizes": "512x512",
                     "type": "image/png",
-                    "purpose": "any maskable",
+                    "purpose": "any",
+                },
+                {
+                    "src": f"{base}/static/pwa/maskable-512.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "maskable",
                 },
             ],
         }
@@ -317,6 +323,7 @@ def create_app(app_instance: App) -> Flask:
     from pawzochat.web.routes.api_accounts import api_accounts_bp
     from pawzochat.web.routes.api_asr import api_asr_bp
     from pawzochat.web.routes.api_emoji import api_emoji_bp
+    from pawzochat.web.routes.api_sticker_maker import api_sticker_maker_bp
     from pawzochat.web.routes.api_mcp import api_mcp_bp
     from pawzochat.web.routes.api_moments import api_moments_bp
     from pawzochat.web.routes.api_plugins import api_plugins_bp
@@ -336,6 +343,7 @@ def create_app(app_instance: App) -> Flask:
     flask_app.register_blueprint(api_accounts_bp, url_prefix="/api/accounts")
     flask_app.register_blueprint(api_asr_bp, url_prefix="/api/asr")
     flask_app.register_blueprint(api_emoji_bp, url_prefix="/api/emoji")
+    flask_app.register_blueprint(api_sticker_maker_bp, url_prefix="/api/emoji")
     flask_app.register_blueprint(api_mcp_bp, url_prefix="/api/mcp")
     flask_app.register_blueprint(api_moments_bp, url_prefix="/api/moments")
     flask_app.register_blueprint(api_plugins_bp, url_prefix="/api/plugins")

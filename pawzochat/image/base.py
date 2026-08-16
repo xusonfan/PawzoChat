@@ -66,6 +66,7 @@ class ImageProvider(ABC):
     """Base class for all image generation service providers."""
 
     provider_type: str = ""
+    supports_reference_images: bool = False
 
     @abstractmethod
     def generate(

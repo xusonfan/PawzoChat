@@ -198,6 +198,12 @@ import {
   radarOnProviderChange, radarRefresh, radarUseRecommendation,
 } from "./modules/radar.js";
 
+import {
+  stickerMakerProviderChange, stickerMakerModelChange, stickerMakerPersonaChange,
+  stickerMakerPickReference, stickerMakerReferenceSelected,
+  stickerMakerGenerate,
+} from "./modules/sticker_maker.js";
+
 /* ============ Discover Tab ============ */
 
 function renderDiscover() {
@@ -212,6 +218,10 @@ function renderDiscover() {
       <div class="card-row" onclick="PawzoChat.pushPage('momentsList',{})">
         <div class="row-icon peach">${iconHtml("ri-camera-fill")}</div>
         <span class="row-label">朋友圈</span><span class="row-arrow">›</span>
+      </div>
+      <div class="card-row" onclick="PawzoChat.pushPage('stickerMaker',{})">
+        <div class="row-icon yellow">${iconHtml("ri-chat-smile-2-line")}</div>
+        <span class="row-label">表情包工坊</span><span class="row-value">AI 生成</span><span class="row-arrow">›</span>
       </div>
       <div class="card-row" onclick="PawzoChat.pushPage('worldbookList',{})">
         <div class="row-icon blue">${iconHtml("ri-book-open-line")}</div>
@@ -436,6 +446,9 @@ window.PawzoChat = {
   pwOnProviderChange, pwOnImageProviderChange,
   pwGenerate, pwGenerateImage, pwCreatePersona,
   radarOnProviderChange, radarRefresh, radarUseRecommendation,
+  stickerMakerProviderChange, stickerMakerModelChange, stickerMakerPersonaChange,
+  stickerMakerPickReference, stickerMakerReferenceSelected,
+  stickerMakerGenerate,
 };
 
 /* ============ Init ============ */

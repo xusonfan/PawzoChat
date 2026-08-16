@@ -29,8 +29,7 @@
 <meta name="pawzo-source" content="https://github.com/iwyxdxl/PawzoChat">
 <title>PawzoChat</title>
 <link rel="icon" type="image/png" href="{{ request.script_root }}/static/logo.png">
-<link rel="apple-touch-icon" href="{{ request.script_root }}/static/pwa-icon-192.png">
-<link rel="manifest" href="{{ request.script_root }}/manifest.webmanifest">
+{% include "_pwa_head.html" %}
 <link rel="stylesheet" href="{{ request.script_root }}/static/style.css">
 <link rel="stylesheet" href="{{ request.script_root }}/static/desktop.css">
 <script data-base="{{ request.script_root }}">window.PAWZOCHAT_BASE = document.currentScript.dataset.base;</script>

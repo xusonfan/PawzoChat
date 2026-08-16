@@ -41,7 +41,7 @@ function showInstallBanner() {
   installBanner.setAttribute("role", "dialog");
   installBanner.setAttribute("aria-label", "安装 PawzoChat");
   installBanner.innerHTML = `
-    <img src="${baseUrl()}/static/pwa-icon-192.png" alt="">
+    <img src="${baseUrl()}/static/pwa-icon-192.png?v=2" alt="">
     <div class="pwa-install-copy">
       <strong>安装 PawzoChat</strong>
       <span>添加到桌面，以独立窗口全屏使用</span>

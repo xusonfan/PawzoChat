@@ -70,6 +70,7 @@ def _snap_to_nai_normal_size(width: int, height: int) -> tuple[int, int]:
 
 class NovelAIImageProvider(ImageProvider):
     provider_type = "novelai_image"
+    supports_reference_images = True
 
     def __init__(self, base_url: str, api_key: str, **kwargs):
         self.base_url = base_url.rstrip("/")

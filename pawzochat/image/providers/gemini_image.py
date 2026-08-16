@@ -66,6 +66,7 @@ def _aspect_from_wh(w: int, h: int) -> str:
 
 class GeminiImageProvider(ImageProvider):
     provider_type = "gemini_image"
+    supports_reference_images = True
 
     def __init__(self, base_url: str, api_key: str, **kwargs):
         self.base_url = base_url.rstrip("/")

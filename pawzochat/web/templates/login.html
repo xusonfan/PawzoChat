@@ -29,8 +29,7 @@
 <meta name="pawzo-source" content="https://github.com/iwyxdxl/PawzoChat">
 <title>PawzoChat - 登录</title>
 <link rel="icon" type="image/png" href="{{ request.script_root }}/static/logo.png">
-<link rel="apple-touch-icon" href="{{ request.script_root }}/static/pwa-icon-192.png">
-<link rel="manifest" href="{{ request.script_root }}/manifest.webmanifest">
+{% include "_pwa_head.html" %}
 <link rel="stylesheet" href="{{ request.script_root }}/static/style.css">
 <style>
   body { display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0; padding-bottom:18vh; background:var(--bg); }
