@@ -190,7 +190,8 @@ import {
 } from "./modules/moments.js";
 
 import {
-  pwOnProviderChange, pwGenerate, pwCreatePersona,
+  pwOnProviderChange, pwOnImageProviderChange,
+  pwGenerate, pwGenerateImage, pwCreatePersona,
 } from "./modules/persona_writer.js";
 
 /* ============ Discover Tab ============ */
@@ -424,7 +425,8 @@ window.PawzoChat = {
   momentsSubmitPublish,
   momentsResetPrompt, momentsSaveSettings,
   openPersonaMoments, momentsOpenDetail,
-  pwOnProviderChange, pwGenerate, pwCreatePersona,
+  pwOnProviderChange, pwOnImageProviderChange,
+  pwGenerate, pwGenerateImage, pwCreatePersona,
 };
 
 /* ============ Init ============ */

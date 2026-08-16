@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-import { esc, CAP_ICONS } from "./utils.js";
+import { esc, escAttr, CAP_ICONS } from "./utils.js";
 import { api } from "./api.js";
 import { $, content } from "./state.js";
 import { toast, showLoading, hideLoading } from "./ui.js";
@@ -34,7 +34,12 @@ import { setTopBar, pushPage, registerPageRenderer } from "./navigation.js";
 
 const _pw = {
   providers: [],          // [{name, models:[{id,name,capabilities}], ...}]
+  imageProviders: [],     // configured providers with usable image models
   defaultSysInstr: "",    // DEFAULT_SYSTEM_INSTRUCTIONS (from /api/personas/default-system-instructions)
+  images: {
+    avatar: null,         // {dataUrl, mimeType}
+    background: null,
+  },
 };
 
 function _providerOptions(selected) {
@@ -63,6 +68,85 @@ function pwOnProviderChange() {
   if (modelSel) modelSel.innerHTML = _modelOptions(provName, "");
 }
 
+function _imageProviderOptions(selected) {
+  return _pw.imageProviders.map(provider => (
+    `<option value="${escAttr(provider.name)}" ${provider.name === selected ? "selected" : ""}>${esc(provider.name)}</option>`
+  )).join("");
+}
+
+function _imageModelOptions(providerName, selected) {
+  const provider = _pw.imageProviders.find(item => item.name === providerName);
+  const models = provider?.models || [];
+  if (!models.length) return `<option value="" disabled selected>该服务商下没有模型</option>`;
+  const effective = models.some(model => model.id === selected) ? selected : models[0].id;
+  return models.map(model => (
+    `<option value="${escAttr(model.id)}" ${model.id === effective ? "selected" : ""}>${esc(model.name || model.id)}</option>`
+  )).join("");
+}
+
+function pwOnImageProviderChange() {
+  const providerName = $("pw-image-provider")?.value || "";
+  const modelSelect = $("pw-image-model");
+  if (modelSelect) modelSelect.innerHTML = _imageModelOptions(providerName, "");
+}
+
+function _renderGeneratedImage(kind) {
+  const target = $(kind === "avatar" ? "pw-avatar-preview" : "pw-background-preview");
+  if (!target) return;
+  const image = _pw.images[kind];
+  if (!image) {
+    target.innerHTML = `<div class="form-hint" style="text-align:center">尚未生成</div>`;
+    return;
+  }
+  const fit = kind === "avatar" ? "aspect-ratio:1/1;max-width:256px" : "aspect-ratio:3/2;width:100%";
+  target.innerHTML = `<img src="${escAttr(image.dataUrl)}" alt="${kind === "avatar" ? "角色头像预览" : "朋友圈封面预览"}" style="${fit};object-fit:cover;border-radius:12px;display:block;margin:auto">`;
+}
+
+async function pwGenerateImage(kind) {
+  const isAvatar = kind === "avatar";
+  if (!isAvatar && kind !== "background") return;
+  const provider = $("pw-image-provider")?.value || "";
+  const model = $("pw-image-model")?.value || "";
+  const prompt = ($(isAvatar ? "pw-avatar-prompt" : "pw-background-prompt")?.value || "").trim();
+  if (!provider || !model) { toast("请先选择生图服务商与模型", "error"); return; }
+  if (!prompt) { toast("请先生成或填写图片提示词", "error"); return; }
+  localStorage.setItem("pw_last_image_provider", provider);
+  localStorage.setItem("pw_last_image_model", model);
+
+  const button = $(isAvatar ? "pw-avatar-generate" : "pw-background-generate");
+  const original = button?.textContent || "生成图片";
+  if (button) { button.disabled = true; button.textContent = "生成中…"; }
+  try {
+    const response = await api.post(`/api/image-providers/${encodeURIComponent(provider)}/generate`, {
+      model,
+      prompt,
+      purpose: isAvatar ? "avatar" : "moments_cover",
+    });
+    if (response.status < 200 || response.status >= 300 || !response.data?.image_b64) {
+      toast(response.data?.error || "图片生成失败", "error");
+      return;
+    }
+    const mimeType = response.data.mime_type || "image/png";
+    _pw.images[kind] = {
+      dataUrl: `data:${mimeType};base64,${response.data.image_b64}`,
+      mimeType,
+    };
+    _renderGeneratedImage(kind);
+    toast(`${isAvatar ? "头像" : "朋友圈封面"}生成完成`, "success");
+  } catch (error) {
+    toast("图片生成失败，请检查生图服务配置", "error");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = original; }
+  }
+}
+
+function _clearGeneratedImages() {
+  _pw.images.avatar = null;
+  _pw.images.background = null;
+  _renderGeneratedImage("avatar");
+  _renderGeneratedImage("background");
+}
+
 async function pwGenerate() {
   const provider = $("pw-provider")?.value || "";
   const model = $("pw-model")?.value || "";
@@ -81,8 +165,12 @@ async function pwGenerate() {
     if (r.status === 200 && r.data && r.data.ok) {
       if ($("pw-character")) $("pw-character").value = r.data.character_prompt || "";
       if ($("pw-examples")) $("pw-examples").value = r.data.output_examples || "";
+      if ($("pw-signature")) $("pw-signature").value = r.data.signature || "";
+      if ($("pw-avatar-prompt")) $("pw-avatar-prompt").value = r.data.avatar_prompt || "";
+      if ($("pw-background-prompt")) $("pw-background-prompt").value = r.data.background_prompt || "";
       const nameEl = $("pw-name");
-      if (nameEl && r.data.name && !nameEl.value.trim()) nameEl.value = r.data.name;
+      if (nameEl && r.data.name) nameEl.value = r.data.name;
+      _clearGeneratedImages();
       toast("生成完成", "success");
     } else {
       toast((r.data && r.data.error) || "生成失败", "error");
@@ -94,8 +182,36 @@ async function pwGenerate() {
   }
 }
 
+function _dataUrlBlob(dataUrl) {
+  const [header, payload] = dataUrl.split(",", 2);
+  const mimeType = header.match(/^data:([^;]+);base64$/)?.[1] || "image/png";
+  const binary = atob(payload || "");
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function _uploadGeneratedAsset(personaId, kind, image) {
+  if (!image) return;
+  const isAvatar = kind === "avatar";
+  const form = new FormData();
+  const field = isAvatar ? "avatar" : "cover";
+  const extension = image.mimeType === "image/jpeg" ? "jpg" : (image.mimeType.split("/")[1] || "png");
+  form.append(field, _dataUrlBlob(image.dataUrl), `${kind}.${extension}`);
+  const path = isAvatar
+    ? `/api/personas/${encodeURIComponent(personaId)}/avatar`
+    : `/api/personas/${encodeURIComponent(personaId)}/moments-cover`;
+  const response = await fetch(`${window.PAWZOCHAT_BASE || ""}${path}`, { method: "POST", body: form });
+  if (!response.ok) {
+    let message = "图片保存失败";
+    try { message = (await response.json())?.error || message; } catch (error) { /* ignore */ }
+    throw new Error(message);
+  }
+}
+
 async function pwCreatePersona() {
   const name = ($("pw-name")?.value || "").trim();
+  const signature = ($("pw-signature")?.value || "").trim();
   const characterPrompt = $("pw-character")?.value || "";
   const outputExamples = $("pw-examples")?.value || "";
   const systemInstructions = $("pw-sysinstr")?.value || "";
@@ -109,23 +225,35 @@ async function pwCreatePersona() {
   try {
     const r = await api.post("/api/personas", {
       name,
+      signature,
       character_prompt: characterPrompt,
       output_examples: outputExamples,
       system_instructions: systemInstructions,
       llm_provider: provider,
       llm_model: model,
     });
-    hideLoading();
     if ((r.status === 200 || r.status === 201) && r.data && r.data.ok) {
+      const uploads = [
+        ["avatar", _pw.images.avatar],
+        ["background", _pw.images.background],
+      ].filter(([, image]) => !!image);
+      const results = await Promise.allSettled(
+        uploads.map(([kind, image]) => _uploadGeneratedAsset(r.data.id, kind, image)),
+      );
+      const failedCount = results.filter(result => result.status === "rejected").length;
       api.invalidate("/api/personas");
-      toast("角色创建成功", "success");
+      toast(
+        failedCount ? `角色已创建，但有 ${failedCount} 张图片保存失败` : "角色创建成功",
+        failedCount ? "error" : "success",
+      );
       pushPage("personaEdit", { personaId: r.data.id });
     } else {
       toast((r.data && r.data.error) || "创建失败", "error");
     }
   } catch (e) {
-    hideLoading();
     toast("创建失败", "error");
+  } finally {
+    hideLoading();
   }
 }
 
@@ -134,14 +262,19 @@ async function renderPersonaWriter() {
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
 
   try {
-    const [provRes, siRes] = await Promise.all([
+    const [provRes, siRes, imageRes] = await Promise.all([
       api.get("/api/providers"),
       api.get("/api/personas/default-system-instructions"),
+      api.get("/api/image-providers"),
     ]);
     _pw.providers = provRes.providers || [];
+    _pw.imageProviders = (imageRes.providers || []).filter(provider => (
+      provider.api_key_set && (provider.models || []).length > 0
+    ));
     _pw.defaultSysInstr = siRes.text || "";
   } catch (e) {
     _pw.providers = [];
+    _pw.imageProviders = [];
     _pw.defaultSysInstr = "";
   }
 
@@ -150,6 +283,13 @@ async function renderPersonaWriter() {
   const selProvider = _pw.providers.some(p => p.name === lastProvider)
     ? lastProvider
     : (_pw.providers[0]?.name || "");
+  const lastImageProvider = localStorage.getItem("pw_last_image_provider") || "";
+  const lastImageModel = localStorage.getItem("pw_last_image_model") || "";
+  const selectedImageProvider = _pw.imageProviders.some(p => p.name === lastImageProvider)
+    ? lastImageProvider
+    : (_pw.imageProviders[0]?.name || "");
+  _pw.images.avatar = null;
+  _pw.images.background = null;
 
   if (!_pw.providers.length) {
     content().innerHTML = `<div class="page"><div class="empty-state">
@@ -180,6 +320,16 @@ async function renderPersonaWriter() {
     </div>
 
     <div class="card">
+      <div class="card-header">角色资料</div>
+      <div class="form-group"><div class="form-row"><label>角色名称</label>
+        <input id="pw-name" placeholder="点击「生成」后自动填充，可手动编辑">
+      </div></div>
+      <div class="form-group"><div class="form-row"><label>个性签名</label>
+        <input id="pw-signature" maxlength="100" placeholder="符合角色口吻的签名">
+      </div></div>
+    </div>
+
+    <div class="card">
       <div class="card-header">人设设定</div>
       <textarea class="form-textarea prompt-part" id="pw-character" placeholder="点击「生成」后自动填充，可手动编辑"></textarea>
     </div>
@@ -195,11 +345,36 @@ async function renderPersonaWriter() {
     </div>
 
     <div class="card">
-      <div class="card-header">创建角色</div>
-      <div class="form-group"><div class="form-row"><label>角色名称</label>
-        <input id="pw-name" placeholder="输入角色名称">
-      </div></div>
+      <div class="card-header">角色图片</div>
+      ${_pw.imageProviders.length ? `
+        <div class="form-group"><div class="form-row"><label>生图服务商</label>
+          <select id="pw-image-provider" onchange="PawzoChat.pwOnImageProviderChange()">${_imageProviderOptions(selectedImageProvider)}</select>
+        </div></div>
+        <div class="form-group"><div class="form-row"><label>生图模型</label>
+          <select id="pw-image-model">${_imageModelOptions(selectedImageProvider, lastImageModel)}</select>
+        </div></div>
+      ` : `<div class="form-hint" style="padding:0 16px 14px">尚未配置可用的生图服务商。提示词仍会生成，配置服务商后可返回此页生成图片。</div>`}
     </div>
+
+    <div class="card">
+      <div class="card-header">角色头像</div>
+      <textarea class="form-textarea" id="pw-avatar-prompt" style="min-height:110px" placeholder="点击上方「生成」获取头像提示词，可手动编辑"></textarea>
+      <div id="pw-avatar-preview" style="padding:12px 16px"><div class="form-hint" style="text-align:center">尚未生成</div></div>
+      <div style="padding:0 16px 16px">
+        <button class="btn-primary" id="pw-avatar-generate" ${_pw.imageProviders.length ? "" : "disabled"} onclick="PawzoChat.pwGenerateImage('avatar')">生成头像</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">专属朋友圈封面</div>
+      <textarea class="form-textarea" id="pw-background-prompt" style="min-height:110px" placeholder="点击上方「生成」获取封面提示词，可手动编辑"></textarea>
+      <div class="form-hint">封面属于当前角色，不会覆盖其他角色或全局封面</div>
+      <div id="pw-background-preview" style="padding:12px 16px"><div class="form-hint" style="text-align:center">尚未生成</div></div>
+      <div style="padding:0 16px 16px">
+        <button class="btn-primary" id="pw-background-generate" ${_pw.imageProviders.length ? "" : "disabled"} onclick="PawzoChat.pwGenerateImage('background')">生成朋友圈封面</button>
+      </div>
+    </div>
+
     <div>
       <button class="btn-primary" id="pw-create-btn" onclick="PawzoChat.pwCreatePersona()">通过该人设创建角色</button>
     </div>
@@ -208,4 +383,10 @@ async function renderPersonaWriter() {
 
 registerPageRenderer("personaWriter", renderPersonaWriter);
 
-export { pwOnProviderChange, pwGenerate, pwCreatePersona };
+export {
+  pwOnProviderChange,
+  pwOnImageProviderChange,
+  pwGenerate,
+  pwGenerateImage,
+  pwCreatePersona,
+};

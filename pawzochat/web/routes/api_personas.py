@@ -135,6 +135,29 @@ def _name_exists(personas_cfg: dict, name: str, *, exclude_id: str = "") -> bool
 # Long prompt fields persisted in data/prompts/<id>.json instead of config.yaml,
 # so config stays an index for short metadata only and prompts are unbounded.
 _IMAGE_PROMPT_KEYS = ("style_prefix", "art_style", "negative_prompt")
+_PERSONA_COVER_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+_MAX_PERSONA_COVER_BYTES = 10 * 1024 * 1024
+
+
+def _persona_cover_path(persona_id: str) -> os.PathLike | None:
+    folder = CHATS_DIR / persona_id
+    for ext in _PERSONA_COVER_EXTS:
+        candidate = folder / f"moments-cover{ext}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _persona_cover_url(persona_id: str) -> str:
+    path = _persona_cover_path(persona_id)
+    if path is None:
+        return ""
+    try:
+        version = path.stat().st_mtime_ns
+    except OSError:
+        version = ""
+    suffix = f"?v={version}" if version else ""
+    return f"/api/personas/{persona_id}/moments-cover{suffix}"
 
 
 def _ig_metadata(ig: dict) -> dict:
@@ -243,6 +266,7 @@ def list_personas():
             "emoji_group": p.emoji_group,
             "has_avatar": os.path.isfile(_avatar_path(pid)),
             "avatar_version": _avatar_version(pid),
+            "moments_cover_url": _persona_cover_url(pid),
             "memory": p.memory,
             "memory_count": len(memory_data.get("memories", [])),
             "proactive": p.proactive,
@@ -285,6 +309,7 @@ def get_persona(persona_id: str):
         "emoji_group": p.emoji_group,
         "has_avatar": os.path.isfile(_avatar_path(persona_id)),
         "avatar_version": _avatar_version(persona_id),
+        "moments_cover_url": _persona_cover_url(persona_id),
         "memory": p.memory,
         "memory_count": len(memory_data.get("memories", [])),
         "proactive": p.proactive,
@@ -572,6 +597,12 @@ def delete_persona(persona_id: str):
     json_path = app.config.prompt_path(persona_id)
     if json_path.is_file():
         json_path.unlink()
+    cover_path = _persona_cover_path(persona_id)
+    if cover_path is not None:
+        try:
+            cover_path.unlink()
+        except OSError:
+            logger.warning("清理角色朋友圈封面失败 persona=%s", persona_id)
 
     # Clean up all moments and replies from this persona.
     try:
@@ -634,6 +665,87 @@ def upload_avatar(persona_id: str):
 
     _save_avatar_from_image(persona_id, img)
     return jsonify({"ok": True, "avatar_version": _avatar_version(persona_id)})
+
+
+@api_personas_bp.route("/<persona_id>/moments-cover", methods=["GET"])
+def get_moments_cover(persona_id: str):
+    app = get_app()
+    if persona_id not in (app.config.get("personas", default={}) or {}):
+        return jsonify({"error": "Persona not found"}), 404
+    path = _persona_cover_path(persona_id)
+    if path is None:
+        return jsonify({"error": "No moments cover"}), 404
+    response = send_file(path, conditional=True)
+    response.headers["Cache-Control"] = (
+        "private, max-age=31536000, immutable"
+        if request.args.get("v") else "private, no-cache"
+    )
+    return response
+
+
+@api_personas_bp.route("/<persona_id>/moments-cover", methods=["POST"])
+def upload_moments_cover(persona_id: str):
+    app = get_app()
+    if persona_id not in (app.config.get("personas", default={}) or {}):
+        return jsonify({"error": "Persona not found"}), 404
+
+    uploaded = request.files.get("cover")
+    if not uploaded:
+        return jsonify({"error": "No file uploaded"}), 400
+    raw = uploaded.read()
+    if not raw:
+        return jsonify({"error": "文件为空"}), 400
+    if len(raw) > _MAX_PERSONA_COVER_BYTES:
+        return jsonify({"error": "封面图过大（上限 10 MB）"}), 400
+
+    mime = (uploaded.mimetype or "").split(";", 1)[0].lower()
+    ext_by_mime = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+    }
+    ext = ext_by_mime.get(mime)
+    if ext is None:
+        ext = os.path.splitext(uploaded.filename or "")[1].lower()
+    if ext not in _PERSONA_COVER_EXTS:
+        return jsonify({"error": "不支持的图片格式"}), 400
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            image.verify()
+    except Exception:
+        return jsonify({"error": "Invalid image"}), 400
+
+    folder = CHATS_DIR / persona_id
+    folder.mkdir(parents=True, exist_ok=True)
+    destination = folder / f"moments-cover{ext}"
+    temporary = folder / f".moments-cover-{uuid.uuid4().hex}{ext}"
+    try:
+        temporary.write_bytes(raw)
+        os.replace(temporary, destination)
+        for old_ext in _PERSONA_COVER_EXTS:
+            old = folder / f"moments-cover{old_ext}"
+            if old != destination and old.is_file():
+                old.unlink()
+    finally:
+        if temporary.is_file():
+            temporary.unlink()
+    return jsonify({"ok": True, "moments_cover_url": _persona_cover_url(persona_id)})
+
+
+@api_personas_bp.route("/<persona_id>/moments-cover", methods=["DELETE"])
+def delete_moments_cover(persona_id: str):
+    app = get_app()
+    if persona_id not in (app.config.get("personas", default={}) or {}):
+        return jsonify({"error": "Persona not found"}), 404
+    removed = False
+    folder = CHATS_DIR / persona_id
+    for ext in _PERSONA_COVER_EXTS:
+        path = folder / f"moments-cover{ext}"
+        if path.is_file():
+            path.unlink()
+            removed = True
+    return jsonify({"ok": True, "removed": removed, "moments_cover_url": ""})
 
 
 # ---------------------------------------------------------------------------

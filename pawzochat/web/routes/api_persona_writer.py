@@ -56,9 +56,14 @@ DEFAULT_PERSONA_WRITER_PROMPT = (
     "也不要用 Markdown 代码块（``` ）包裹。该 json 对象结构如下：\n"
     "{\n"
     '  "name": "建议的角色名称（简短，例如「雷电将军」）",\n'
+    '  "signature": "符合角色身份与口吻的个性签名，不超过 100 个中文字符",\n'
     '  "character_prompt": "详尽的人设设定（中文）：姓名、身份、年龄、外貌、性格、'
     '成长背景、价值观、人际关系、兴趣爱好、典型行为与说话风格等，尽量丰富立体",\n'
-    '  "output_examples": ["该角色平时说话的示例", "至少 5 条", "……"]\n'
+    '  "output_examples": ["该角色平时说话的示例", "至少 5 条", "……"],\n'
+    '  "avatar_prompt": "用于 AI 生图的角色头像提示词：完整描述固定外貌、发型、服饰、表情、'
+    '胸像构图、纯净背景与画面风格；不要出现文字、签名或水印",\n'
+    '  "background_prompt": "用于 AI 生图的横向朋友圈封面提示词：设计贴合角色经历与审美的场景、'
+    '环境、色彩、光线与氛围；以景物为主，不出现文字、签名或水印"\n'
     "}\n\n"
     "其中 output_examples 的硬性要求：必须是字符串数组，至少包含 5 条；"
     "每一条都用反斜线（\\）分隔其中的短句或短语；"
@@ -176,24 +181,20 @@ def _extract_json_object(text: str):
     return None
 
 
-def _parse_persona_draft(raw: str) -> tuple[str, str, str]:
-    """Parse the model output into ``(name, character_prompt, output_examples)``.
-
-    JSON-first: the generation prompt asks the model to emit a single JSON
-    object ``{name, character_prompt, output_examples[]}``. If JSON parsing
-    fails entirely we fall back to the ``[人设设定]`` / ``[输出示例]`` marker
-    split so a stray non-JSON reply never hard-fails the assistant.
-    """
+def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str]:
+    """Parse model output into the six editable persona draft fields."""
     obj = _extract_json_object(raw)
     if isinstance(obj, dict):
-        # JSON parsed → trust string fields only. Coerce anything else the
-        # model slips in (a list/dict for name/prompt, a dict as an example)
-        # to empty so a Python repr like "['x']" never leaks into the persona.
-        # Cap the suggested name to the persona-name limit so it prefills cleanly.
-        name_val = obj.get("name")
-        name = name_val.strip()[:100] if isinstance(name_val, str) else ""
-        cp_val = obj.get("character_prompt")
-        character_prompt = cp_val.strip() if isinstance(cp_val, str) else ""
+        def text_field(key: str, max_length: int | None = None) -> str:
+            value = obj.get(key)
+            text = value.strip() if isinstance(value, str) else ""
+            return text[:max_length] if max_length is not None else text
+
+        name = text_field("name", 100)
+        signature = text_field("signature", 100)
+        character_prompt = text_field("character_prompt")
+        avatar_prompt = text_field("avatar_prompt")
+        background_prompt = text_field("background_prompt")
         examples = obj.get("output_examples")
         if isinstance(examples, list):
             lines = []
@@ -209,7 +210,14 @@ def _parse_persona_draft(raw: str) -> tuple[str, str, str]:
             output_examples = "\n".join(lines)
         else:
             output_examples = examples.strip() if isinstance(examples, str) else ""
-        return name, character_prompt, output_examples
+        return (
+            name,
+            signature,
+            character_prompt,
+            output_examples,
+            avatar_prompt,
+            background_prompt,
+        )
 
     # JSON parsing failed entirely → legacy ``[人设设定]`` / ``[输出示例]`` split.
     # The prompt asks for pure JSON, so reaching here means the model misbehaved
@@ -219,7 +227,7 @@ def _parse_persona_draft(raw: str) -> tuple[str, str, str]:
         (raw or "")[:120],
     )
     character_prompt, output_examples = _split_sections(raw)
-    return "", character_prompt, output_examples
+    return "", "", character_prompt, output_examples, "", ""
 
 
 @api_persona_writer_bp.route("/generate", methods=["POST"])
@@ -267,10 +275,20 @@ def generate():
     if not (raw or "").strip():
         return jsonify({"error": "模型未返回内容，请重试或更换模型"}), 502
 
-    name, character_prompt, output_examples = _parse_persona_draft(raw)
+    (
+        name,
+        signature,
+        character_prompt,
+        output_examples,
+        avatar_prompt,
+        background_prompt,
+    ) = _parse_persona_draft(raw)
     return jsonify({
         "ok": True,
         "name": name,
+        "signature": signature,
         "character_prompt": character_prompt,
         "output_examples": output_examples,
+        "avatar_prompt": avatar_prompt,
+        "background_prompt": background_prompt,
     })

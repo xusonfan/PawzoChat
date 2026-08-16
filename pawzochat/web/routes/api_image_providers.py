@@ -306,6 +306,7 @@ def delete_image_model(name: str, model_id: str):
 # ---- Test invocation -----------------------------------------------------
 
 @api_image_providers_bp.route("/<name>/_test", methods=["POST"])
+@api_image_providers_bp.route("/<name>/generate", methods=["POST"])
 def test_image_provider(name: str):
     """Invoke the provider with a minimal prompt and return the image inline.
 
@@ -317,6 +318,9 @@ def test_image_provider(name: str):
     model = (data.get("model") or "").strip()
     prompt = (data.get("prompt") or "").strip()
     persona_id = (data.get("persona_id") or "").strip()
+    purpose = (data.get("purpose") or "square").strip()
+    if purpose not in {"square", "avatar", "moments_cover"}:
+        return jsonify({"error": "不支持的图片用途"}), 400
 
     if not model:
         return jsonify({"error": "请选择模型"}), 400
@@ -339,8 +343,15 @@ def test_image_provider(name: str):
             persona_id, persona_cfg.get("image_generation") or {},
         )
 
+    width, height = (1536, 1024) if purpose == "moments_cover" else (1024, 1024)
     try:
-        resp = provider.generate(prompt=prompt, model=model, reference_images=ref_images)
+        resp = provider.generate(
+            prompt=prompt,
+            model=model,
+            reference_images=ref_images,
+            width=width,
+            height=height,
+        )
     except ImageGenerationError as e:
         status = e.status_code or 502
         if status < 400 or status >= 600:

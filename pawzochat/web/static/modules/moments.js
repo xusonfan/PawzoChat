@@ -510,6 +510,7 @@ async function renderPersonaMoments(data) {
       name: p.name,
       has_avatar: p.has_avatar,
       avatar_version: p.avatar_version,
+      moments_cover_url: p.moments_cover_url || "",
     };
   } catch (e) {
     toast("加载失败", "error");
@@ -549,7 +550,11 @@ async function renderPersonaMoments(data) {
 function _renderPersonaCover() {
   const el = $("pm-cover");
   if (!el) return;
-  const url = _state.coverUrl ? `${BASE()}${_state.coverUrl}` : "";
+  const personaCoverUrl = _list.personaMeta?.moments_cover_url || "";
+  // Existing personas without their own cover keep the former global cover as
+  // a compatibility fallback. Newly generated personas persist a dedicated URL.
+  const coverUrl = personaCoverUrl || _state.coverUrl;
+  const url = coverUrl ? `${BASE()}${coverUrl}` : "";
   if (url) {
     el.style.backgroundImage = `url('${url}')`;
     el.classList.add("has-image");
