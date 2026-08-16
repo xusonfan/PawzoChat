@@ -70,6 +70,11 @@ const navigationSource = await readFile(
 assert.match(navigationSource, /topBarMomentsCoverOverlay:[\s\S]*?topBarCoverHidden:/);
 assert.match(
   navigationSource,
+  /const steps = Math\.max\(0, _historyIndex - targetIndex\)/,
+  "同一页面索引的覆盖层返回不能额外弹出当前页面",
+);
+assert.match(
+  navigationSource,
   /classList\.toggle\("moments-cover-overlay", !!chrome\.topBarMomentsCoverOverlay\)[\s\S]*?classList\.toggle\("is-cover-hidden", !!chrome\.topBarCoverHidden\)/,
   "返回标签页时应完整恢复朋友圈顶部栏状态",
 );

@@ -486,7 +486,7 @@ window.addEventListener("popstate", event => {
   const targetIndex = route?.session === _historySession
     ? route.index
     : Math.max(0, _historyIndex - 1);
-  const steps = Math.max(1, _historyIndex - targetIndex);
+  const steps = Math.max(0, _historyIndex - targetIndex);
   for (let i = 0; i < steps && state.pageStack.length > 0; i += 1) {
     _renderPreviousPage();
   }

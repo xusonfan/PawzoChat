@@ -21,6 +21,10 @@ let _modalEl = null;
 let _imgEl = null;
 let _currentSrc = "";
 let _keyHandler = null;
+let _historyToken = "";
+let _historySequence = 0;
+const _historyKey = "pawzoImagePreview";
+const _historySources = new Map();
 
 function _ensureModal() {
   if (_modalEl) return;
@@ -85,8 +89,7 @@ async function _download(src) {
   }
 }
 
-export function openImagePreview(src) {
-  if (!src) return;
+function _showImagePreview(src) {
   _ensureModal();
   _currentSrc = src;
   _imgEl.src = src;
@@ -101,7 +104,7 @@ export function openImagePreview(src) {
   }
 }
 
-export function closeImagePreview() {
+function _hideImagePreview() {
   if (!_modalEl) return;
   _modalEl.classList.remove("show");
   setTimeout(() => {
@@ -115,4 +118,48 @@ export function closeImagePreview() {
     document.removeEventListener("keydown", _keyHandler);
     _keyHandler = null;
   }
+}
+
+window.addEventListener("popstate", event => {
+  const token = event.state?.[_historyKey]?.token || "";
+  const source = token ? _historySources.get(token) : "";
+  if (source) {
+    _historyToken = token;
+    _showImagePreview(source);
+    return;
+  }
+
+  if (_historyToken || (_modalEl && !_modalEl.classList.contains("hide"))) {
+    _historyToken = "";
+    _hideImagePreview();
+  }
+});
+
+export function openImagePreview(src) {
+  if (!src) return;
+  _showImagePreview(src);
+
+  if (_historyToken && history.state?.[_historyKey]?.token === _historyToken) return;
+  const token = `${Date.now()}-${++_historySequence}`;
+  try {
+    history.pushState({
+      ...(history.state || {}),
+      [_historyKey]: { token },
+    }, "", location.href);
+    _historyToken = token;
+    _historySources.set(token, src);
+    if (_historySources.size > 32) {
+      _historySources.delete(_historySources.keys().next().value);
+    }
+  } catch (_) {
+    _historyToken = "";
+  }
+}
+
+export function closeImagePreview() {
+  const ownsHistoryEntry = !!_historyToken
+    && history.state?.[_historyKey]?.token === _historyToken;
+  _historyToken = "";
+  _hideImagePreview();
+  if (ownsHistoryEntry) history.back();
 }
