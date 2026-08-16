@@ -26,14 +26,21 @@ Delivery depends on the persona's channel link (``channel_link``):
 
 - **Channel-bound**: send through that channel, subject to the channel's
   own push policy (``Channel.can_push_now``). WeChat enforces a 23h safety
-  window under openclaw's 24h context_token TTL and skips group chats; QQ is
-  passive-reply only (never proactively pushed).
+  window under openclaw's 24h context_token TTL, a 10-replies-per-context
+  quota, and skips group chats; QQ is passive-reply only (never proactively
+  pushed).
 - **Not bound**: send through the web panel SSE channel directly. Web
   delivery has no TTL.
 
 Bound personas without a backfilled ``peer_id`` are skipped. A proactive
 fire always requires at least one historical user message to anchor the
 idle timer on.
+
+Repeated send failures suspend the persona's proactive cycle. Failure
+state (streak, cooldown, suspension) is held in memory only — never
+written to disk — so a restart always starts clean; the suspension also
+lifts on the next inbound user message, the same event that resets
+WeChat's push quota. Configuration is never rewritten on failure.
 """
 
 from __future__ import annotations
@@ -61,13 +68,11 @@ logger = logging.getLogger(__name__)
 _CHECK_INTERVAL_SECONDS = 30              # Scan cadence of the background loop
 _JITTER_BASE = 27768
 _JITTER = _JITTER_BASE % 3               # 0 — keeps loop intervals from aligning
-WECHAT_SAFETY_WINDOW_SECONDS = 23 * 3600  # Hard gate for WeChat-bound personas
-                                          # (1h buffer under openclaw's 24h context TTL).
-                                          # Public so WeChatChannel.can_push_now reuses it.
 
 # Failure handling
 _FAIL_COOLDOWN_SECONDS = 30 * 60          # 30 min back-off after a failed send
-_AUTO_DISABLE_FAIL_THRESHOLD = 3          # Disable persona after N consecutive fails
+_SUSPEND_FAIL_THRESHOLD = 3               # Suspend after N consecutive fails;
+                                          # lifted on the next user message.
 
 
 def _parse_hhmm(value: str):
@@ -114,11 +119,16 @@ def scan_last_user_at(messages: list[dict]) -> float:
 
 
 class _PersonaState:
-    """Per-persona in-memory state mirror of ``proactive_state.json``."""
+    """Per-persona scheduling state, mirrored to ``proactive_state.json``.
+
+    The failure fields (``fail_streak``, ``cooldown_until``, ``suspended``)
+    are deliberately session-only: they are excluded from ``to_dict`` /
+    ``load_from`` so a process restart always clears them.
+    """
 
     __slots__ = (
         "wait_seconds", "anchor_at", "consecutive_count", "last_fired_at",
-        "cooldown_until", "fail_streak",
+        "cooldown_until", "fail_streak", "suspended",
     )
 
     def __init__(self):
@@ -128,6 +138,7 @@ class _PersonaState:
         self.last_fired_at: float = 0.0
         self.cooldown_until: float = 0.0
         self.fail_streak: int = 0
+        self.suspended: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -135,8 +146,6 @@ class _PersonaState:
             "anchor_at": self.anchor_at,
             "consecutive_count": self.consecutive_count,
             "last_fired_at": self.last_fired_at,
-            "cooldown_until": self.cooldown_until,
-            "fail_streak": self.fail_streak,
         }
 
     def load_from(self, data: dict):
@@ -144,8 +153,6 @@ class _PersonaState:
         self.anchor_at = float(data.get("anchor_at", 0.0))
         self.consecutive_count = int(data.get("consecutive_count", 0))
         self.last_fired_at = float(data.get("last_fired_at", 0.0))
-        self.cooldown_until = float(data.get("cooldown_until", 0.0))
-        self.fail_streak = int(data.get("fail_streak", 0))
 
 
 class ProactiveService:
@@ -230,8 +237,9 @@ class ProactiveService:
     def on_user_message(self, persona_id: str) -> None:
         """Called by :class:`MessageQueue` after a user message is accepted.
 
-        Resets the per-persona idle counter and consecutive-send counter so
-        the proactive cycle re-anchors on the new user activity.
+        Resets the per-persona idle counter, consecutive-send counter, and
+        failure state (including suspension) so the proactive cycle
+        re-anchors on the new user activity.
         """
         cfg = self._persona_proactive_cfg(persona_id)
         if cfg is None:
@@ -241,6 +249,7 @@ class ProactiveService:
         state.consecutive_count = 0
         state.fail_streak = 0
         state.cooldown_until = 0.0
+        state.suspended = False
         state.wait_seconds = self._random_wait_seconds(cfg)
         self._save_state(persona_id, state)
 
@@ -272,6 +281,11 @@ class ProactiveService:
 
         now = time.time()
         state = self._get_state(persona_id)
+
+        # Suspended after repeated failures — in-memory only, cleared by the
+        # user's next message (via ``on_user_message``) or a process restart.
+        if state.suspended:
+            return
 
         # Quiet hours (per-persona)
         qh = cfg.get("quiet_hours") or {}
@@ -317,9 +331,12 @@ class ProactiveService:
         if last_user_at <= 0:
             return
 
-        # Per-channel push policy (WeChat 23h window, group-skip; QQ passive-
-        # only; web unrestricted). Web-only personas (link is None) always pass.
-        if channel is not None and not channel.can_push_now(link, last_user_at):
+        # Per-channel push policy (WeChat 23h window, 10-reply quota, group-
+        # skip; QQ passive-only; web unrestricted). Web-only personas (link is
+        # None) always pass.
+        if channel is not None and not channel.can_push_now(
+            link, last_user_at, messages,
+        ):
             logger.debug(
                 "跳过 proactive：persona=%s 通道 %s 当前不允许主动推送",
                 persona_id, link.get("channel", ""),
@@ -444,35 +461,18 @@ class ProactiveService:
     def _record_failure(self, persona_id: str, state: _PersonaState) -> None:
         state.fail_streak += 1
         state.cooldown_until = time.time() + _FAIL_COOLDOWN_SECONDS
-        logger.error(
-            "主动消息连续失败 persona=%s fail_streak=%d/%d，%.0f 分钟后重试",
-            persona_id, state.fail_streak, _AUTO_DISABLE_FAIL_THRESHOLD,
-            _FAIL_COOLDOWN_SECONDS / 60.0,
-        )
-        if state.fail_streak >= _AUTO_DISABLE_FAIL_THRESHOLD:
-            self._auto_disable(persona_id)
-        self._save_state(persona_id, state)
-
-    def _auto_disable(self, persona_id: str) -> None:
-        """Persistently disable proactive for a persona after repeated failures."""
-        try:
-            with self._app.config.lock:
-                personas_cfg = self._app.config.get("personas", default={}) or {}
-                pcfg = personas_cfg.get(persona_id)
-                if not isinstance(pcfg, dict):
-                    return
-                pro = pcfg.setdefault("proactive", {})
-                if not pro.get("enabled", False):
-                    return
-                pro["enabled"] = False
-                self._app.config._data["personas"] = personas_cfg
-                self._app.config.save()
+        if state.fail_streak >= _SUSPEND_FAIL_THRESHOLD:
+            state.suspended = True
             logger.warning(
-                "proactive 因连续 %d 次失败已自动关闭 persona=%s",
-                _AUTO_DISABLE_FAIL_THRESHOLD, persona_id,
+                "主动消息连续 %d 次失败已挂起 persona=%s，用户回复或重启程序后自动恢复",
+                state.fail_streak, persona_id,
             )
-        except Exception:
-            logger.exception("自动关闭 proactive 失败 persona=%s", persona_id)
+        else:
+            logger.error(
+                "主动消息发送失败 persona=%s fail_streak=%d/%d，%.0f 分钟后重试",
+                persona_id, state.fail_streak, _SUSPEND_FAIL_THRESHOLD,
+                _FAIL_COOLDOWN_SECONDS / 60.0,
+            )
 
     # ---- Helpers ----------------------------------------------------------
 

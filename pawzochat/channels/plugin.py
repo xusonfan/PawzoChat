@@ -142,7 +142,12 @@ class PluginChannel(Channel):
 
     # ---- Push policy ----
 
-    def can_push_now(self, channel_link: dict, last_user_at: float) -> bool:
+    def can_push_now(
+        self,
+        channel_link: dict,
+        last_user_at: float,
+        messages: list[dict],
+    ) -> bool:
         # Plugin channels permit proactive sends by default; a plugin that
         # can't should simply no-op (or return False) in its on_outbound.
         return True

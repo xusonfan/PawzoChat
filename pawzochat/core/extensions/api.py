@@ -369,8 +369,9 @@ class MessagingFacade:
             raise RuntimeError(
                 f"Persona {persona_id} has no historical user message to anchor on"
             )
-        # Per-channel push policy (WeChat 23h openclaw TTL window; QQ passive-only).
-        if not channel_impl.can_push_now(link, last_user_at):
+        # Per-channel push policy (WeChat 23h openclaw TTL window + 10-reply
+        # quota; QQ passive-only).
+        if not channel_impl.can_push_now(link, last_user_at, messages):
             raise RuntimeError(
                 f"Persona {persona_id} channel {channel!r} cannot push right now "
                 "(reply window expired or active-push quota exhausted)"

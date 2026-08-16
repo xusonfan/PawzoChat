@@ -121,11 +121,18 @@ class Channel(ABC):
             "reply_target": channel_link.get("reply_target", ""),
         }
 
-    def can_push_now(self, channel_link: dict, last_user_at: float) -> bool:
+    def can_push_now(
+        self,
+        channel_link: dict,
+        last_user_at: float,
+        messages: list[dict],
+    ) -> bool:
         """Whether a proactive (non-reply) message may be pushed right now.
 
         ``last_user_at`` is the epoch seconds of the most recent inbound user
-        message. Default: allow (suits the web preview). WeChat overrides with
-        its 23h openclaw window; QQ disables the proactive service.
+        message; ``messages`` is the persona's stored conversation history.
+        Default: allow (suits the web preview). WeChat overrides with its 23h
+        openclaw window plus the 10-replies-per-context quota; QQ disables the
+        proactive service.
         """
         return True

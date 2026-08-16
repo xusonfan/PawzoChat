@@ -216,7 +216,12 @@ class QQChannel(Channel):
 
     # ---- Push policy ----
 
-    def can_push_now(self, channel_link: dict, last_user_at: float) -> bool:
+    def can_push_now(
+        self,
+        channel_link: dict,
+        last_user_at: float,
+        messages: list[dict],
+    ) -> bool:
         # Keep scheduled/general proactive delivery disabled for QQ.
         return False
 

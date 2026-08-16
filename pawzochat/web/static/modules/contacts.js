@@ -844,7 +844,7 @@ async function renderPersonaEdit(data) {
       const limitNote = ch === "wechat" ? `<div class="form-hint" style="background:var(--primary-light);color:var(--text-2);padding:10px 12px;margin:0 16px 4px;border-radius:8px;line-height:1.6">
         <div style="color:var(--primary);font-weight:500;margin-bottom:2px">微信通道限制</div>
         · 只能在用户最近一次消息 <b>24 小时内</b> 回复，超时后该角色的主动消息会被跳过<br>
-        · 用户每次发消息后，微信只展示机器人 <b>前 10 条</b> 连续回复，后续消息要等用户再次发言才会重置；建议"连续上限"不要超过 10
+        · 用户每次发消息后，微信最多接受机器人 <b>10 条</b> 连续回复；配额用完后主动消息会自动跳过，等用户再次发言后恢复
       </div>` : '';
       return `<div class="card" ${cardStyle}>
       <div class="card-header">主动消息</div>

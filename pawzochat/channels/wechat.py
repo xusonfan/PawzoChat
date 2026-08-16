@@ -65,6 +65,50 @@ MAX_INBOUND_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_INBOUND_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_INBOUND_VOICE_BYTES = 20 * 1024 * 1024
 
+# openclaw active-push policy: a context_token stays valid for 24h and accepts
+# at most 10 bot messages; both reset when the user sends a new message.
+WECHAT_SAFETY_WINDOW_SECONDS = 23 * 3600  # 1h buffer under the 24h TTL
+WECHAT_MAX_REPLIES_PER_CONTEXT = 10
+
+
+def _scan_push_context(messages: list[dict]) -> tuple[float, int]:
+    """Return (epoch of the WeChat message anchoring the context_token,
+    estimated reply slots already used against it).
+
+    Web-preview user messages (``source == "web"``) are skipped: they never
+    reach WeChat, so they refresh neither the context_token nor its quota.
+    Reply slots are counted per individual WeChat send (mirroring
+    ``deliver_message``: one per image/emoji/file/voice block plus one per
+    non-empty text) across all assistant messages stored after the anchor.
+    Replies that never went to WeChat (web-chat replies, failed sends) still
+    count — overcounting only skips a push early, the safe direction.
+
+    Returns ``(0.0, used)`` when no anchorable user message exists.
+    """
+    used = 0
+    for msg in reversed(messages):
+        role = msg.get("role")
+        if role == "user":
+            if msg.get("source") == "web":
+                continue
+            try:
+                return datetime.fromisoformat(msg.get("timestamp", "")).timestamp(), used
+            except (ValueError, TypeError):
+                continue  # unusable anchor — keep scanning older messages
+        if role != "assistant":
+            continue
+        text = ""
+        for block in msg.get("content", []) or []:
+            btype = block.get("type", "")
+            if btype in {"emoji", "image", "file", "voice"}:
+                if block.get("path"):
+                    used += 1
+            elif btype == "text":
+                text += block.get("text", "")
+        if text.strip():
+            used += 1
+    return 0.0, used
+
 
 def _detect_mime(data: bytes) -> str:
     for sig, mime in _MIME_SIGNATURES:
@@ -201,16 +245,25 @@ class WeChatChannel(Channel):
             "context_token": channel_link.get("reply_target", ""),
         }
 
-    def can_push_now(self, channel_link: dict, last_user_at: float) -> bool:
-        # WeChat group chats can't be proactively messaged, and the iLink
-        # context_token expires after the openclaw 23h window.
+    def can_push_now(
+        self,
+        channel_link: dict,
+        last_user_at: float,
+        messages: list[dict],
+    ) -> bool:
+        # WeChat group chats can't be proactively messaged; the iLink
+        # context_token expires after the openclaw 23h window and accepts at
+        # most 10 bot messages. Both reset only on an inbound WeChat message,
+        # so the anchor is derived from message provenance here rather than
+        # from ``last_user_at`` (which web-preview chatter also refreshes).
         if (channel_link.get("chat_type") or "single") == "group":
             return False
-        if last_user_at <= 0:
+        anchor_at, used = _scan_push_context(messages)
+        if anchor_at <= 0:
             return False
-        from pawzochat.services.proactive import WECHAT_SAFETY_WINDOW_SECONDS
-
-        return (time.time() - last_user_at) <= WECHAT_SAFETY_WINDOW_SECONDS
+        if (time.time() - anchor_at) > WECHAT_SAFETY_WINDOW_SECONDS:
+            return False
+        return used < WECHAT_MAX_REPLIES_PER_CONTEXT
 
     # ---- Inbound ----
 
