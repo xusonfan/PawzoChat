@@ -130,6 +130,10 @@ async function renderSettings() {
         <div class="row-icon indigo">${iconHtml("ri-edit-line")}</div>
         <span class="row-label">回复设置</span><span class="row-arrow">›</span>
       </div>
+      <div class="card-row" onclick="PawzoChat.pushPage('momentsSettings')">
+        <div class="row-icon peach">${iconHtml("ri-camera-line")}</div>
+        <span class="row-label">朋友圈设置</span><span class="row-value">提示词</span><span class="row-arrow">›</span>
+      </div>
       <div class="card-row" onclick="PawzoChat.pushPage('settingsTheme')">
         <div class="row-icon purple">${iconHtml("ri-palette-line")}</div>
         <span class="row-label">主题</span><span class="row-arrow">›</span>

@@ -155,9 +155,6 @@ function _listActionsHtml() {
     <button class="top-btn moments-action-btn" id="m-publish-btn" title="${publishTitle}" ${dis} onclick="PawzoChat.momentsOpenPublish()">
       ${iconHtml("ri-camera-line")}
     </button>
-    <button class="top-btn moments-action-btn" title="设置" onclick="PawzoChat.pushPage('momentsSettings',{})">
-      ${iconHtml("ri-settings-3-line")}
-    </button>
   `;
 }
 
