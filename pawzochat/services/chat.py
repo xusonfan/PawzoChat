@@ -130,7 +130,7 @@ class ChatService:
             raise ValueError(f"Conversation not found: {persona_id}")
 
         max_rounds = int(
-            self.config.get("chat", "max_context_rounds", default=5)
+            self.config.get("chat", "max_context_rounds", default=20)
         )
         history = self.store.get_recent_rounds(persona_id, max_rounds)
         persona = self._resolve_persona(persona_id)

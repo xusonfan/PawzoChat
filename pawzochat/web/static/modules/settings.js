@@ -2156,7 +2156,7 @@ function renderSettingsChat() {
     `<button class="btn-text" onclick="PawzoChat.saveSettingsChat()" style="font-size:15px;font-weight:500">保存</button>`
   );
   const s = state.settings?.chat || {};
-  const maxRounds = s.max_context_rounds || 5;
+  const maxRounds = s.max_context_rounds || 20;
   const systemPermission = systemNotificationPermission();
   const systemNotificationLabel = {
     granted: "已开启",

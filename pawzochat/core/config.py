@@ -67,7 +67,7 @@ DEFAULTS: dict = {
     "mcp_servers": {},
     "capability_adapters": {},
     "chat": {
-        "max_context_rounds": 10,
+        "max_context_rounds": 20,
         "queue_wait_seconds": 7,
         "new_message_sound": True,
         "new_message_vibration": True,
