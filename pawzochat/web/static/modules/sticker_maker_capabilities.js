@@ -17,6 +17,19 @@ export function availableStickerProviders(rawProviders) {
     .filter(provider => provider.api_key_set && provider.models.length > 0);
 }
 
+export function nextStickerGroupName(groups, baseName = "我的表情包") {
+  const names = new Set(
+    (groups || [])
+      .map(group => typeof group === "string" ? group : group?.name)
+      .filter(name => typeof name === "string"),
+  );
+  if (!names.has(baseName)) return baseName;
+
+  let suffix = 2;
+  while (names.has(`${baseName} ${suffix}`)) suffix += 1;
+  return `${baseName} ${suffix}`;
+}
+
 export function selectedStickerModel(providers, providerName, modelId) {
   const models = (providers || []).find(provider => provider.name === providerName)?.models || [];
   return models.find(model => model.id === modelId) || null;

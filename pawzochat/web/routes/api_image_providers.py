@@ -123,6 +123,8 @@ def _normalize_models_payload(models, provider_cfg) -> tuple[list[dict], str | N
         if t and t not in VALID_MODEL_TYPES:
             return [], f"模型「{mid}」的调用方式不支持: {t}"
         entry["type"] = t or resolve_model_type(provider_cfg, m)
+        if isinstance(m.get("supports_reference_images"), bool):
+            entry["supports_reference_images"] = m["supports_reference_images"]
         out.append(entry)
     return out, None
 
@@ -250,6 +252,10 @@ def add_image_model(name: str):
             "name": data.get("name", model_id),
             "type": mtype or resolve_model_type(provider_cfg, {"id": model_id}),
         }
+        if isinstance(data.get("supports_reference_images"), bool):
+            new_entry["supports_reference_images"] = data[
+                "supports_reference_images"
+            ]
         models.append(new_entry)
         app.config.save()
         _reinit_image(app)
@@ -278,6 +284,10 @@ def update_image_model(name: str, model_id: str):
             if data["type"] not in VALID_MODEL_TYPES:
                 return jsonify({"error": f"不支持的调用方式: {data['type']}"}), 400
             target["type"] = data["type"]
+        if isinstance(data.get("supports_reference_images"), bool):
+            target["supports_reference_images"] = data[
+                "supports_reference_images"
+            ]
 
         app.config.save()
         _reinit_image(app)
@@ -337,7 +347,10 @@ def test_image_provider(name: str):
         }), 400
 
     ref_images: list[tuple[bytes, str]] = []
-    if persona_id:
+    if persona_id and app.image_manager.model_supports_reference_images(
+        name,
+        model,
+    ):
         persona_cfg = app.config.get("personas", default={}).get(persona_id) or {}
         ref_images = resolve_reference_images(
             persona_id, persona_cfg.get("image_generation") or {},

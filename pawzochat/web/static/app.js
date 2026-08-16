@@ -21,6 +21,7 @@ import { esc, iconHtml } from "./modules/utils.js";
 import { api } from "./modules/api.js";
 import { state, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
+import { choicePickerSelect } from "./modules/choice_picker.js";
 import { openImagePreview, closeImagePreview } from "./modules/image_preview.js";
 import { rememberImageLayout } from "./modules/image_layout_cache.js";
 import {
@@ -195,13 +196,14 @@ import {
 } from "./modules/persona_writer.js";
 
 import {
-  radarOnProviderChange, radarRefresh, radarUseRecommendation,
+  radarOpenProviderPicker, radarOpenModelPicker,
+  radarRefresh, radarUseRecommendation,
 } from "./modules/radar.js";
 
 import {
-  stickerMakerProviderChange, stickerMakerModelChange, stickerMakerPersonaChange,
+  stickerMakerOpenProviderPicker, stickerMakerOpenModelPicker,
   stickerMakerPickReference, stickerMakerReferenceSelected,
-  stickerMakerGenerate,
+  stickerMakerGenerate, stickerMakerSave,
 } from "./modules/sticker_maker.js";
 
 /* ============ Discover Tab ============ */
@@ -221,7 +223,7 @@ function renderDiscover() {
       </div>
       <div class="card-row" onclick="PawzoChat.pushPage('stickerMaker',{})">
         <div class="row-icon yellow">${iconHtml("ri-chat-smile-2-line")}</div>
-        <span class="row-label">表情包工坊</span><span class="row-value">AI 生成</span><span class="row-arrow">›</span>
+        <span class="row-label">表情包工坊</span><span class="row-arrow">›</span>
       </div>
       <div class="card-row" onclick="PawzoChat.pushPage('worldbookList',{})">
         <div class="row-icon blue">${iconHtml("ri-book-open-line")}</div>
@@ -328,7 +330,7 @@ function initSSE() {
 window.PawzoChat = {
   switchTab, goBack, pushPage,
   requestPwaInstall,
-  closeOverlay, closeConfirm,
+  closeOverlay, closeConfirm, choicePickerSelect,
   openImagePreview, closeImagePreview, rememberImageLayout,
   newConversation, startChat, openChat,
   filterConvs, chatMore, clearChat, deleteChat,
@@ -445,10 +447,11 @@ window.PawzoChat = {
   openPersonaMoments, momentsOpenDetail,
   pwOnProviderChange, pwOnImageProviderChange,
   pwGenerate, pwGenerateImage, pwCreatePersona,
-  radarOnProviderChange, radarRefresh, radarUseRecommendation,
-  stickerMakerProviderChange, stickerMakerModelChange, stickerMakerPersonaChange,
+  radarOpenProviderPicker, radarOpenModelPicker,
+  radarRefresh, radarUseRecommendation,
+  stickerMakerOpenProviderPicker, stickerMakerOpenModelPicker,
   stickerMakerPickReference, stickerMakerReferenceSelected,
-  stickerMakerGenerate,
+  stickerMakerGenerate, stickerMakerSave,
 };
 
 /* ============ Init ============ */

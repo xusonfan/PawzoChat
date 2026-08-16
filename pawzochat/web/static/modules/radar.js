@@ -9,14 +9,17 @@
  */
 import { api } from "./api.js";
 import { $, content } from "./state.js";
-import { esc, escAttr } from "./utils.js";
+import { esc } from "./utils.js";
 import { setTopBar, pushPage, registerPageRenderer } from "./navigation.js";
 import { toast } from "./ui.js";
+import { openChoicePicker } from "./choice_picker.js";
 
 const RADAR_CACHE_KEY = "pawzo_radar_recommendations_v1";
 
 const _radar = {
   providers: [],
+  selectedProvider: "",
+  selectedModel: "",
   recommendations: [],
   requestVersion: 0,
 };
@@ -58,26 +61,59 @@ function _writeRecommendationCache(provider, model, recommendations) {
   }
 }
 
-function _providerOptions(selected) {
-  return _radar.providers.map(provider => (
-    `<option value="${escAttr(provider.name)}" ${provider.name === selected ? "selected" : ""}>${esc(provider.name)}</option>`
-  )).join("");
+function _modelsFor(providerName) {
+  return _radar.providers.find(provider => provider.name === providerName)?.models || [];
 }
 
-function _modelOptions(providerName, selected) {
-  const provider = _radar.providers.find(item => item.name === providerName);
-  const models = provider?.models || [];
-  if (!models.length) return `<option value="" disabled selected>该服务商下没有模型</option>`;
-  const effective = models.some(model => model.id === selected) ? selected : models[0].id;
-  return models.map(model => (
-    `<option value="${escAttr(model.id)}" ${model.id === effective ? "selected" : ""}>${esc(model.name || model.id)}</option>`
-  )).join("");
+function _selectedProviderLabel() {
+  return _radar.providers.find(provider => provider.name === _radar.selectedProvider)?.name
+    || "请选择";
 }
 
-function radarOnProviderChange() {
-  const provider = $("radar-provider")?.value || "";
-  const modelSelect = $("radar-model");
-  if (modelSelect) modelSelect.innerHTML = _modelOptions(provider, "");
+function _selectedModelLabel() {
+  const model = _modelsFor(_radar.selectedProvider)
+    .find(item => item.id === _radar.selectedModel);
+  return model?.name || model?.id || "请选择";
+}
+
+function _syncPickerLabels() {
+  const providerValue = $("radar-provider-value");
+  const modelValue = $("radar-model-value");
+  if (providerValue) providerValue.textContent = _selectedProviderLabel();
+  if (modelValue) modelValue.textContent = _selectedModelLabel();
+}
+
+function radarOpenProviderPicker() {
+  openChoicePicker({
+    title: "选择服务商",
+    selectedValue: _radar.selectedProvider,
+    options: _radar.providers.map(provider => ({
+      value: provider.name,
+      label: provider.name,
+    })),
+    onSelect: providerName => {
+      if (providerName === _radar.selectedProvider) return;
+      _radar.selectedProvider = providerName;
+      _radar.selectedModel = _modelsFor(providerName)[0]?.id || "";
+      _syncPickerLabels();
+    },
+  });
+}
+
+function radarOpenModelPicker() {
+  openChoicePicker({
+    title: "选择模型",
+    selectedValue: _radar.selectedModel,
+    options: _modelsFor(_radar.selectedProvider).map(model => ({
+      value: model.id,
+      label: model.name || model.id,
+      description: model.name && model.name !== model.id ? model.id : "",
+    })),
+    onSelect: modelId => {
+      _radar.selectedModel = modelId;
+      _syncPickerLabels();
+    },
+  });
 }
 
 function _renderRecommendations() {
@@ -101,8 +137,8 @@ function _renderRecommendations() {
 }
 
 async function radarRefresh() {
-  const provider = $("radar-provider")?.value || "";
-  const model = $("radar-model")?.value || "";
+  const provider = _radar.selectedProvider;
+  const model = _radar.selectedModel;
   if (!provider || !model) {
     toast("请先选择服务商与模型", "error");
     return;
@@ -183,6 +219,12 @@ async function renderRadar() {
   const selectedProvider = _radar.providers.some(provider => provider.name === lastProvider)
     ? lastProvider
     : _radar.providers[0].name;
+  const selectedModels = _modelsFor(selectedProvider);
+  const selectedModel = selectedModels.some(model => model.id === lastModel)
+    ? lastModel
+    : selectedModels[0]?.id || "";
+  _radar.selectedProvider = selectedProvider;
+  _radar.selectedModel = selectedModel;
   _radar.recommendations = cached?.recommendations || [];
 
   content().innerHTML = `<div class="page radar-page">
@@ -194,12 +236,20 @@ async function renderRadar() {
       </div>
     </section>
     <div class="card radar-controls">
-      <div class="form-group"><div class="form-row"><label>服务商</label>
-        <select id="radar-provider" onchange="PawzoChat.radarOnProviderChange()">${_providerOptions(selectedProvider)}</select>
-      </div></div>
-      <div class="form-group"><div class="form-row"><label>模型</label>
-        <select id="radar-model">${_modelOptions(selectedProvider, lastModel)}</select>
-      </div></div>
+      <div class="form-group">
+        <button type="button" class="form-row choice-picker-trigger" onclick="PawzoChat.radarOpenProviderPicker()">
+          <span class="choice-picker-trigger-label">服务商</span>
+          <span id="radar-provider-value" class="choice-picker-trigger-value">${esc(_selectedProviderLabel())}</span>
+          <span class="row-arrow" aria-hidden="true">›</span>
+        </button>
+      </div>
+      <div class="form-group">
+        <button type="button" class="form-row choice-picker-trigger" onclick="PawzoChat.radarOpenModelPicker()">
+          <span class="choice-picker-trigger-label">模型</span>
+          <span id="radar-model-value" class="choice-picker-trigger-value">${esc(_selectedModelLabel())}</span>
+          <span class="row-arrow" aria-hidden="true">›</span>
+        </button>
+      </div>
     </div>
     <button class="btn-primary" id="radar-refresh-btn" onclick="PawzoChat.radarRefresh()">${cached ? "换一批" : "开始探索"}</button>
     <div class="radar-section-title"><span>本次发现</span><small>选择一个方向继续完善</small></div>
@@ -216,7 +266,8 @@ async function renderRadar() {
 registerPageRenderer("radar", renderRadar);
 
 export {
-  radarOnProviderChange,
+  radarOpenProviderPicker,
+  radarOpenModelPicker,
   radarRefresh,
   radarUseRecommendation,
 };

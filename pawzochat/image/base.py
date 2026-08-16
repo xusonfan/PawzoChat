@@ -85,9 +85,10 @@ class ImageProvider(ABC):
         """Generate an image and return its raw bytes.
 
         ``reference_images`` is a list of ``(bytes, mime_type)`` for character /
-        scene consistency. Providers that don't support it (e.g. OpenAI's
-        ``/images/generations``) log a warning and ignore it. ``reference_strength``
-        is currently honored only by NovelAI.
+        scene consistency. Support is model-specific for OpenAI-compatible
+        providers because reference inputs use ``/images/edits`` rather than
+        ``/images/generations``. ``reference_strength`` is currently honored
+        only by NovelAI.
 
         ``**kwargs`` forwards provider-specific tunables (sampler, quality,
         style, aspect_ratio, etc.).  The web "test" endpoint passes only

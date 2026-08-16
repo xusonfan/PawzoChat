@@ -16,8 +16,8 @@
 
 """OpenAI-compatible image generation provider.
 
-Covers both OpenAI official (api.openai.com/v1) and any OpenAI-compatible
-proxy serving the /images/generations endpoint.
+Text-only requests use ``/images/generations``. GPT Image models with one or
+more reference images use the multipart ``/images/edits`` endpoint.
 """
 
 from __future__ import annotations
@@ -41,6 +41,33 @@ IMAGE_REQUEST_TIMEOUT_SECONDS = float(
     os.getenv("PAWZOCHAT_IMAGE_TIMEOUT_SECONDS", "180"),
 )
 
+OPENAI_REFERENCE_IMAGE_MODELS = frozenset({
+    "gpt-image-2",
+    "gpt-image-2-2026-04-21",
+    "gpt-image-1.5",
+    "gpt-image-1",
+    "gpt-image-1-mini",
+    "chatgpt-image-latest",
+})
+OPENAI_MAX_REFERENCE_IMAGES = 16
+_IMAGE_FILE_EXTENSIONS = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+
+
+def openai_model_supports_reference_images(model: str) -> bool:
+    """Return whether a known OpenAI image model supports ``/images/edits``."""
+    return (model or "").strip().lower() in OPENAI_REFERENCE_IMAGE_MODELS
+
+
+def _reference_image_file(index: int, image_data: bytes, mime_type: str) -> tuple:
+    mime = (mime_type or "image/png").split(";", 1)[0].strip().lower()
+    extension = _IMAGE_FILE_EXTENSIONS.get(mime, "png")
+    return (f"reference-{index}.{extension}", image_data, mime)
+
 
 class OpenAIImageProvider(ImageProvider):
     provider_type = "openai_image"
@@ -48,6 +75,10 @@ class OpenAIImageProvider(ImageProvider):
     def __init__(self, base_url: str, api_key: str, **kwargs):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        declared = kwargs.get("supports_reference_images")
+        self._reference_image_capability = (
+            declared if isinstance(declared, bool) else None
+        )
 
     def generate(
         self,
@@ -65,15 +96,24 @@ class OpenAIImageProvider(ImageProvider):
         if not model:
             raise ImageGenerationError(self.provider_type, "未指定模型")
 
-        if reference_images:
+        references = list(reference_images or [])
+        supports_reference_images = self._reference_image_capability
+        if supports_reference_images is None:
+            supports_reference_images = openai_model_supports_reference_images(model)
+        if references and not supports_reference_images:
             logger.warning(
-                "OpenAI /images/generations 不支持参考图，已忽略 %d 张 (model=%s)",
-                len(reference_images), model,
+                "OpenAI 模型未声明支持参考图，已忽略 %d 张 (model=%s)",
+                len(references), model,
+            )
+            references = []
+        if len(references) > OPENAI_MAX_REFERENCE_IMAGES:
+            raise ImageGenerationError(
+                self.provider_type,
+                f"参考图不能超过 {OPENAI_MAX_REFERENCE_IMAGES} 张",
             )
 
-        # OpenAI's image-generation API doesn't accept a negative_prompt field; if the caller gave one, append it to the end of the prompt.
+        # OpenAI's image API has no negative_prompt field.
         full_prompt = attach_negative_to_prompt(prompt, negative_prompt)
-
         body: dict = {
             "model": model,
             "prompt": full_prompt,
@@ -91,14 +131,28 @@ class OpenAIImageProvider(ImageProvider):
         if "background" in kwargs:
             body["background"] = kwargs["background"]
 
-        url = f"{self.base_url}/images/generations"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        logger.info("OpenAI 兼容生图调用: model=%s size=%s", model, body["size"])
-        resp = self._post_with_format_fallback(url, headers, body)
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if references:
+            url = f"{self.base_url}/images/edits"
+            files = [
+                ("image[]", _reference_image_file(index, image_data, mime_type))
+                for index, (image_data, mime_type) in enumerate(references, start=1)
+            ]
+            logger.info(
+                "OpenAI 兼容参考图生图调用: model=%s size=%s ref_count=%d",
+                model, body["size"], len(references),
+            )
+            resp = self._post_with_format_fallback(
+                url,
+                headers,
+                body,
+                files=files,
+            )
+        else:
+            url = f"{self.base_url}/images/generations"
+            headers["Content-Type"] = "application/json"
+            logger.info("OpenAI 兼容生图调用: model=%s size=%s", model, body["size"])
+            resp = self._post_with_format_fallback(url, headers, body)
 
         try:
             data = resp.json()
@@ -128,28 +182,9 @@ class OpenAIImageProvider(ImageProvider):
 
         raise ImageGenerationError(self.provider_type, f"无图像数据: {first}")
 
-    def _post_with_format_fallback(self, url, headers, body):
-        """POST, retrying once without `response_format` if upstream 4xx's on that field.
-
-        OpenAI's official gpt-image-* explicitly rejects response_format (it
-        defaults to b64_json anyway), but many relays are the opposite — they
-        default to returning a URL unless it's omitted. There's no clean way
-        to branch on model name alone, so this submits with the field
-        included first and retries without it only if the error looks
-        response_format-related.
-        """
-        try:
-            resp = requests.post(
-                url,
-                json=body,
-                headers=headers,
-                timeout=IMAGE_REQUEST_TIMEOUT_SECONDS,
-            )
-        except requests.exceptions.Timeout:
-            raise ImageGenerationError(self.provider_type, "请求超时") from None
-        except requests.exceptions.ConnectionError as e:
-            raise ImageGenerationError(self.provider_type, f"连接失败: {e}") from None
-
+    def _post_with_format_fallback(self, url, headers, body, *, files=None):
+        """POST once, retrying without ``response_format`` when rejected."""
+        resp = self._post(url, headers, body, files=files)
         if resp.ok:
             return resp
 
@@ -160,24 +195,23 @@ class OpenAIImageProvider(ImageProvider):
             and "response_format" in text_lower
         ):
             logger.info("上游拒绝 response_format，去掉后重试")
-            body2 = {k: v for k, v in body.items() if k != "response_format"}
-            try:
-                resp2 = requests.post(
-                    url,
-                    json=body2,
-                    headers=headers,
-                    timeout=IMAGE_REQUEST_TIMEOUT_SECONDS,
-                )
-            except requests.exceptions.Timeout:
-                raise ImageGenerationError(self.provider_type, "请求超时") from None
-            except requests.exceptions.ConnectionError as e:
-                raise ImageGenerationError(self.provider_type, f"连接失败: {e}") from None
-            if resp2.ok:
-                return resp2
+            body_without_format = {
+                key: value
+                for key, value in body.items()
+                if key != "response_format"
+            }
+            retry = self._post(
+                url,
+                headers,
+                body_without_format,
+                files=files,
+            )
+            if retry.ok:
+                return retry
             raise ImageGenerationError(
                 self.provider_type,
-                f"HTTP {resp2.status_code}: {resp2.text[:300]}",
-                status_code=resp2.status_code,
+                f"HTTP {retry.status_code}: {retry.text[:300]}",
+                status_code=retry.status_code,
             )
 
         raise ImageGenerationError(
@@ -185,6 +219,30 @@ class OpenAIImageProvider(ImageProvider):
             f"HTTP {resp.status_code}: {resp.text[:300]}",
             status_code=resp.status_code,
         )
+
+    def _post(self, url, headers, body, *, files=None):
+        try:
+            if files:
+                return requests.post(
+                    url,
+                    data=body,
+                    files=files,
+                    headers=headers,
+                    timeout=IMAGE_REQUEST_TIMEOUT_SECONDS,
+                )
+            return requests.post(
+                url,
+                json=body,
+                headers=headers,
+                timeout=IMAGE_REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.exceptions.Timeout:
+            raise ImageGenerationError(self.provider_type, "请求超时") from None
+        except requests.exceptions.ConnectionError as exc:
+            raise ImageGenerationError(
+                self.provider_type,
+                f"连接失败: {exc}",
+            ) from None
 
     def _download_url(self, image_url: str) -> ImageResponse:
         try:

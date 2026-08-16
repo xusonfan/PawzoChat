@@ -1295,6 +1295,42 @@ body {
 .form-row input[type="time"] { flex: none; margin-left: auto; width: auto; }
 .form-row select { appearance: none; -webkit-appearance: none; cursor: pointer; text-align-last: right; }
 .form-row .readonly { color: var(--text-3); }
+.choice-picker-trigger {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.choice-picker-trigger:hover { background: color-mix(in srgb, var(--primary) 5%, transparent); }
+.choice-picker-trigger:active { background: var(--primary-light); }
+.choice-picker-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.choice-picker-trigger-label {
+  flex: 0 0 auto;
+  min-width: 100px;
+  max-width: 55%;
+  font-size: 15px;
+}
+.choice-picker-trigger-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: 14px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.choice-picker-trigger .row-arrow {
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
 /* Chromium reserves inline space for the datalist picker icon but only draws
    it on hover/focus, so right-aligned text sits short of the input's edge at
    rest. Hiding the indicator removes the reserved gap; datalist suggestions
@@ -1568,6 +1604,87 @@ body {
   color: var(--text-2);
   cursor: pointer;
   border-top: 8px solid var(--bg);
+}
+.choice-picker-list {
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  padding: 0 12px 8px;
+}
+.choice-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.choice-picker-option + .choice-picker-option { margin-top: 3px; }
+.choice-picker-option:hover { background: var(--bg); }
+.choice-picker-option:active { background: var(--primary-light); }
+.choice-picker-option:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.choice-picker-option.is-selected {
+  background: var(--primary-light);
+  color: var(--primary-dark);
+}
+.choice-picker-option.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.choice-picker-option-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.choice-picker-option-copy strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.choice-picker-option-copy small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.choice-picker-check {
+  flex: 0 0 auto;
+  width: 24px;
+  color: var(--primary);
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+  visibility: hidden;
+}
+.choice-picker-option.is-selected .choice-picker-check { visibility: visible; }
+.choice-picker-empty {
+  padding: 24px 12px;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+.choice-picker-cancel {
+  width: 100%;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  font: 500 15px var(--font);
 }
 
 /* ---- Confirm Dialog ---- */
@@ -3786,16 +3903,18 @@ select.qs-field-input {
   line-height: 1.55;
 }
 .sticker-maker-card { padding: 16px; }
+.sticker-maker-selector-card { padding: 0; }
 .sticker-maker-section-title {
   margin-bottom: 13px;
   color: var(--text-1);
   font-size: 15px;
   font-weight: 650;
 }
-.sticker-maker-fields-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.sticker-maker-section-title small {
+  margin-left: 4px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 400;
 }
 .sticker-maker-mode {
   display: flex;
@@ -3838,7 +3957,40 @@ select.qs-field-input {
 .sticker-maker-field .form-textarea {
   width: 100%;
 }
-.sticker-maker-style { min-height: 84px; resize: vertical; }
+.sticker-maker-field .form-input,
+.sticker-maker-field .form-textarea {
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--divider);
+  border-radius: 11px;
+  outline: none;
+  color: var(--text-1);
+  background: var(--bg);
+  font: 14px var(--font);
+  transition: border-color 0.18s, background-color 0.18s, box-shadow 0.18s;
+}
+.sticker-maker-field .form-input {
+  min-height: 42px;
+}
+.sticker-maker-field .form-input::placeholder,
+.sticker-maker-field .form-textarea::placeholder {
+  color: var(--text-3);
+}
+.sticker-maker-field .form-input:hover,
+.sticker-maker-field .form-textarea:hover {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--divider));
+}
+.sticker-maker-field .form-input:focus,
+.sticker-maker-field .form-textarea:focus {
+  border-color: var(--primary);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+.sticker-maker-style {
+  min-height: 84px;
+  line-height: 1.55;
+  resize: vertical;
+}
 .sticker-maker-reference {
   display: flex;
   align-items: center;
@@ -3852,6 +4004,10 @@ select.qs-field-input {
   text-align: left;
   cursor: pointer;
   font-family: var(--font);
+}
+.sticker-maker-reference-card .sticker-maker-reference {
+  padding-top: 0;
+  border-top: 0;
 }
 .sticker-maker-reference-preview {
   display: grid;
@@ -3974,6 +4130,21 @@ select.qs-field-input {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
+.sticker-maker-save-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--divider);
+}
+.sticker-maker-save-bar > span {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sticker-maker-save { flex: 0 0 auto; min-height: 40px; }
 .sticker-maker-item {
   min-width: 0;
   padding: 7px 5px 6px;
@@ -4043,6 +4214,7 @@ select.qs-field-input {
   .moments-imgs.n2,
   .moments-imgs.n4 { max-width: 100%; }
   .moments-imgs.n3 { max-width: 100%; }
-  .sticker-maker-fields-grid { grid-template-columns: 1fr; gap: 0; }
   .sticker-maker-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sticker-maker-save-bar { align-items: stretch; flex-direction: column; }
+  .sticker-maker-save { width: 100%; }
 }

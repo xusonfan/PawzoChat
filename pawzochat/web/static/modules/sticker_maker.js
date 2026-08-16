@@ -13,64 +13,58 @@ import { content, $ } from "./state.js";
 import { setTopBar, registerPageRenderer } from "./navigation.js";
 import { toast, showLoading, hideLoading } from "./ui.js";
 import { esc, escAttr, iconHtml, jsArg } from "./utils.js";
+import { openChoicePicker } from "./choice_picker.js";
 import {
   availableStickerProviders,
   modelSupportsReferenceImages,
+  nextStickerGroupName,
 } from "./sticker_maker_capabilities.js";
 
 const BASE = () => window.PAWZOCHAT_BASE || "";
 
 const _maker = {
   providers: [],
-  personas: [],
+  selectedProvider: "",
+  selectedModel: "",
   referenceFile: null,
   referenceDataUrl: "",
   result: null,
   generating: false,
+  saving: false,
 };
-
-function _providerOptions(selected = "") {
-  return _maker.providers.map(provider => (
-    `<option value="${escAttr(provider.name)}" ${provider.name === selected ? "selected" : ""}>${esc(provider.name)}</option>`
-  )).join("");
-}
 
 function _modelsFor(providerName) {
   return _maker.providers.find(provider => provider.name === providerName)?.models || [];
 }
 
-function _modelOptions(providerName, selected = "") {
-  return _modelsFor(providerName).map(model => (
-    `<option value="${escAttr(model.id)}" ${model.id === selected ? "selected" : ""}>${esc(model.name || model.id)}</option>`
-  )).join("");
+function _selectedProviderLabel() {
+  return _maker.providers.find(provider => provider.name === _maker.selectedProvider)?.name
+    || "请选择";
+}
+
+function _selectedModel() {
+  return _modelsFor(_maker.selectedProvider)
+    .find(model => model.id === _maker.selectedModel);
+}
+
+function _selectedModelLabel() {
+  const model = _selectedModel();
+  return model?.name || model?.id || "请选择";
+}
+
+function _syncPickerLabels() {
+  const providerValue = $("sticker-provider-value");
+  const modelValue = $("sticker-model-value");
+  if (providerValue) providerValue.textContent = _selectedProviderLabel();
+  if (modelValue) modelValue.textContent = _selectedModelLabel();
 }
 
 function _selectedModelSupportsReference() {
   return modelSupportsReferenceImages(
     _maker.providers,
-    $("sticker-provider")?.value || "",
-    $("sticker-model")?.value || "",
+    _maker.selectedProvider,
+    _maker.selectedModel,
   );
-}
-
-function _personaHasReference(persona) {
-  const mode = persona.image_generation?.ref_mode || "avatar";
-  if (mode === "custom") return !!persona.has_image_ref;
-  if (mode === "avatar") return !!persona.has_avatar;
-  return false;
-}
-
-function _personaOptions() {
-  const options = _maker.personas.map(persona => {
-    const usable = _personaHasReference(persona);
-    const suffix = usable ? "" : "（无参考图）";
-    return `<option value="${escAttr(persona.id)}" ${usable ? "" : "disabled"}>${esc(persona.name)}${suffix}</option>`;
-  }).join("");
-  return `<option value="">不使用角色，上传参考图</option>${options}`;
-}
-
-function _defaultPersona() {
-  return _maker.personas.find(_personaHasReference) || null;
 }
 
 function _renderUnavailable() {
@@ -84,10 +78,13 @@ function _renderUnavailable() {
   </div>`;
 }
 
-function _renderForm() {
-  const provider = _maker.providers[0];
-  const persona = _defaultPersona();
-  const suggestedName = persona ? `${persona.name}表情包` : "我的表情包";
+function _renderForm(suggestedName) {
+  const provider = _maker.providers.find(item => item.name === _maker.selectedProvider)
+    || _maker.providers[0];
+  const model = provider.models.find(item => item.id === _maker.selectedModel)
+    || provider.models[0];
+  _maker.selectedProvider = provider.name;
+  _maker.selectedModel = model?.id || "";
 
   content().innerHTML = `<div class="page sticker-maker-page">
     <input id="sticker-reference-file" type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="PawzoChat.stickerMakerReferenceSelected(event)">
@@ -100,19 +97,32 @@ function _renderForm() {
       </div>
     </section>
 
-    <section id="sticker-reference-card" class="card sticker-maker-card">
-      <div class="sticker-maker-section-title">角色参考</div>
-      <label class="sticker-maker-field">
-        <span>已有角色</span>
-        <select id="sticker-persona" class="form-select" onchange="PawzoChat.stickerMakerPersonaChange()">
-          ${_personaOptions()}
-        </select>
-      </label>
+    <section class="card sticker-maker-selector-card">
+      <div class="sticker-maker-selectors">
+        <div class="form-group">
+          <button type="button" class="form-row choice-picker-trigger" onclick="PawzoChat.stickerMakerOpenProviderPicker()">
+            <span class="choice-picker-trigger-label">服务商</span>
+            <span id="sticker-provider-value" class="choice-picker-trigger-value">${esc(_selectedProviderLabel())}</span>
+            <span class="row-arrow" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="form-group">
+          <button type="button" class="form-row choice-picker-trigger" onclick="PawzoChat.stickerMakerOpenModelPicker()">
+            <span class="choice-picker-trigger-label">模型</span>
+            <span id="sticker-model-value" class="choice-picker-trigger-value">${esc(_selectedModelLabel())}</span>
+            <span class="row-arrow" aria-hidden="true">›</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="sticker-reference-card" class="card sticker-maker-card sticker-maker-reference-card">
+      <div class="sticker-maker-section-title">参考图 <small>可选</small></div>
       <button type="button" class="sticker-maker-reference" onclick="PawzoChat.stickerMakerPickReference()">
         <span id="sticker-reference-preview" class="sticker-maker-reference-preview">${iconHtml("ri-upload-cloud-2-line")}</span>
         <span class="sticker-maker-reference-copy">
-          <strong id="sticker-reference-title">上传临时参考图</strong>
-          <small id="sticker-reference-hint">上传后优先于角色参考图，最大 10 MB</small>
+          <strong id="sticker-reference-title">上传参考图</strong>
+          <small id="sticker-reference-hint">仅用于本次表情包生成，最大 10 MB</small>
         </span>
         <span class="row-arrow">›</span>
       </button>
@@ -120,20 +130,6 @@ function _renderForm() {
 
     <section class="card sticker-maker-card">
       <div class="sticker-maker-section-title">生成设置</div>
-      <div class="sticker-maker-fields-grid">
-        <label class="sticker-maker-field">
-          <span>生图服务商</span>
-          <select id="sticker-provider" class="form-select" onchange="PawzoChat.stickerMakerProviderChange()">
-            ${_providerOptions(provider.name)}
-          </select>
-        </label>
-        <label class="sticker-maker-field">
-          <span>模型</span>
-          <select id="sticker-model" class="form-select" onchange="PawzoChat.stickerMakerModelChange()">
-            ${_modelOptions(provider.name)}
-          </select>
-        </label>
-      </div>
       <div id="sticker-generation-mode" class="sticker-maker-mode"></div>
       <label class="sticker-maker-field">
         <span>新表情包名称</span>
@@ -148,13 +144,11 @@ function _renderForm() {
     <button id="sticker-generate" class="sticker-maker-primary sticker-maker-generate" onclick="PawzoChat.stickerMakerGenerate()">
       ${iconHtml("ri-sparkling-2-line")}<span>生成 16 张表情</span>
     </button>
-    <div class="sticker-maker-footnote">模型只调用一次；切图、去白底和保存均在 PawzoChat 内完成。</div>
+    <div class="sticker-maker-footnote">生成后可先预览切图；只有点击“保存表情包”才会写入表情包管理。</div>
 
     <section id="sticker-result" class="sticker-maker-result" hidden></section>
   </div>`;
 
-  const personaSelect = $("sticker-persona");
-  if (personaSelect && persona) personaSelect.value = persona.id;
   _syncGenerationMode();
 }
 
@@ -163,20 +157,20 @@ async function renderStickerMaker() {
   _maker.referenceFile = null;
   _maker.referenceDataUrl = "";
   _maker.result = null;
+  _maker.saving = false;
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
 
   try {
-    const [providerResult, personaResult] = await Promise.all([
+    const [providerResult, groupResult] = await Promise.all([
       api.get("/api/image-providers", { bypassCache: true }),
-      api.get("/api/personas"),
+      api.get("/api/emoji/groups", { bypassCache: true }),
     ]);
     _maker.providers = availableStickerProviders(providerResult.providers);
-    _maker.personas = personaResult.personas || [];
     if (_maker.providers.length === 0) {
       _renderUnavailable();
       return;
     }
-    _renderForm();
+    _renderForm(nextStickerGroupName(groupResult.groups));
   } catch (error) {
     content().innerHTML = `<div class="empty-state"><div class="empty-text">加载配置失败</div></div>`;
     toast("加载配置失败", "error");
@@ -194,39 +188,52 @@ function _syncGenerationMode() {
   if (mode) {
     mode.classList.toggle("supports-reference", supportsReference);
     mode.innerHTML = supportsReference
-      ? `${iconHtml("ri-image-circle-line")}<span><strong>参考图模式</strong>：可使用角色图片或临时上传图片，也可以留空按文字生成。</span>`
-      : `${iconHtml("ri-text-snippet")}<span><strong>文字模式</strong>：当前模型不接收参考图，将根据角色描述和画面风格直接生成。</span>`;
+      ? `${iconHtml("ri-image-circle-line")}<span><strong>参考图模式</strong>：可上传一张参考图，也可以不上传直接按文字生成。</span>`
+      : `${iconHtml("ri-text-snippet")}<span><strong>文字模式</strong>：当前模型不接收参考图，将根据画面描述与风格直接生成。</span>`;
   }
   if (styleLabel) {
-    styleLabel.innerHTML = supportsReference
-      ? "画面风格 <small>可选</small>"
-      : "角色描述与画面风格 <small>可选</small>";
+    styleLabel.innerHTML = "画面描述与风格 <small>可选</small>";
   }
   if (styleInput) {
     styleInput.placeholder = supportsReference
-      ? "例如：可爱 LINE 贴纸，简洁粗线条，色彩明快"
+      ? "例如：保持参考图主体特征，可爱 LINE 贴纸，简洁粗线条"
       : "例如：戴黄色围巾的橘猫，可爱 LINE 贴纸，简洁粗线条";
   }
 }
 
-export function stickerMakerProviderChange() {
-  const providerName = $("sticker-provider")?.value || "";
-  const modelSelect = $("sticker-model");
-  if (modelSelect) modelSelect.innerHTML = _modelOptions(providerName);
-  _syncGenerationMode();
+export function stickerMakerOpenProviderPicker() {
+  openChoicePicker({
+    title: "选择生图服务商",
+    selectedValue: _maker.selectedProvider,
+    options: _maker.providers.map(provider => ({
+      value: provider.name,
+      label: provider.name,
+    })),
+    onSelect: providerName => {
+      if (providerName === _maker.selectedProvider) return;
+      _maker.selectedProvider = providerName;
+      _maker.selectedModel = _modelsFor(providerName)[0]?.id || "";
+      _syncPickerLabels();
+      _syncGenerationMode();
+    },
+  });
 }
 
-export function stickerMakerModelChange() {
-  _syncGenerationMode();
-}
-
-export function stickerMakerPersonaChange() {
-  const personaId = $("sticker-persona")?.value || "";
-  const persona = _maker.personas.find(item => item.id === personaId);
-  const groupInput = $("sticker-group-name");
-  if (persona && groupInput && !groupInput.dataset.edited) {
-    groupInput.value = `${persona.name}表情包`;
-  }
+export function stickerMakerOpenModelPicker() {
+  openChoicePicker({
+    title: "选择生图模型",
+    selectedValue: _maker.selectedModel,
+    options: _modelsFor(_maker.selectedProvider).map(model => ({
+      value: model.id,
+      label: model.name || model.id,
+      description: model.name && model.name !== model.id ? model.id : "",
+    })),
+    onSelect: modelId => {
+      _maker.selectedModel = modelId;
+      _syncPickerLabels();
+      _syncGenerationMode();
+    },
+  });
 }
 
 export function stickerMakerPickReference() {
@@ -261,7 +268,7 @@ export function stickerMakerReferenceSelected(event) {
       preview.classList.add("has-image");
     }
     if (title) title.textContent = file.name;
-    if (hint) hint.textContent = "将优先使用这张临时参考图";
+    if (hint) hint.textContent = "本次生成将使用这张参考图";
   };
   reader.onerror = () => toast("读取参考图失败", "error");
   reader.readAsDataURL(file);
@@ -270,14 +277,30 @@ export function stickerMakerReferenceSelected(event) {
 function _renderResult(result) {
   const host = $("sticker-result");
   if (!host) return;
+  const modeLabel = result.used_reference_images ? "参考图模式" : "文字模式";
+  const saved = result.saved === true;
+  const statusText = saved
+    ? `${result.count || 16} 张表情已保存 · ${modeLabel}`
+    : `${result.count || 16} 张表情已生成 · 尚未保存 · ${modeLabel}`;
+  const headerAction = saved
+    ? `<button class="btn-text" onclick="PawzoChat.pushPage('emojiGroup',{name:${jsArg(result.group)}})">管理表情包</button>`
+    : "";
+  const saveAction = saved ? "" : `
+    <div class="sticker-maker-save-bar">
+      <span>确认切图效果后再保存，未保存草稿会自动过期。</span>
+      <button class="sticker-maker-primary sticker-maker-save" onclick="PawzoChat.stickerMakerSave()">
+        ${iconHtml("ri-save-line")}<span>保存表情包</span>
+      </button>
+    </div>`;
+
   host.hidden = false;
   host.innerHTML = `
     <div class="sticker-maker-result-head">
       <div>
-        <strong>已生成「${esc(result.group)}」</strong>
-        <span>${result.count || 16} 张表情已保存 · ${result.used_reference_images ? "参考图模式" : "文字模式"}</span>
+        <strong>${saved ? "已保存" : "预览"}「${esc(result.group)}」</strong>
+        <span>${statusText}</span>
       </div>
-      <button class="btn-text" onclick="PawzoChat.pushPage('emojiGroup',{name:${jsArg(result.group)}})">管理表情包</button>
+      ${headerAction}
     </div>
     <button type="button" class="sticker-maker-sheet" onclick="PawzoChat.openImagePreview('${BASE()}${result.sheet_url}')">
       <img src="${BASE()}${result.sheet_url}" alt="完整表情表">
@@ -290,15 +313,54 @@ function _renderResult(result) {
           <span>${esc(sticker.emotion)}</span>
         </div>
       `).join("")}
-    </div>`;
+    </div>
+    ${saveAction}`;
   host.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+export async function stickerMakerSave() {
+  if (_maker.saving || !_maker.result || _maker.result.saved) return;
+  const draftToken = _maker.result.draft_token || "";
+  const groupName = ($("sticker-group-name")?.value || "").trim();
+  if (!draftToken) {
+    toast("表情包草稿不存在，请重新生成", "error");
+    return;
+  }
+  if (!groupName) {
+    toast("请输入表情包名称", "error");
+    return;
+  }
+
+  _maker.saving = true;
+  showLoading("正在保存表情包…");
+  try {
+    const response = await api.post(
+      `/api/emoji/drafts/${encodeURIComponent(draftToken)}/save`,
+      { group_name: groupName },
+    );
+    if (response.status >= 400) {
+      toast(response.data?.error || "保存失败", "error");
+      return;
+    }
+    _maker.result = {
+      ..._maker.result,
+      ...response.data,
+      draft_token: "",
+    };
+    _renderResult(_maker.result);
+    toast("表情包已保存", "success");
+  } catch (error) {
+    toast("保存失败，请稍后重试", "error");
+  } finally {
+    _maker.saving = false;
+    hideLoading();
+  }
 }
 
 export async function stickerMakerGenerate() {
   if (_maker.generating) return;
-  const provider = $("sticker-provider")?.value || "";
-  const model = $("sticker-model")?.value || "";
-  const personaId = $("sticker-persona")?.value || "";
+  const provider = _maker.selectedProvider;
+  const model = _maker.selectedModel;
   const groupName = ($("sticker-group-name")?.value || "").trim();
   const style = ($("sticker-style")?.value || "").trim();
   const supportsReference = _selectedModelSupportsReference();
@@ -317,9 +379,8 @@ export async function stickerMakerGenerate() {
   form.append("model", model);
   form.append("group_name", groupName);
   form.append("style", style);
-  if (supportsReference) {
-    form.append("persona_id", personaId);
-    if (_maker.referenceFile) form.append("reference", _maker.referenceFile);
+  if (supportsReference && _maker.referenceFile) {
+    form.append("reference", _maker.referenceFile);
   }
 
   _maker.generating = true;
@@ -340,7 +401,7 @@ export async function stickerMakerGenerate() {
     }
     _maker.result = result;
     _renderResult(result);
-    toast(`已生成 ${result.count || 16} 张表情`, "success");
+    toast(`已生成 ${result.count || 16} 张表情，请确认后保存`, "success");
   } catch (error) {
     toast("生成失败，请检查网络和模型配置", "error");
   } finally {

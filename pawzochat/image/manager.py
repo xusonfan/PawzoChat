@@ -31,7 +31,10 @@ from pawzochat.image.base import ImageProvider
 from pawzochat.image.providers.gemini_chat_image import GeminiChatImageProvider
 from pawzochat.image.providers.gemini_image import GeminiImageProvider
 from pawzochat.image.providers.novelai_image import NovelAIImageProvider
-from pawzochat.image.providers.openai_image import OpenAIImageProvider
+from pawzochat.image.providers.openai_image import (
+    OpenAIImageProvider,
+    openai_model_supports_reference_images,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,18 +71,23 @@ IMAGE_PROVIDER_PRESETS: dict[str, dict] = {
 
 IMAGE_PRESET_MODELS: dict[str, list[dict]] = {
     "pawapi": [
-        {"id": "gpt-image-2", "name": "GPT Image 2", "type": "openai_image"},
+        {
+            "id": "gpt-image-2",
+            "name": "GPT Image 2",
+            "type": "openai_image",
+            "supports_reference_images": True,
+        },
         {"id": "gemini-3.1-flash-image-preview", "name": "Nano Banana 2", "type": "gemini_chat_image"},
         {"id": "gemini-2.5-flash-image-preview", "name": "Nano Banana", "type": "gemini_chat_image"},
         {"id": "gemini-3-pro-image-preview", "name": "Nano Banana Pro", "type": "gemini_chat_image"},
     ],
     "openai": [
-        {"id": "gpt-image-2", "name": "GPT Image 2", "type": "openai_image"},
-        {"id": "gpt-image-1.5", "name": "GPT Image 1.5", "type": "openai_image"},
-        {"id": "gpt-image-1", "name": "GPT Image 1", "type": "openai_image"},
-        {"id": "gpt-image-1-mini", "name": "GPT Image 1 Mini", "type": "openai_image"},
-        {"id": "dall-e-3", "name": "DALL·E 3", "type": "openai_image"},
-        {"id": "dall-e-2", "name": "DALL·E 2", "type": "openai_image"},
+        {"id": "gpt-image-2", "name": "GPT Image 2", "type": "openai_image", "supports_reference_images": True},
+        {"id": "gpt-image-1.5", "name": "GPT Image 1.5", "type": "openai_image", "supports_reference_images": True},
+        {"id": "gpt-image-1", "name": "GPT Image 1", "type": "openai_image", "supports_reference_images": True},
+        {"id": "gpt-image-1-mini", "name": "GPT Image 1 Mini", "type": "openai_image", "supports_reference_images": True},
+        {"id": "dall-e-3", "name": "DALL·E 3", "type": "openai_image", "supports_reference_images": False},
+        {"id": "dall-e-2", "name": "DALL·E 2", "type": "openai_image", "supports_reference_images": False},
     ],
     "google": [
         {"id": "gemini-3.1-flash-image-preview", "name": "Nano Banana 2", "type": "gemini_image"},
@@ -110,7 +118,7 @@ IMAGE_PROVIDER_CLASSES: dict[str, type[ImageProvider]] = {
 MODEL_TYPE_OPTIONS: list[dict] = [
     {
         "value": "openai_image",
-        "label": "OpenAI 图片接口（/images/generations）",
+        "label": "OpenAI 图片接口（纯文本 /images/generations，参考图 /images/edits）",
         "endpoint_path": "/images/generations",
     },
     {
@@ -156,18 +164,40 @@ def model_type_supports_reference_images(model_type: str) -> bool:
     return bool(provider_class and provider_class.supports_reference_images)
 
 
+def model_supports_reference_images(
+    provider_cfg: dict,
+    model_entry: dict,
+) -> bool:
+    """Resolve per-model capability, allowing explicit relay overrides."""
+    declared = model_entry.get("supports_reference_images")
+    if isinstance(declared, bool):
+        return declared
+
+    model_type = resolve_model_type(provider_cfg, model_entry)
+    if model_type == "openai_image":
+        return openai_model_supports_reference_images(model_entry.get("id", ""))
+    return model_type_supports_reference_images(model_type)
+
+
+def _image_model_summary(provider_cfg: dict, model_entry: dict) -> dict:
+    model_type = resolve_model_type(provider_cfg, model_entry)
+    model_id = model_entry.get("id", "")
+    return {
+        "id": model_id,
+        "name": model_entry.get("name", model_id),
+        "type": model_type,
+        "supports_reference_images": model_supports_reference_images(
+            provider_cfg,
+            model_entry,
+        ),
+    }
+
+
 def ensure_image_models_list(provider_cfg: dict) -> list[dict]:
     """Return models with resolved routing type and capabilities."""
     return [
-        {
-            "id": m.get("id", ""),
-            "name": m.get("name", m.get("id", "")),
-            "type": resolve_model_type(provider_cfg, m),
-            "supports_reference_images": model_type_supports_reference_images(
-                resolve_model_type(provider_cfg, m),
-            ),
-        }
-        for m in (provider_cfg.get("models") or [])
+        _image_model_summary(provider_cfg, model)
+        for model in (provider_cfg.get("models") or [])
     ]
 
 
@@ -214,7 +244,14 @@ class ImageManager:
             )
             return None
 
-        return cls(base_url=resolve_base_url(cfg), api_key=cfg["api_key"])
+        return cls(
+            base_url=resolve_base_url(cfg),
+            api_key=cfg["api_key"],
+            supports_reference_images=model_supports_reference_images(
+                cfg,
+                model_entry,
+            ),
+        )
 
     def get_model_type(self, name: str, model_id: str) -> str | None:
         """Resolve the backend type for a (provider_name, model_id) pair.
@@ -236,9 +273,15 @@ class ImageManager:
 
     def model_supports_reference_images(self, name: str, model_id: str) -> bool:
         """Return the declared reference-image capability for one model."""
-        model_type = self.get_model_type(name, model_id)
+        cfg = self._providers_cfg.get(name)
+        if cfg is None:
+            return False
+        model_entry = next(
+            (m for m in (cfg.get("models") or []) if m.get("id") == model_id),
+            None,
+        )
         return bool(
-            model_type and model_type_supports_reference_images(model_type)
+            model_entry and model_supports_reference_images(cfg, model_entry)
         )
 
     @property
