@@ -1558,6 +1558,7 @@ function _voicePresetLabel(id) {
 
 const _VOICE_TYPE_SHORT_LABEL = {
   minimaxi_tts: "MiniMax 原生",
+  mimo_tts: "MiMo 原生",
   openai_tts: "OpenAI 兼容",
 };
 function _voiceTypeLabel(type) {

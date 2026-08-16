@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 
 from pawzochat.voice.base import VoiceProvider
+from pawzochat.voice.providers.mimo_tts import MimoTTSProvider
 from pawzochat.voice.providers.minimaxi_tts import MiniMaxTTSProvider
 from pawzochat.voice.providers.openai_tts import OpenAITTSProvider
 
@@ -44,6 +45,13 @@ VOICE_PROVIDER_PRESETS: dict[str, dict] = {
         "base_url": "https://api.minimaxi.com",
         "default_model_type": "minimaxi_tts",
         "endpoint_path": "/v1/t2a_v2",
+    },
+    "mimo": {
+        "name": "MiMo (小米)",
+        "default_name": "MiMo",
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "default_model_type": "mimo_tts",
+        "endpoint_path": "/chat/completions",
     },
     "openai_compatible": {
         "name": "OpenAI",
@@ -70,6 +78,9 @@ VOICE_PRESET_MODELS: dict[str, list[dict]] = {
         {"id": "speech-2.8-hd", "name": "Speech 2.8 HD", "type": "minimaxi_tts"},
         {"id": "speech-2.8-turbo", "name": "Speech 2.8 Turbo", "type": "minimaxi_tts"},
     ],
+    "mimo": [
+        {"id": "mimo-v2.5-tts", "name": "MiMo v2.5 TTS", "type": "mimo_tts"},
+    ],
     "openai_compatible": [
         {"id": "gpt-4o-mini-tts", "name": "GPT-4o Mini TTS", "type": "openai_tts"},
         {"id": "tts-1", "name": "TTS 1", "type": "openai_tts"},
@@ -86,6 +97,7 @@ VOICE_PRESET_MODELS: dict[str, list[dict]] = {
 }
 
 VOICE_PROVIDER_CLASSES: dict[str, type[VoiceProvider]] = {
+    "mimo_tts": MimoTTSProvider,
     "minimaxi_tts": MiniMaxTTSProvider,
     "openai_tts": OpenAITTSProvider,
 }
@@ -95,6 +107,11 @@ MODEL_TYPE_OPTIONS: list[dict] = [
         "value": "minimaxi_tts",
         "label": "MiniMax 原生（/v1/t2a_v2）",
         "endpoint_path": "/v1/t2a_v2",
+    },
+    {
+        "value": "mimo_tts",
+        "label": "MiMo 原生（/v1/chat/completions）",
+        "endpoint_path": "/v1/chat/completions",
     },
     {
         "value": "openai_tts",
@@ -265,6 +282,17 @@ VOICE_CATALOGS: dict[str, list[dict]] = {
         {"id": "Korean_ThoughtfulWoman", "label": "Thoughtful Woman"},
         {"id": "Korean_OptimisticYouth", "label": "Optimistic Youth"},
     ],
+    "mimo": [
+        {"id": "mimo_default", "label": "MiMo 默认"},
+        {"id": "冰糖", "label": "冰糖（中文·女）"},
+        {"id": "茉莉", "label": "茉莉（中文·女）"},
+        {"id": "苏打", "label": "苏打（中文·男）"},
+        {"id": "白桦", "label": "白桦（中文·男）"},
+        {"id": "Mia", "label": "Mia（英文·女）"},
+        {"id": "Chloe", "label": "Chloe（英文·女）"},
+        {"id": "Milo", "label": "Milo（英文·男）"},
+        {"id": "Dean", "label": "Dean（英文·男）"},
+    ],
     "openai": [
         {"id": "alloy", "label": ""},
         {"id": "ash", "label": ""},
@@ -286,12 +314,14 @@ VOICE_CATALOGS: dict[str, list[dict]] = {
 _PRESET_VOICE_CATALOGS: dict[str, str] = {
     "minimaxi": "minimax",
     "pawapi": "minimax",
+    "mimo": "mimo",
     "openai_compatible": "openai",
 }
 
 # Fallback for "custom" relays, where the transport is the only vendor hint.
 _TYPE_VOICE_CATALOGS: dict[str, str] = {
     "minimaxi_tts": "minimax",
+    "mimo_tts": "mimo",
     "openai_tts": "openai",
 }
 
