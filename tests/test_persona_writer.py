@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import unittest
 
-from pawzochat.web.routes.api_persona_writer import _parse_persona_draft
+from pawzochat.web.routes.api_persona_writer import (
+    _parse_persona_draft,
+    _parse_radar_recommendations,
+)
 
 
 class TestPersonaWriterDraftParser(unittest.TestCase):
@@ -44,6 +47,32 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
     def test_legacy_markers_leave_new_fields_empty(self):
         result = _parse_persona_draft("[人设设定]\n角色设定\n[输出示例]\n你好\\再见")
         self.assertEqual(result, ("", "", "角色设定", "你好\\再见", "", ""))
+
+    def test_parses_radar_recommendations(self):
+        raw = json.dumps({
+            "recommendations": [{
+                "title": "雾港守灯人",
+                "summary": "替失踪船员守着灯塔，却害怕海上的呼唤。",
+                "tags": ["奇幻", "克制", "陪伴"],
+                "request": "生成一位雾港守灯人的完整人设，突出责任与恐惧的矛盾。",
+            }],
+        }, ensure_ascii=False)
+
+        self.assertEqual(_parse_radar_recommendations(raw), [{
+            "title": "雾港守灯人",
+            "summary": "替失踪船员守着灯塔，却害怕海上的呼唤。",
+            "tags": ["奇幻", "克制", "陪伴"],
+            "request": "生成一位雾港守灯人的完整人设，突出责任与恐惧的矛盾。",
+        }])
+
+    def test_rejects_incomplete_radar_items(self):
+        raw = json.dumps({
+            "recommendations": [
+                {"title": "缺少字段"},
+                {"title": "无标签", "summary": "说明", "request": "需求", "tags": []},
+            ],
+        }, ensure_ascii=False)
+        self.assertEqual(_parse_radar_recommendations(raw), [])
 
 
 if __name__ == "__main__":

@@ -194,6 +194,10 @@ import {
   pwGenerate, pwGenerateImage, pwCreatePersona,
 } from "./modules/persona_writer.js";
 
+import {
+  radarOnProviderChange, radarRefresh, radarUseRecommendation,
+} from "./modules/radar.js";
+
 /* ============ Discover Tab ============ */
 
 function renderDiscover() {
@@ -212,6 +216,10 @@ function renderDiscover() {
       <div class="card-row" onclick="PawzoChat.pushPage('worldbookList',{})">
         <div class="row-icon blue">${iconHtml("ri-book-open-line")}</div>
         <span class="row-label">世界书</span><span class="row-arrow">›</span>
+      </div>
+      <div class="card-row" onclick="PawzoChat.pushPage('radar',{})">
+        <div class="row-icon cyan">${iconHtml("ri-radar-line")}</div>
+        <span class="row-label">雷达</span><span class="row-arrow">›</span>
       </div>
       <div class="card-row" onclick="PawzoChat.pushPage('personaWriter',{})">
         <div class="row-icon purple">${iconHtml("ri-quill-pen-line")}</div>
@@ -427,6 +435,7 @@ window.PawzoChat = {
   openPersonaMoments, momentsOpenDetail,
   pwOnProviderChange, pwOnImageProviderChange,
   pwGenerate, pwGenerateImage, pwCreatePersona,
+  radarOnProviderChange, radarRefresh, radarUseRecommendation,
 };
 
 /* ============ Init ============ */

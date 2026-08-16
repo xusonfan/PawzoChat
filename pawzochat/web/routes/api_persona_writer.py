@@ -71,6 +71,21 @@ DEFAULT_PERSONA_WRITER_PROMPT = (
     "并贴合该角色的语气与口吻。例如其中一条可以是 \"你已觉悟\\无需多言\"。"
 )
 
+RADAR_RECOMMENDATION_PROMPT = (
+    "你是角色扮演应用的创意策划，负责为用户提供新鲜、可继续扩写的人设灵感。"
+    "请构思 6 个差异明显的原创角色方向，题材、身份、性格矛盾和互动关系应尽量多样，"
+    "避免直接复制知名作品角色，也不要生成现实公众人物。全部使用中文。\n\n"
+    "只输出一个 JSON 对象，不要使用 Markdown，不要附加解释。结构必须是：\n"
+    '{"recommendations": [{"title": "角色名或简短称号", '
+    '"summary": "两到三句话说明角色身份、核心矛盾和互动看点", '
+    '"tags": ["题材", "性格", "关系"], '
+    '"request": "可直接交给人设编写助手的完整生成需求"}]}\n'
+    "recommendations 必须恰好包含 6 项；title 不超过 30 字，summary 不超过 180 字，"
+    "每项 tags 为 1 到 3 个短标签，request 应明确描述角色定位、背景、性格和期望互动感。"
+)
+
+RADAR_RECOMMENDATION_COUNT = 6
+
 _CHAR_MARKERS = ("[人设设定]", "【人设设定】")
 _EXAMPLE_MARKERS = ("[输出示例]", "【输出示例】")
 
@@ -228,6 +243,86 @@ def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str]:
     )
     character_prompt, output_examples = _split_sections(raw)
     return "", "", character_prompt, output_examples, "", ""
+
+
+def _parse_radar_recommendations(raw: str) -> list[dict]:
+    """Parse, validate and cap the recommendation list returned by AI."""
+    obj = _extract_json_object(raw)
+    items = obj.get("recommendations") if isinstance(obj, dict) else None
+    if not isinstance(items, list):
+        return []
+
+    recommendations = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        summary = item.get("summary")
+        generation_request = item.get("request")
+        tags = item.get("tags")
+        if not all(isinstance(value, str) and value.strip() for value in (
+            title, summary, generation_request,
+        )):
+            continue
+        if not isinstance(tags, list):
+            continue
+        clean_tags = [
+            tag.strip()[:20]
+            for tag in tags[:3]
+            if isinstance(tag, str) and tag.strip()
+        ]
+        if not clean_tags:
+            continue
+        recommendations.append({
+            "title": title.strip()[:30],
+            "summary": summary.strip()[:180],
+            "tags": clean_tags,
+            "request": generation_request.strip()[:MAX_REQUEST_LEN],
+        })
+        if len(recommendations) == RADAR_RECOMMENDATION_COUNT:
+            break
+    return recommendations
+
+
+@api_persona_writer_bp.route("/recommendations", methods=["POST"])
+def recommendations():
+    app = get_app()
+    payload = request.get_json(force=True, silent=True)
+    data = payload if isinstance(payload, dict) else {}
+    provider = _payload_text(data, "provider")
+    model = _payload_text(data, "model")
+
+    if not provider or not model:
+        return jsonify({"error": "请先选择服务商与模型"}), 400
+    if app.chat_service is None:
+        return jsonify({"error": "对话服务尚未就绪"}), 503
+    if app.llm_manager.get_provider(provider) is None:
+        return jsonify({
+            "error": f"服务商「{provider}」不可用，请检查服务商配置与 API Key",
+        }), 400
+    if not _configured_model_exists(app, provider, model):
+        return jsonify({
+            "error": f"模型「{model}」不在服务商「{provider}」的已配置模型列表中",
+        }), 400
+
+    try:
+        raw = app.chat_service.generate_persona_draft(
+            provider=provider,
+            model=model,
+            system_prompt=RADAR_RECOMMENDATION_PROMPT,
+            user_request="请生成本次人设灵感推荐列表。",
+            temperature=1.0,
+            max_tokens=2400,
+        )
+    except Exception:
+        logger.exception("雷达人设推荐生成失败 provider=%s model=%s", provider, model)
+        return jsonify({"error": "推荐生成失败，请检查模型与服务商配置后重试"}), 500
+
+    result = _parse_radar_recommendations(raw)
+    if not result:
+        logger.warning("雷达人设推荐：模型返回格式无效（raw 前120字=%r）", (raw or "")[:120])
+        return jsonify({"error": "模型未返回有效的推荐列表，请重试或更换模型"}), 502
+    return jsonify({"ok": True, "recommendations": result})
 
 
 @api_persona_writer_bp.route("/generate", methods=["POST"])

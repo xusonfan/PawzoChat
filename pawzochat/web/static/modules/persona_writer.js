@@ -257,7 +257,7 @@ async function pwCreatePersona() {
   }
 }
 
-async function renderPersonaWriter() {
+async function renderPersonaWriter(data = {}) {
   setTopBar("人设编写助手", true, "");
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
 
@@ -312,8 +312,8 @@ async function renderPersonaWriter() {
     </div>
 
     <div class="card">
-      <div class="card-header">生成需求</div>
-      <textarea class="form-textarea" id="pw-request" style="min-height:84px" placeholder="为我生成xxx游戏的xxx角色的人设"></textarea>
+      <div class="card-header">生成需求${data.sourceTitle ? ` · 来自雷达：${esc(data.sourceTitle)}` : ""}</div>
+      <textarea class="form-textarea" id="pw-request" style="min-height:84px" placeholder="为我生成xxx游戏的xxx角色的人设">${esc(data.request || "")}</textarea>
     </div>
     <div style="margin-bottom:12px">
       <button class="btn-primary" id="pw-generate-btn" onclick="PawzoChat.pwGenerate()">生成</button>
