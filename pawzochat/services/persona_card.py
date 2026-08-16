@@ -509,11 +509,14 @@ def card_to_persona(card: dict) -> PersonaImportResult:
 
 def _normalize_memory(raw: Any) -> dict:
     raw = raw if isinstance(raw, dict) else {}
+    trigger_mode = raw.get("trigger_mode", "remind")
     return {
         "enabled": bool(raw.get("enabled", True)),
         "max_memories": int(raw.get("max_memories", 50)),
         "include_in_prompt": bool(raw.get("include_in_prompt", True)),
         "trigger_rounds": int(raw.get("trigger_rounds", 10)),
+        "trigger_mode": trigger_mode
+        if trigger_mode in ("remind", "summarize") else "remind",
     }
 
 

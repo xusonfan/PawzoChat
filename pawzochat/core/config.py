@@ -376,11 +376,14 @@ class ConfigManager:
             }
 
             mem_raw = pdata.get("memory", {})
+            trigger_mode = mem_raw.get("trigger_mode", "remind")
             memory = {
                 "enabled": bool(mem_raw.get("enabled", True)),
                 "max_memories": int(mem_raw.get("max_memories", 50)),
                 "include_in_prompt": bool(mem_raw.get("include_in_prompt", True)),
                 "trigger_rounds": int(mem_raw.get("trigger_rounds", 10)),
+                "trigger_mode": trigger_mode
+                if trigger_mode in ("remind", "summarize") else "remind",
             }
 
             pro_raw = pdata.get("proactive", {})

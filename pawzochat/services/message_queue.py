@@ -511,6 +511,27 @@ class MessageQueue:
                     self._app.memory_service.maybe_consolidate(persona_id)
                 except Exception:
                     logger.exception("记忆合并检查失败: persona=%s", persona_id)
+
+            # Round-end automatic summarization check (only effective when the
+            # persona's memory.trigger_mode is "summarize"). Runs in a
+            # background thread; the cutoff pins the window to this round's
+            # last delivered message so messages arriving while the summary
+            # LLM call is in flight are not skipped by the cursor.
+            # Moments has its own trigger (moments.py).
+            if (
+                self._app.memory_service
+                and delivered_messages
+                and self._app.memory_service.should_check_summarize(persona_id)
+            ):
+                cutoff_timestamp = delivered_messages[-1].get("timestamp", "")
+                try:
+                    threading.Thread(
+                        target=self._check_memory_bg,
+                        args=(persona_id, cutoff_timestamp),
+                        daemon=True,
+                    ).start()
+                except Exception:
+                    logger.exception("启动后台记忆检查失败: persona=%s", persona_id)
         except Exception:
             logger.exception("处理消息队列失败: persona=%s", persona_id)
         finally:
@@ -518,3 +539,12 @@ class MessageQueue:
                 queue = self._queues.get(persona_id)
                 if queue:
                     queue.processing = False
+
+    def _check_memory_bg(self, persona_id: str, cutoff_timestamp: str):
+        try:
+            self._app.memory_service.check_and_summarize(
+                persona_id,
+                cutoff_timestamp=cutoff_timestamp,
+            )
+        except Exception:
+            logger.exception("后台记忆检查失败: persona=%s", persona_id)

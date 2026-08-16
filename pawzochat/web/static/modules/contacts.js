@@ -794,10 +794,18 @@ async function renderPersonaEdit(data) {
         <label class="switch-wrap"><input type="checkbox" id="pe-mem-inc" ${p.memory?.include_in_prompt !== false ? "checked" : ""}><span class="switch-track"></span></label>
       </div></div>
       <div class="form-hint">开启后将所有记忆注入 LLM 上下文；关闭后 AI 看不到已有记忆，也无法更新它们</div>
-      <div class="form-group"><div class="form-row"><label>提醒轮数</label>
+      <div class="form-group"><div class="form-row"><label>触发方式</label>
+        <select id="pe-mem-trigger-mode" onchange="PawzoChat.onPeMemTriggerModeChange()">
+          <option value="remind" ${(p.memory?.trigger_mode || "remind") !== "summarize" ? "selected" : ""}>提醒 AI 记录（默认）</option>
+          <option value="summarize" ${p.memory?.trigger_mode === "summarize" ? "selected" : ""}>自动总结对话</option>
+        </select>
+      </div></div>
+      <div class="form-group"><div class="form-row"><label>触发轮数</label>
         <div class="stepper"><button onclick="PawzoChat.step('pe-mem-trigger',-1,0)">−</button><span class="stepper-val" id="pe-mem-trigger">${p.memory?.trigger_rounds || 0}</span><button onclick="PawzoChat.step('pe-mem-trigger',1,0)">+</button></div>
       </div></div>
-      <div class="form-hint">设置 N &gt; 0 时，AI 每 N 轮对话未记录记忆则收到一次提醒；设为 0 禁用提醒</div>
+      <div class="form-hint" id="pe-mem-trigger-hint">${(p.memory?.trigger_mode || "remind") === "summarize"
+        ? "每积累 N 轮未总结的对话，自动调用一次 LLM 将其总结为一条记忆；设为 0 禁用自动总结（AI 仍可通过工具主动记录，主动记录后计数顺延）"
+        : "设置 N > 0 时，AI 每 N 轮对话未记录记忆则收到一次提醒；设为 0 禁用提醒"}</div>
       ${!isNew && p.id ? `<div style="padding:8px 16px 12px">
         <button class="btn-outline" onclick="PawzoChat.pushPage('memoryManage',{personaId:'${p.id}'})" style="width:100%">管理记忆 (${p.memory_count || 0} 条)</button>
       </div>` : ''}
@@ -1200,6 +1208,7 @@ export async function savePersona(isNew) {
       max_memories: parseInt($("pe-mem-max").textContent) || 50,
       include_in_prompt: $("pe-mem-inc").checked,
       trigger_rounds: parseInt($("pe-mem-trigger").textContent) || 0,
+      trigger_mode: $("pe-mem-trigger-mode")?.value || "remind",
     },
     bound_worldbooks: [..._peBoundWorldbooks],
   };
@@ -1455,6 +1464,17 @@ export function onAvatarFileSelected(input) {
       }
     } catch (e) { toast("上传失败", "error"); }
   });
+}
+
+/* ---- Memory trigger-mode controls ---- */
+
+export function onPeMemTriggerModeChange() {
+  const sel = $("pe-mem-trigger-mode");
+  const hint = $("pe-mem-trigger-hint");
+  if (!sel || !hint) return;
+  hint.textContent = sel.value === "summarize"
+    ? "每积累 N 轮未总结的对话，自动调用一次 LLM 将其总结为一条记忆；设为 0 禁用自动总结（AI 仍可通过工具主动记录，主动记录后计数顺延）"
+    : "设置 N > 0 时，AI 每 N 轮对话未记录记忆则收到一次提醒；设为 0 禁用提醒";
 }
 
 /* ---- Image-generation reference-image controls ---- */

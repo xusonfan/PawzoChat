@@ -73,6 +73,7 @@ import {
   personaExportPick, _personaExportGo,
   _personaExportCoverSelected, _personaExportCoverReset, _personaExportPngGo,
   onPeImgRefModeChange, onPeImgRefFileSelected, deletePersonaRefImage,
+  onPeMemTriggerModeChange,
   onPersonaVoiceProviderChange, onPersonaVoiceModelChange,
 } from "./modules/contacts.js";
 

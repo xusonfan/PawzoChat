@@ -308,6 +308,7 @@ class Persona:
         "max_memories": 50,
         "include_in_prompt": True,
         "trigger_rounds": 10,
+        "trigger_mode": "remind",
     })
     proactive: dict = field(default_factory=lambda: copy.deepcopy(PROACTIVE_DEFAULTS))
     image_generation: dict = field(default_factory=lambda: copy.deepcopy(IMAGE_GENERATION_DEFAULTS))

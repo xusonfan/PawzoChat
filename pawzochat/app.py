@@ -192,6 +192,7 @@ class App:
 
         self.memory_service = MemoryService(
             config=self.config,
+            store=self.conversation_store,
             llm_manager=self.llm_manager,
         )
 
