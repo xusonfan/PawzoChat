@@ -13,11 +13,50 @@ import { esc, escAttr } from "./utils.js";
 import { setTopBar, pushPage, registerPageRenderer } from "./navigation.js";
 import { toast } from "./ui.js";
 
+const RADAR_CACHE_KEY = "pawzo_radar_recommendations_v1";
+
 const _radar = {
   providers: [],
   recommendations: [],
   requestVersion: 0,
 };
+
+function _validRecommendation(item) {
+  return item && typeof item === "object"
+    && typeof item.title === "string" && item.title.trim()
+    && typeof item.summary === "string" && item.summary.trim()
+    && typeof item.request === "string" && item.request.trim()
+    && Array.isArray(item.tags) && item.tags.length > 0
+    && item.tags.every(tag => typeof tag === "string" && tag.trim());
+}
+
+function _readRecommendationCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(RADAR_CACHE_KEY) || "null");
+    if (!cached || !Array.isArray(cached.recommendations)) return null;
+    const recommendations = cached.recommendations.filter(_validRecommendation);
+    if (!recommendations.length) return null;
+    return {
+      provider: typeof cached.provider === "string" ? cached.provider : "",
+      model: typeof cached.model === "string" ? cached.model : "",
+      recommendations,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function _writeRecommendationCache(provider, model, recommendations) {
+  try {
+    localStorage.setItem(RADAR_CACHE_KEY, JSON.stringify({
+      provider,
+      model,
+      recommendations,
+    }));
+  } catch (error) {
+    // Storage may be disabled or full; the current in-memory result still works.
+  }
+}
 
 function _providerOptions(selected) {
   return _radar.providers.map(provider => (
@@ -72,6 +111,7 @@ async function radarRefresh() {
   localStorage.setItem("pw_last_provider", provider);
   localStorage.setItem("pw_last_model", model);
   const version = ++_radar.requestVersion;
+  const previousRecommendations = _radar.recommendations;
   const button = $("radar-refresh-btn");
   const results = $("radar-results");
   if (button) { button.disabled = true; button.textContent = "探索中…"; }
@@ -81,16 +121,24 @@ async function radarRefresh() {
     const response = await api.post("/api/persona-writer/recommendations", { provider, model });
     if (version !== _radar.requestVersion) return;
     if (response.status < 200 || response.status >= 300 || !response.data?.ok) {
-      _radar.recommendations = [];
+      _radar.recommendations = previousRecommendations;
       _renderRecommendations();
       toast(response.data?.error || "推荐生成失败", "error");
       return;
     }
-    _radar.recommendations = response.data.recommendations || [];
+    const recommendations = (response.data.recommendations || []).filter(_validRecommendation);
+    if (!recommendations.length) {
+      _radar.recommendations = previousRecommendations;
+      _renderRecommendations();
+      toast("模型未返回有效的推荐列表", "error");
+      return;
+    }
+    _radar.recommendations = recommendations;
+    _writeRecommendationCache(provider, model, recommendations);
     _renderRecommendations();
   } catch (error) {
     if (version !== _radar.requestVersion) return;
-    _radar.recommendations = [];
+    _radar.recommendations = previousRecommendations;
     _renderRecommendations();
     toast("推荐生成失败，请检查网络或模型配置", "error");
   } finally {
@@ -129,12 +177,13 @@ async function renderRadar() {
     return;
   }
 
-  const lastProvider = localStorage.getItem("pw_last_provider") || "";
-  const lastModel = localStorage.getItem("pw_last_model") || "";
+  const cached = _readRecommendationCache();
+  const lastProvider = cached?.provider || localStorage.getItem("pw_last_provider") || "";
+  const lastModel = cached?.model || localStorage.getItem("pw_last_model") || "";
   const selectedProvider = _radar.providers.some(provider => provider.name === lastProvider)
     ? lastProvider
     : _radar.providers[0].name;
-  _radar.recommendations = [];
+  _radar.recommendations = cached?.recommendations || [];
 
   content().innerHTML = `<div class="page radar-page">
     <section class="radar-hero">
@@ -152,12 +201,16 @@ async function renderRadar() {
         <select id="radar-model">${_modelOptions(selectedProvider, lastModel)}</select>
       </div></div>
     </div>
-    <button class="btn-primary" id="radar-refresh-btn" onclick="PawzoChat.radarRefresh()">开始探索</button>
+    <button class="btn-primary" id="radar-refresh-btn" onclick="PawzoChat.radarRefresh()">${cached ? "换一批" : "开始探索"}</button>
     <div class="radar-section-title"><span>本次发现</span><small>选择一个方向继续完善</small></div>
     <div id="radar-results"></div>
   </div>`;
 
-  await radarRefresh();
+  if (cached) {
+    _renderRecommendations();
+  } else {
+    await radarRefresh();
+  }
 }
 
 registerPageRenderer("radar", renderRadar);
