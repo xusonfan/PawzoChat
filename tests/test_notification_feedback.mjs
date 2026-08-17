@@ -158,6 +158,20 @@ await settle();
 assert.equal(audio.calls.starts, 2);
 assert.deepEqual(vibrations, [80]);
 
+// A notification clicked outside the page suppresses every feedback channel
+// when SSE later delivers the same message.
+mod.resetNotificationFeedbackForTests();
+const clickedAudio = fakeAudio();
+const clickedVibrations = [];
+mod.rememberHandledMessageKeys(["cat:8"]);
+assert.equal(mod.notifyNewMessage(event(8), {
+  audioContextFactory: clickedAudio.Context,
+  navigatorObject: { vibrate: pattern => clickedVibrations.push(pattern) },
+}), false);
+await settle();
+assert.equal(clickedAudio.calls.starts, 0);
+assert.deepEqual(clickedVibrations, []);
+
 // Granted system notifications use the service worker and carry conversation routing data.
 mod.resetNotificationFeedbackForTests();
 const shownNotifications = [];
@@ -184,6 +198,7 @@ assert.equal(shownNotifications[0].title, "小猫");
 assert.equal(shownNotifications[0].payload.body, "系统通知正文");
 assert.equal(shownNotifications[0].payload.icon, "/secret/api/personas/cat/avatar?v=7");
 assert.equal(shownNotifications[0].payload.data.personaId, "cat");
+assert.equal(shownNotifications[0].payload.data.messageKey, "cat:70");
 
 const fallbackNotifications = [];
 let fallbackAttempt = 0;
@@ -379,6 +394,8 @@ const appSource = await readFile(join(
 ), "utf8");
 assert.match(appSource, /iconUrl:\s*cachedNotificationIcon\(data\.persona_id\)/, "系统通知应只读取已预热头像");
 assert.match(appSource, /systemNotificationsEnabled:\s*systemNotificationsEnabled\(\)/, "SSE 系统通知必须服从总开关");
+assert.match(appSource, /rememberHandledMessageKeys\(handledMessageKeys\)[\s\S]*initSSE\(\)/, "通知点击标识必须在 SSE 启动前登记");
+assert.match(appSource, /type:\s*"clear_persona_notifications"/, "打开通知会话后必须补清同角色通知");
 assert.doesNotMatch(appSource, /iconUrl:\s*personaAvatarUrl\(/, "系统通知不应临时请求动态角色头像");
 
 const serviceWorkerSource = await readFile(join(
@@ -389,15 +406,19 @@ assert.match(serviceWorkerSource, /notificationclick/);
 assert.match(serviceWorkerSource, /addEventListener\("push"/);
 assert.match(serviceWorkerSource, /client\.visibilityState === "visible"/);
 assert.match(serviceWorkerSource, /tag: payload\.messageKey \|\| undefined/);
+assert.match(serviceWorkerSource, /messageKey: payload\.messageKey \|\| ""/);
 assert.match(serviceWorkerSource, /payload\.avatarVersion/);
 assert.match(serviceWorkerSource, /notificationIcon\(payload, fallbackIcon\)/);
 assert.match(serviceWorkerSource, /data:\$\{blob\.type\};base64/);
 assert.match(serviceWorkerSource, /showNotification\(payload\.title/);
 assert.match(serviceWorkerSource, /getNotifications\(\)/);
-assert.match(serviceWorkerSource, /notification\.data\?\.personaId === personaId/);
+assert.match(serviceWorkerSource, /personaIdFromNotification\(notification\) !== personaId/);
 assert.match(serviceWorkerSource, /notification\.close\(\)/);
+assert.match(serviceWorkerSource, /handledMessageKeys/);
+assert.match(serviceWorkerSource, /clear_persona_notifications/);
 assert.match(serviceWorkerSource, /open_conversation/);
-assert.match(serviceWorkerSource, /openChat=/);
+assert.match(serviceWorkerSource, /searchParams\.set\("openChat"/);
+assert.match(serviceWorkerSource, /searchParams\.append\("handledMessageKey"/);
 
 const configSource = await readFile(join(__dirname, "../pawzochat/core/config.py"), "utf8");
 assert.match(configSource, /"new_message_sound": True/);

@@ -171,6 +171,15 @@ export function notificationMessageKey(event) {
   return `${personaId}:${message._seq}`;
 }
 
+export function rememberHandledMessageKeys(keys) {
+  const values = Array.isArray(keys) ? keys : [keys];
+  for (const key of values.slice(0, 100)) {
+    if (typeof key === "string" && key.length > 0 && key.length <= 256) {
+      _handledMessageKeys.add(key);
+    }
+  }
+}
+
 export function systemNotificationPermission() {
   if (
     typeof Notification === "undefined" ||
@@ -292,7 +301,10 @@ export async function showSystemNotification(event, options = {}) {
       badge: `${base}/static/pwa-icon-192.png`,
       tag: notificationMessageKey(event) || undefined,
       renotify: false,
-      data: { personaId: event?.persona_id || "" },
+      data: {
+        personaId: event?.persona_id || "",
+        messageKey: notificationMessageKey(event) || "",
+      },
     };
     try {
       await registration.showNotification(options.personaName || "PawzoChat", payload);

@@ -27,6 +27,36 @@ self.addEventListener("activate", event => {
   })());
 });
 
+async function hasVisibleWindow() {
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  return windows.some(client => client.visibilityState === "visible");
+}
+
+function notificationMessageKey(notification) {
+  return notification?.data?.messageKey || notification?.tag || "";
+}
+
+function personaIdFromNotification(notification) {
+  const explicit = notification?.data?.personaId;
+  if (explicit) return explicit;
+  const messageKey = notificationMessageKey(notification);
+  const separator = messageKey.lastIndexOf(":");
+  return separator > 0 ? messageKey.slice(0, separator) : "";
+}
+
+async function closePersonaNotifications(personaId) {
+  if (!personaId) return [];
+  const handledMessageKeys = [];
+  const notifications = await self.registration.getNotifications();
+  for (const notification of notifications) {
+    if (personaIdFromNotification(notification) !== personaId) continue;
+    const messageKey = notificationMessageKey(notification);
+    if (messageKey) handledMessageKeys.push(messageKey);
+    notification.close();
+  }
+  return handledMessageKeys;
+}
+
 self.addEventListener("push", event => {
   event.waitUntil((async () => {
     let payload = {};
@@ -36,40 +66,73 @@ self.addEventListener("push", event => {
       payload = { body: event.data?.text() || "收到一条新消息" };
     }
 
-    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    if (windows.some(client => client.visibilityState === "visible")) return;
+    if (await hasVisibleWindow()) return;
 
     const fallbackIcon = `${basePath || ""}/static/logo.png`;
     const icon = await notificationIcon(payload, fallbackIcon);
+    if (await hasVisibleWindow()) return;
     await self.registration.showNotification(payload.title || "PawzoChat", {
       body: payload.body || "收到一条新消息",
       icon,
       badge: `${basePath || ""}/static/pwa-icon-192.png`,
       tag: payload.messageKey || undefined,
       renotify: false,
-      data: { personaId: payload.personaId || "" },
+      data: {
+        personaId: payload.personaId || "",
+        messageKey: payload.messageKey || "",
+      },
     });
   })());
 });
 
 self.addEventListener("notificationclick", event => {
+  const personaId = personaIdFromNotification(event.notification);
+  const handledMessageKeys = new Set([
+    notificationMessageKey(event.notification),
+  ].filter(Boolean));
   event.notification.close();
-  const personaId = event.notification.data?.personaId || "";
-  event.waitUntil((async () => {
-    const notifications = await self.registration.getNotifications();
-    for (const notification of notifications) {
-      if (notification.data?.personaId === personaId) notification.close();
-    }
 
+  event.waitUntil((async () => {
+    const closedMessageKeys = await closePersonaNotifications(personaId);
+    for (const messageKey of closedMessageKeys) handledMessageKeys.add(messageKey);
+
+    const messageKeys = [...handledMessageKeys].slice(0, 100);
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const target = windows[0];
     if (target) {
+      for (const client of windows) {
+        client.postMessage({
+          type: "notification_messages_handled",
+          handledMessageKeys: messageKeys,
+        });
+      }
       await target.focus();
       target.postMessage({ type: "open_conversation", personaId });
       return;
     }
-    const url = `${basePath || ""}/?openChat=${encodeURIComponent(personaId)}`;
-    await self.clients.openWindow(url);
+
+    const url = new URL(`${basePath || ""}/`, self.location.origin);
+    if (personaId) url.searchParams.set("openChat", personaId);
+    for (const messageKey of messageKeys) {
+      url.searchParams.append("handledMessageKey", messageKey);
+    }
+    await self.clients.openWindow(`${url.pathname}${url.search}`);
+  })());
+});
+
+self.addEventListener("message", event => {
+  if (event.data?.type !== "clear_persona_notifications") return;
+  const personaId = event.data.personaId || "";
+  event.waitUntil((async () => {
+    const handledMessageKeys = await closePersonaNotifications(personaId);
+    if (handledMessageKeys.length === 0) return;
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of windows) {
+      client.postMessage({
+        type: "notification_messages_handled",
+        handledMessageKeys,
+      });
+    }
   })());
 });
 

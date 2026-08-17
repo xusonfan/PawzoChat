@@ -33,6 +33,7 @@ import { applyThemeFromState, watchSystemTheme } from "./modules/theme.js";
 import {
   cachedNotificationIcon,
   notifyNewMessage,
+  rememberHandledMessageKeys,
 } from "./modules/notification_feedback.js";
 import { initPwa, requestPwaInstall } from "./modules/pwa.js";
 import {
@@ -568,14 +569,32 @@ function _showUpdateFoundDialog(u) {
   </div>`);
 }
 
+async function clearNotificationsForPersona(personaId) {
+  if (!personaId || !("serviceWorker" in navigator)) return;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const workers = new Set([
+      registration.active,
+      navigator.serviceWorker.controller,
+    ].filter(Boolean));
+    for (const worker of workers) {
+      worker.postMessage({ type: "clear_persona_notifications", personaId });
+    }
+  } catch (_) {
+    // Notification cleanup must not block opening the conversation.
+  }
+}
+
 function openConversationFromNotification(personaId) {
   if (!personaId) return;
+  void clearNotificationsForPersona(personaId);
   switchTab("chat");
   void openChat(personaId);
 }
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", event => {
+    rememberHandledMessageKeys(event.data?.handledMessageKeys || []);
     if (event.data?.type === "open_conversation") {
       openConversationFromNotification(event.data.personaId);
     }
@@ -601,16 +620,22 @@ window.addEventListener("online", () => {
 });
 
 document.addEventListener("DOMContentLoaded", () => {
+  const launchUrl = new URL(window.location.href);
+  const notificationPersonaId = launchUrl.searchParams.get("openChat");
+  const handledMessageKeys = launchUrl.searchParams.getAll("handledMessageKey");
+  rememberHandledMessageKeys(handledMessageKeys);
+  if (notificationPersonaId || handledMessageKeys.length > 0) {
+    launchUrl.searchParams.delete("openChat");
+    launchUrl.searchParams.delete("handledMessageKey");
+    history.replaceState(history.state, "", launchUrl.pathname + launchUrl.search + launchUrl.hash);
+  }
+
   loadProfile();
   loadThemeSettings();
   void initPwa().then(() => syncWebPushSubscription());
   initMobileTabSwipe();
   switchTab("chat");
-  const launchUrl = new URL(window.location.href);
-  const notificationPersonaId = launchUrl.searchParams.get("openChat");
   if (notificationPersonaId) {
-    launchUrl.searchParams.delete("openChat");
-    history.replaceState(history.state, "", launchUrl.pathname + launchUrl.search + launchUrl.hash);
     setTimeout(() => openConversationFromNotification(notificationPersonaId), 0);
   }
   initSSE();
