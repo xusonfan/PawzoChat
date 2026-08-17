@@ -46,6 +46,7 @@ from pawzochat.services.moments import MomentsService
 from pawzochat.services.proactive import ProactiveService
 from pawzochat.services.reply_dispatcher import ReplyDispatcher
 from pawzochat.services.telemetry import TelemetryService
+from pawzochat.services.web_push import WebPushService
 from pawzochat.services.worldbook import WorldbookService
 from pawzochat.store.conversation import ConversationStore
 from pawzochat.store.moments import MomentsStore
@@ -89,6 +90,7 @@ class App:
         self.proactive_service: ProactiveService | None = None
         self.moments_service: MomentsService | None = None
         self.telemetry: TelemetryService | None = None
+        self.web_push_service: WebPushService | None = None
 
         self.accounts: list[Account] = []
         # Guards the in-memory roster against concurrent web-worker mutations
@@ -114,6 +116,12 @@ class App:
         logger.info("=" * 50)
         logger.info("  PawzoChat 启动中…")
         logger.info("=" * 50)
+
+        try:
+            self.web_push_service = WebPushService()
+        except Exception:
+            logger.exception("Web Push 服务初始化失败，后台推送已停用")
+            self.web_push_service = None
 
         self.llm_manager.init_from_config(self.config.get("llm_providers", default={}))
         if not self.llm_manager.available_providers:
@@ -269,6 +277,8 @@ class App:
 
         if self.telemetry:
             self.telemetry.stop()
+        if self.web_push_service:
+            self.web_push_service.close()
         for srv in self._web_servers:
             try:
                 srv.stop()

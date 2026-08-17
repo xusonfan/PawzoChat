@@ -107,6 +107,14 @@ class ReplyDispatcher:
                 is_last=is_last,
                 unread_count=self._app.conversation_store.unread_count(persona_id),
             )
+            if self._app.web_push_service:
+                self._app.web_push_service.send_assistant_message(
+                    persona_id=persona_id,
+                    persona_name=self._app.config.get(
+                        "personas", persona_id, "name", default="PawzoChat",
+                    ),
+                    message=stored,
+                )
             # Only count as delivered when the channel actually accepted
             # it — lets callers (e.g. ProactiveService) detect wechat send
             # failures even though the message was persisted.

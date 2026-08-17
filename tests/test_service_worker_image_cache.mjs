@@ -39,22 +39,46 @@ const caches = {
 };
 
 class FakeResponse {
-  constructor(body, { ok = true, type = "basic" } = {}) {
+  constructor(body, { ok = true, type = "basic", contentType = "application/octet-stream" } = {}) {
     this.body = body;
     this.ok = ok;
     this.type = type;
+    this.contentType = contentType;
   }
-  clone() { return new FakeResponse(this.body, { ok: this.ok, type: this.type }); }
+  clone() {
+    return new FakeResponse(this.body, {
+      ok: this.ok,
+      type: this.type,
+      contentType: this.contentType,
+    });
+  }
+  async blob() {
+    const bytes = Buffer.from(this.body);
+    return {
+      type: this.contentType,
+      size: bytes.length,
+      async arrayBuffer() {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      },
+    };
+  }
 }
 
 let networkFetches = 0;
+const shownNotifications = [];
 const context = vm.createContext({
   URL,
+  Request,
+  Uint8Array,
+  btoa,
   caches,
   console,
   encodeURIComponent,
   fetch: async request => {
     networkFetches += 1;
+    if (request.url.includes("/api/personas/cat/avatar")) {
+      return new FakeResponse("avatar-bytes", { contentType: "image/png" });
+    }
     return new FakeResponse(`network:${request.url}`);
   },
   self: {
@@ -62,6 +86,7 @@ const context = vm.createContext({
     registration: {
       scope: "https://pawzochat.local/",
       async getNotifications() { return []; },
+      async showNotification(title, payload) { shownNotifications.push({ title, payload }); },
     },
     clients: {
       async claim() {},
@@ -109,5 +134,26 @@ const unrelatedRemoteRequest = {
 };
 assert.equal(await dispatchFetch(unrelatedRemoteRequest), null);
 assert.equal(networkFetches, 1);
+
+async function dispatchPush(payload) {
+  let completion = null;
+  handlers.get("push")({
+    data: { json() { return payload; } },
+    waitUntil(value) { completion = Promise.resolve(value); },
+  });
+  await completion;
+}
+
+await dispatchPush({
+  title: "小猫",
+  body: "在吗",
+  personaId: "cat",
+  avatarVersion: "7",
+  messageKey: "cat:7",
+});
+assert.equal(shownNotifications.length, 1);
+assert.equal(shownNotifications[0].title, "小猫");
+assert.match(shownNotifications[0].payload.icon, /^data:image\/png;base64,/);
+assert.equal(shownNotifications[0].payload.tag, "cat:7");
 
 console.log("service worker image cache tests passed");

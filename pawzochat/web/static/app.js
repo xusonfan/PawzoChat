@@ -35,6 +35,10 @@ import {
   notifyNewMessage,
 } from "./modules/notification_feedback.js";
 import { initPwa, requestPwaInstall } from "./modules/pwa.js";
+import {
+  syncWebPushSubscription,
+  systemNotificationsEnabled,
+} from "./modules/push_notifications.js";
 
 import {
   chatPersonaId, renderChatList, refreshChatMessages, refreshUnreadCounts,
@@ -278,6 +282,7 @@ function initSSE() {
         const persona = state.personas.find(item => item.id === data.persona_id);
         notifyNewMessage(data, {
           isViewing: viewingChat,
+          systemNotificationsEnabled: systemNotificationsEnabled(),
           settings: state.settings?.chat,
           personaName: persona?.name || "PawzoChat",
           iconUrl: cachedNotificationIcon(data.persona_id),
@@ -598,7 +603,7 @@ window.addEventListener("online", () => {
 document.addEventListener("DOMContentLoaded", () => {
   loadProfile();
   loadThemeSettings();
-  initPwa();
+  void initPwa().then(() => syncWebPushSubscription());
   initMobileTabSwipe();
   switchTab("chat");
   const launchUrl = new URL(window.location.href);

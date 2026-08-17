@@ -320,7 +320,11 @@ export function notifyNewMessage(event, options = {}) {
   const soundEnabled = settings.new_message_sound !== false;
   const vibrationEnabled = settings.new_message_vibration !== false;
   const NotificationApi = options.notificationApi ?? (typeof Notification !== "undefined" ? Notification : null);
-  const systemNotificationEnabled = NotificationApi?.permission === "granted" && !isViewing;
+  const systemNotificationEnabled = (
+    options.systemNotificationsEnabled === true
+    && NotificationApi?.permission === "granted"
+    && !isViewing
+  );
   if (systemNotificationEnabled) void showSystemNotification(event, options);
   if (soundEnabled) {
     void _playNotificationFile(options.audioFactory)

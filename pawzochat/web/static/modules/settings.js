@@ -31,6 +31,12 @@ import {
   requestSystemNotificationPermission,
   systemNotificationPermission,
 } from "./notification_feedback.js";
+import {
+  refreshWebPushState,
+  subscribeWebPush,
+  unsubscribeWebPush,
+  webPushState,
+} from "./push_notifications.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -2157,13 +2163,14 @@ function renderSettingsChat() {
   );
   const s = state.settings?.chat || {};
   const maxRounds = s.max_context_rounds || 20;
-  const systemPermission = systemNotificationPermission();
+  const pushState = webPushState();
   const systemNotificationLabel = {
-    granted: "已开启",
+    enabled: "关闭",
     denied: "已拒绝",
-    default: "开启",
+    prompt: "开启",
+    disabled: "开启",
     unsupported: "不支持",
-  }[systemPermission] || "开启";
+  }[pushState] || "开启";
   content().innerHTML = `<div class="page" id="settings-chat-page">
     <style>
       #settings-chat-page .notification-setting-row {
@@ -2228,10 +2235,10 @@ function renderSettingsChat() {
       <div class="form-group"><div class="form-row notification-setting-row">
         <div class="notification-setting-copy">
           <span class="notification-setting-title">系统通知</span>
-          <div class="notification-setting-hint">PawzoChat 在后台运行时，通过系统通知栏显示未查看会话的新消息</div>
+          <div class="notification-setting-hint">开启后，未查看会话的角色新消息会显示系统通知；关闭 PawzoChat 后仍可接收</div>
         </div>
         <div class="notification-setting-actions">
-          <button type="button" class="btn-text notification-sound-preview" onclick="PawzoChat.enableSystemNotifications()">${systemNotificationLabel}</button>
+          <button id="sc-push-action" type="button" class="btn-text notification-sound-preview" onclick="PawzoChat.enableSystemNotifications()">${systemNotificationLabel}</button>
         </div>
       </div></div>
       <div class="form-group"><div class="form-row notification-setting-row">
@@ -2262,9 +2269,34 @@ function renderSettingsChat() {
       <div class="form-hint">收到消息后等待合并的时间</div>
     </div>
   </div>`;
+  void refreshWebPushState().then(nextState => {
+    const button = $("sc-push-action");
+    if (!button) return;
+    button.textContent = {
+      enabled: "关闭",
+      denied: "已拒绝",
+      prompt: "开启",
+      disabled: "开启",
+      unsupported: "不支持",
+    }[nextState] || "开启";
+  });
 }
 
 export async function enableSystemNotifications() {
+  const pushState = await refreshWebPushState();
+  if (pushState === "enabled") {
+    try {
+      await unsubscribeWebPush();
+      toast("系统通知已关闭", "success");
+    } catch (error) {
+      toast(error?.message || "关闭系统通知失败，请稍后重试", "error");
+    }
+    const nextState = await refreshWebPushState();
+    const button = $("sc-push-action");
+    if (button) button.textContent = nextState === "enabled" ? "关闭" : "开启";
+    return;
+  }
+
   const current = systemNotificationPermission();
   if (current === "unsupported") {
     toast("当前环境不支持系统通知，请使用 HTTPS 并安装或更新浏览器", "error");
@@ -2275,10 +2307,29 @@ export async function enableSystemNotifications() {
     return;
   }
   const permission = await requestSystemNotificationPermission();
-  if (permission === "granted") toast("系统通知已开启", "success");
-  else if (permission === "denied") toast("未获得通知权限", "error");
-  else toast("当前环境不支持系统通知", "error");
-  renderSettingsChat();
+  if (permission === "granted") {
+    try {
+      await subscribeWebPush();
+      toast("系统通知已开启", "success");
+    } catch (error) {
+      toast(error?.message || "推送订阅失败，请检查网络后重试", "error");
+    }
+  } else if (permission === "denied") {
+    toast("未获得通知权限", "error");
+  } else {
+    toast("当前环境不支持系统通知", "error");
+  }
+  const nextState = await refreshWebPushState();
+  const button = $("sc-push-action");
+  if (button) {
+    button.textContent = {
+      enabled: "关闭",
+      denied: "已拒绝",
+      prompt: "开启",
+      disabled: "开启",
+      unsupported: "不支持",
+    }[nextState] || "开启";
+  }
 }
 
 export function previewNewMessageSound() {

@@ -67,8 +67,11 @@ PLUGINS_DIR = DATA_DIR / "plugins"
 PROFILE_DIR = DATA_DIR / "profile"
 PROMPTS_DIR = DATA_DIR / "prompts"
 THEME_DIR = DATA_DIR / "theme"
+PUSH_DIR = DATA_DIR / "push"
 
 MOMENTS_STORE_PATH = MOMENTS_DIR / "moments.json"
+PUSH_SUBSCRIPTIONS_PATH = PUSH_DIR / "subscriptions.json"
+PUSH_VAPID_PRIVATE_KEY_PATH = PUSH_DIR / "vapid_private.pem"
 
 BINDINGS_PATH = DATA_DIR / "bindings.json"
 CONFIG_PATH = CONFIG_DIR / "config.yaml"

@@ -204,6 +204,32 @@ assert.equal(await mod.showSystemNotification(systemEvent, {
 assert.equal(fallbackAttempt, 2);
 assert.equal(fallbackNotifications[0].payload.icon, "/secret/static/logo.png");
 
+// Browser permission is only a capability; the app switch remains authoritative.
+mod.resetNotificationFeedbackForTests();
+const gatedNotifications = [];
+const gatedOptions = {
+  settings: { new_message_sound: false, new_message_vibration: false },
+  notificationApi: { permission: "granted" },
+  navigatorObject: { serviceWorker: {} },
+  registration: {
+    async showNotification(title, payload) { gatedNotifications.push({ title, payload }); },
+  },
+};
+assert.equal(mod.notifyNewMessage(event(71), {
+  ...gatedOptions,
+  systemNotificationsEnabled: false,
+}), false);
+await settle();
+assert.equal(gatedNotifications.length, 0);
+
+mod.resetNotificationFeedbackForTests();
+assert.equal(mod.notifyNewMessage(event(72), {
+  ...gatedOptions,
+  systemNotificationsEnabled: true,
+}), true);
+await settle();
+assert.equal(gatedNotifications.length, 1);
+
 // Independent switches.
 mod.resetNotificationFeedbackForTests();
 const soundOnly = fakeAudio();
@@ -326,6 +352,7 @@ assert.match(settingsSource, /系统通知/);
 assert.match(settingsSource, /PawzoChat\.enableSystemNotifications\(\)/);
 assert.match(settingsSource, /export async function enableSystemNotifications\(\)/);
 assert.match(settingsSource, /requestSystemNotificationPermission\(\)/);
+assert.match(settingsSource, /subscribeWebPush\(\)/);
 assert.match(settingsSource, /id="sc-sound"[^>]*role="switch"/);
 assert.match(settingsSource, /aria-label="试听新消息提示音"/);
 assert.match(settingsSource, /export function previewNewMessageSound\(\)[\s\S]*const playback = previewNotificationSound\(\)/);
@@ -351,6 +378,7 @@ const appSource = await readFile(join(
   "../pawzochat/web/static/app.js",
 ), "utf8");
 assert.match(appSource, /iconUrl:\s*cachedNotificationIcon\(data\.persona_id\)/, "系统通知应只读取已预热头像");
+assert.match(appSource, /systemNotificationsEnabled:\s*systemNotificationsEnabled\(\)/, "SSE 系统通知必须服从总开关");
 assert.doesNotMatch(appSource, /iconUrl:\s*personaAvatarUrl\(/, "系统通知不应临时请求动态角色头像");
 
 const serviceWorkerSource = await readFile(join(
@@ -358,6 +386,13 @@ const serviceWorkerSource = await readFile(join(
   "../pawzochat/web/static/service-worker.js",
 ), "utf8");
 assert.match(serviceWorkerSource, /notificationclick/);
+assert.match(serviceWorkerSource, /addEventListener\("push"/);
+assert.match(serviceWorkerSource, /client\.visibilityState === "visible"/);
+assert.match(serviceWorkerSource, /tag: payload\.messageKey \|\| undefined/);
+assert.match(serviceWorkerSource, /payload\.avatarVersion/);
+assert.match(serviceWorkerSource, /notificationIcon\(payload, fallbackIcon\)/);
+assert.match(serviceWorkerSource, /data:\$\{blob\.type\};base64/);
+assert.match(serviceWorkerSource, /showNotification\(payload\.title/);
 assert.match(serviceWorkerSource, /getNotifications\(\)/);
 assert.match(serviceWorkerSource, /notification\.data\?\.personaId === personaId/);
 assert.match(serviceWorkerSource, /notification\.close\(\)/);

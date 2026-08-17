@@ -5,6 +5,7 @@ const STATIC_CACHE_NAME = `${STATIC_CACHE_PREFIX}-${STATIC_CACHE_VERSION}`;
 const IMAGE_CACHE_PREFIX = "pawzochat-images";
 const IMAGE_CACHE_VERSION = "v1";
 const IMAGE_CACHE_NAME = `${IMAGE_CACHE_PREFIX}-${IMAGE_CACHE_VERSION}`;
+const MAX_NOTIFICATION_ICON_BYTES = 2 * 1024 * 1024;
 const basePath = new URL(self.registration.scope).pathname.replace(/\/$/, "");
 const staticPrefix = `${basePath}/static/`;
 
@@ -23,6 +24,31 @@ self.addEventListener("activate", event => {
         .map(key => caches.delete(key)),
     );
     await self.clients.claim();
+  })());
+});
+
+self.addEventListener("push", event => {
+  event.waitUntil((async () => {
+    let payload = {};
+    try {
+      payload = event.data?.json() || {};
+    } catch (_) {
+      payload = { body: event.data?.text() || "收到一条新消息" };
+    }
+
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.some(client => client.visibilityState === "visible")) return;
+
+    const fallbackIcon = `${basePath || ""}/static/logo.png`;
+    const icon = await notificationIcon(payload, fallbackIcon);
+    await self.registration.showNotification(payload.title || "PawzoChat", {
+      body: payload.body || "收到一条新消息",
+      icon,
+      badge: `${basePath || ""}/static/pwa-icon-192.png`,
+      tag: payload.messageKey || undefined,
+      renotify: false,
+      data: { personaId: payload.personaId || "" },
+    });
   })());
 });
 
@@ -61,6 +87,33 @@ async function cachedImageResponse(request) {
     }
   }
   return response;
+}
+
+function imageDataUrl(response) {
+  return response.blob().then(async blob => {
+    if (!blob.type.startsWith("image/") || blob.size > MAX_NOTIFICATION_ICON_BYTES) return "";
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    return `data:${blob.type};base64,${btoa(binary)}`;
+  });
+}
+
+async function notificationIcon(payload, fallbackIcon) {
+  if (!payload.personaId || !payload.avatarVersion) return fallbackIcon;
+  const path = `${basePath || ""}/api/personas/${encodeURIComponent(payload.personaId)}/avatar?v=${encodeURIComponent(payload.avatarVersion)}`;
+  const request = new Request(new URL(path, self.location.origin), {
+    credentials: "same-origin",
+  });
+  try {
+    const response = await cachedImageResponse(request);
+    if (!response.ok) return fallbackIcon;
+    return await imageDataUrl(response.clone()) || fallbackIcon;
+  } catch (_) {
+    return fallbackIcon;
+  }
 }
 
 self.addEventListener("fetch", event => {

@@ -332,6 +332,7 @@ def create_app(app_instance: App) -> Flask:
     from pawzochat.web.routes.api_themes import api_themes_bp
     from pawzochat.web.routes.api_worldbooks import api_worldbooks_bp
     from pawzochat.web.routes.api_persona_writer import api_persona_writer_bp
+    from pawzochat.web.routes.api_push import api_push_bp
 
     flask_app.register_blueprint(api_conversations_bp, url_prefix="/api/conversations")
     flask_app.register_blueprint(api_personas_bp, url_prefix="/api/personas")
@@ -352,6 +353,7 @@ def create_app(app_instance: App) -> Flask:
     flask_app.register_blueprint(api_themes_bp, url_prefix="/api/themes")
     flask_app.register_blueprint(api_worldbooks_bp, url_prefix="/api/worldbooks")
     flask_app.register_blueprint(api_persona_writer_bp, url_prefix="/api/persona-writer")
+    flask_app.register_blueprint(api_push_bp, url_prefix="/api/push")
 
     @flask_app.route("/emoji-static/<path:filepath>")
     def serve_emoji(filepath):
