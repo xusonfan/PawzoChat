@@ -38,3 +38,11 @@ export function selectedStickerModel(providers, providerName, modelId) {
 export function modelSupportsReferenceImages(providers, providerName, modelId) {
   return !!selectedStickerModel(providers, providerName, modelId)?.supports_reference_images;
 }
+
+export function referenceImageFileError(file, maxBytes = 10 * 1024 * 1024) {
+  if (!file || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    return "请选择 PNG、JPEG 或 WebP 图片";
+  }
+  if (file.size > maxBytes) return "参考图不能超过 10 MB";
+  return "";
+}

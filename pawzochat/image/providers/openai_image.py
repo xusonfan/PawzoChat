@@ -48,6 +48,8 @@ OPENAI_REFERENCE_IMAGE_MODELS = frozenset({
     "gpt-image-1",
     "gpt-image-1-mini",
     "chatgpt-image-latest",
+    "grok-imagine-image",
+    "grok-imagine-image-quality",
 })
 OPENAI_MAX_REFERENCE_IMAGES = 16
 _IMAGE_FILE_EXTENSIONS = {

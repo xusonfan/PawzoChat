@@ -25,6 +25,10 @@ import re
 from flask import Blueprint, jsonify, request
 
 from pawzochat.image.base import ImageGenerationError
+from pawzochat.image.generation import (
+    ImageConfigurationError,
+    generate_configured_image,
+)
 from pawzochat.image.manager import (
     IMAGE_PRESET_MODELS,
     IMAGE_PROVIDER_PRESETS,
@@ -33,7 +37,6 @@ from pawzochat.image.manager import (
     ensure_image_models_list,
     resolve_model_type,
 )
-from pawzochat.image.reference import resolve_reference_images
 from pawzochat.web.routes import get_app
 
 logger = logging.getLogger(__name__)
@@ -337,34 +340,17 @@ def test_image_provider(name: str):
     if not prompt:
         return jsonify({"error": "请输入提示词"}), 400
 
-    if name not in app.config._data.get("image_providers", {}):
-        return jsonify({"error": "生图服务商未找到"}), 404
-
-    provider = app.image_manager.get_provider_for_model(name, model)
-    if provider is None:
-        return jsonify({
-            "error": "服务商或模型未就绪（请检查 API Key 和模型是否已配置）",
-        }), 400
-
-    ref_images: list[tuple[bytes, str]] = []
-    if persona_id and app.image_manager.model_supports_reference_images(
-        name,
-        model,
-    ):
-        persona_cfg = app.config.get("personas", default={}).get(persona_id) or {}
-        ref_images = resolve_reference_images(
-            persona_id, persona_cfg.get("image_generation") or {},
-        )
-
-    width, height = (1536, 1024) if purpose == "moments_cover" else (1024, 1024)
     try:
-        resp = provider.generate(
-            prompt=prompt,
+        resp = generate_configured_image(
+            app,
+            provider_name=name,
             model=model,
-            reference_images=ref_images,
-            width=width,
-            height=height,
+            prompt=prompt,
+            persona_id=persona_id,
+            purpose=purpose,
         )
+    except ImageConfigurationError as e:
+        return jsonify({"error": str(e)}), e.status_code
     except ImageGenerationError as e:
         status = e.status_code or 502
         if status < 400 or status >= 600:

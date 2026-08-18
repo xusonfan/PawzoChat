@@ -18,6 +18,7 @@ import {
   availableStickerProviders,
   modelSupportsReferenceImages,
   nextStickerGroupName,
+  referenceImageFileError,
 } from "./sticker_maker_capabilities.js";
 
 const BASE = () => window.PAWZOCHAT_BASE || "";
@@ -247,12 +248,9 @@ export function stickerMakerPickReference() {
 export function stickerMakerReferenceSelected(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  if (!file.type.startsWith("image/")) {
-    toast("请选择图片文件", "error");
-    return;
-  }
-  if (file.size > 10 * 1024 * 1024) {
-    toast("参考图不能超过 10 MB", "error");
+  const validationError = referenceImageFileError(file);
+  if (validationError) {
+    toast(validationError, "error");
     return;
   }
 

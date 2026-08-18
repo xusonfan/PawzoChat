@@ -95,6 +95,23 @@ class OpenAIImageProviderTests(unittest.TestCase):
         )
 
     @patch("pawzochat.image.providers.openai_image.requests.post")
+    def test_grok_reference_image_uses_edits_multipart(self, post):
+        post.return_value = self.success
+
+        self.provider.generate(
+            "keep this character",
+            model="grok-imagine-image-quality",
+            reference_images=[(b"reference", "image/png")],
+        )
+
+        self.assertEqual(post.call_args.args[0], "https://image.example/v1/images/edits")
+        self.assertEqual(
+            post.call_args.kwargs["data"]["model"],
+            "grok-imagine-image-quality",
+        )
+        self.assertEqual(len(post.call_args.kwargs["files"]), 1)
+
+    @patch("pawzochat.image.providers.openai_image.requests.post")
     def test_non_gpt_image_model_ignores_references(self, post):
         post.return_value = self.success
 

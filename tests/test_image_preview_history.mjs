@@ -7,21 +7,40 @@ class FakeClassList {
   add(value) { this.values.add(value); }
   remove(value) { this.values.delete(value); }
   contains(value) { return this.values.has(value); }
+  toggle(value, force) {
+    const enabled = force === undefined ? !this.values.has(value) : force;
+    if (enabled) this.values.add(value);
+    else this.values.delete(value);
+    return enabled;
+  }
 }
 
 function fakeNode() {
   return {
     classList: new FakeClassList(),
+    style: {},
     src: "",
+    hidden: false,
+    disabled: false,
+    textContent: "",
+    offsetWidth: 320,
+    offsetHeight: 240,
     addEventListener() {},
     removeEventListener() {},
+    setPointerCapture() {},
     stopPropagation() {},
   };
 }
 
 const image = fakeNode();
+const content = fakeNode();
 const modalChildren = new Map([
   ["#ipv-img", image],
+  [".ipv-content", content],
+  [".ipv-previous", fakeNode()],
+  [".ipv-next", fakeNode()],
+  [".ipv-counter", fakeNode()],
+  [".ipv-caption", fakeNode()],
   [".ipv-backdrop", fakeNode()],
   [".ipv-close", fakeNode()],
   [".ipv-download", fakeNode()],
@@ -29,7 +48,10 @@ const modalChildren = new Map([
 const modal = {
   id: "",
   className: "",
+  clientWidth: 390,
+  clientHeight: 844,
   classList: new FakeClassList("hide"),
+  getBoundingClientRect() { return { left: 0, top: 0, width: 390, height: 844 }; },
   set innerHTML(_) {},
   querySelector(selector) { return modalChildren.get(selector) || null; },
 };
@@ -59,6 +81,8 @@ globalThis.location = { href: "http://localhost/chat" };
 const windowListeners = new Map();
 globalThis.window = {
   location: globalThis.location,
+  innerWidth: 390,
+  innerHeight: 844,
   addEventListener(type, handler) { windowListeners.set(type, handler); },
   open() {},
 };
@@ -124,5 +148,25 @@ openImagePreview("https://cdn.example.com/second.gif");
 documentListeners.get("keydown")?.({ key: "Escape" });
 assert.equal(historyIndex, 0);
 assert.equal(modal.classList.contains("hide"), true);
+
+// 同组图片支持方向键切换，并在关闭后前进恢复切换后的图片。
+openImagePreview("https://cdn.example.com/one.png", [
+  "https://cdn.example.com/one.png",
+  "https://cdn.example.com/two.png",
+], [
+  "第一张图片的提示词",
+  "第二张图片的提示词",
+]);
+assert.equal(modalChildren.get(".ipv-caption").textContent, "第一张图片的提示词");
+assert.equal(modalChildren.get(".ipv-caption").hidden, false);
+documentListeners.get("keydown")?.({ key: "ArrowRight" });
+assert.equal(image.src, "https://cdn.example.com/two.png");
+assert.equal(modalChildren.get(".ipv-counter").textContent, "2 / 2");
+assert.equal(modalChildren.get(".ipv-caption").textContent, "第二张图片的提示词");
+closeImagePreview();
+history.forward();
+assert.equal(image.src, "https://cdn.example.com/two.png");
+assert.equal(modalChildren.get(".ipv-caption").textContent, "第二张图片的提示词");
+history.back();
 
 console.log("image preview history tests passed");

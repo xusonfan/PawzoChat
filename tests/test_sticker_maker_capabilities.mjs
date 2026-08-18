@@ -12,6 +12,7 @@ const {
   availableStickerProviders,
   modelSupportsReferenceImages,
   nextStickerGroupName,
+  referenceImageFileError,
   selectedStickerModel,
 } = await import(moduleUrl);
 
@@ -37,6 +38,15 @@ assert.equal(selectedStickerModel(providers, "mixed", "plain")?.type, "openai_im
 assert.equal(modelSupportsReferenceImages(providers, "mixed", "plain"), false);
 assert.equal(modelSupportsReferenceImages(providers, "mixed", "reference"), true);
 assert.equal(modelSupportsReferenceImages(providers, "mixed", "missing"), false);
+assert.equal(referenceImageFileError({ type: "image/png", size: 1024 }), "");
+assert.equal(
+  referenceImageFileError({ type: "image/gif", size: 1024 }),
+  "请选择 PNG、JPEG 或 WebP 图片",
+);
+assert.equal(
+  referenceImageFileError({ type: "image/jpeg", size: 11 * 1024 * 1024 }),
+  "参考图不能超过 10 MB",
+);
 
 assert.equal(nextStickerGroupName([]), "我的表情包");
 assert.equal(nextStickerGroupName([{ name: "我的表情包" }]), "我的表情包 2");

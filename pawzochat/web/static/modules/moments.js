@@ -354,12 +354,13 @@ function _momentHtml(m) {
     : imgs.length === 2 ? "moments-imgs n2"
     : imgs.length === 4 ? "moments-imgs n4"
     : "moments-imgs n3";
-  const imgsHtml = imgs.length === 0 ? "" : `
+  const imageUrls = imgs.map(filename => _imageUrl(m.id, filename));
+  const imageArgs = `[${imageUrls.map(jsArg).join(",")}]`;
+  const imgsHtml = imageUrls.length === 0 ? "" : `
     <div class="${imgGridClass}">
-      ${imgs.map(fn => {
-        const url = _imageUrl(m.id, fn);
-        return `<div class="moments-img" style="background-image:url('${url}')" onclick="PawzoChat.openImagePreview('${url}')"></div>`;
-      }).join("")}
+      ${imageUrls.map(url => (
+        `<div class="moments-img" style="background-image:url('${url}')" onclick="PawzoChat.openImagePreview(${jsArg(url)},${imageArgs})"></div>`
+      )).join("")}
     </div>`;
 
   const likesList = m.likes || [];

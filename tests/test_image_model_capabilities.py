@@ -34,6 +34,14 @@ class ImageModelCapabilityTests(unittest.TestCase):
             provider_cfg,
             {"id": "chatgpt-image-latest", "type": "openai_image"},
         ))
+        self.assertTrue(model_supports_reference_images(
+            provider_cfg,
+            {"id": "grok-imagine-image", "type": "openai_image"},
+        ))
+        self.assertTrue(model_supports_reference_images(
+            provider_cfg,
+            {"id": "grok-imagine-image-quality", "type": "openai_image"},
+        ))
         self.assertFalse(model_supports_reference_images(
             provider_cfg,
             {"id": "dall-e-3", "type": "openai_image"},

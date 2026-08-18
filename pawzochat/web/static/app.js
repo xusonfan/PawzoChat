@@ -202,6 +202,14 @@ import {
 } from "./modules/persona_writer.js";
 
 import {
+  imageGalleryProviderChange, imageGalleryModelChange,
+  imageGalleryPickReference, imageGalleryReferenceSelected, imageGalleryClearReference,
+  imageGalleryGenerate, imageGalleryOpen, imageGalleryReusePrompt,
+  imageGalleryDelete, imageGalleryEnterSelection, imageGalleryExitSelection,
+  imageGalleryToggleAll, imageGalleryDeleteSelected,
+} from "./modules/image_gallery.js";
+
+import {
   radarOpenProviderPicker, radarOpenModelPicker,
   radarRefresh, radarUseRecommendation,
 } from "./modules/radar.js";
@@ -242,6 +250,10 @@ function renderDiscover() {
       <div class="card-row" onclick="PawzoChat.pushPage('personaWriter',{})">
         <div class="row-icon purple">${iconHtml("ri-quill-pen-line")}</div>
         <span class="row-label">人设编写助手</span><span class="row-arrow">›</span>
+      </div>
+      <div class="card-row" onclick="PawzoChat.pushPage('imageGallery',{})">
+        <div class="row-icon indigo">${iconHtml("ri-image-add-line")}</div>
+        <span class="row-label">AI 图库</span><span class="row-arrow">›</span>
       </div>
     </div>
   </div>`;
@@ -454,6 +466,11 @@ window.PawzoChat = {
   openPersonaMoments, momentsOpenDetail,
   pwOnProviderChange, pwOnImageProviderChange,
   pwGenerate, pwGenerateImage, pwCreatePersona,
+  imageGalleryProviderChange, imageGalleryModelChange,
+  imageGalleryPickReference, imageGalleryReferenceSelected, imageGalleryClearReference,
+  imageGalleryGenerate, imageGalleryOpen, imageGalleryReusePrompt,
+  imageGalleryDelete, imageGalleryEnterSelection, imageGalleryExitSelection,
+  imageGalleryToggleAll, imageGalleryDeleteSelected,
   radarOpenProviderPicker, radarOpenModelPicker,
   radarRefresh, radarUseRecommendation,
   stickerMakerOpenProviderPicker, stickerMakerOpenModelPicker,
