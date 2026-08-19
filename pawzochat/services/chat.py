@@ -107,6 +107,7 @@ class ChatService:
         images: list[dict] | None = None,
         files: list[dict] | None = None,
         extra_hint: str | None = None,
+        async_image_generation: bool = False,
     ) -> list[dict]:
         """Call the LLM with context and return assistant message drafts.
 
@@ -139,6 +140,7 @@ class ChatService:
             persona.llm_provider, persona.llm_model,
         )
         generated_images: list[dict] = []
+        reply_events: list[dict] = []
         pending_images: dict[str, dict] = {}
         pending_files: dict[str, dict] = {}
 
@@ -175,6 +177,8 @@ class ChatService:
             pending_images=pending_images,
             pending_files=pending_files,
             generated_images=generated_images,
+            async_image_delivery=async_image_generation,
+            reply_events=reply_events,
         )
 
         # Increment round counter after the tool loop has run (tool handlers
@@ -182,58 +186,70 @@ class ChatService:
         if self.memory_service:
             self.memory_service.on_round_complete(persona_id)
 
-        raw_reply = (response.text if response else None) or ""
-        raw_reply = clean_assistant_reply_text(raw_reply)
-
         do_split_newline = bool(
             self.config.get("reply", "split_by_newline", default=True)
         )
 
-        # Text/voice runs become drafts interleaved in written order; when
-        # voice is disabled or a single run fails to synthesize, that run is
-        # stripped of its marker and degrades to plain text (split_reply as usual).
         assistant_messages: list[dict] = []
-        for seg in parse_voice_reply(raw_reply, split_newline=do_split_newline):
-            if seg.kind == "voice" and voice_settings is not None:
-                clip = synthesize_voice_clip(
-                    self.voice_manager,
-                    persona_id=persona_id,
-                    settings=voice_settings,
-                    text=seg.tts_text,
-                    emotion=seg.emotion,
-                )
-                if clip is not None:
+
+        def append_text_messages(text: str) -> None:
+            cleaned = clean_assistant_reply_text(text)
+            # Text/voice runs become drafts interleaved in written order; when
+            # voice is disabled or synthesis fails, the run degrades to text.
+            for seg in parse_voice_reply(cleaned, split_newline=do_split_newline):
+                if seg.kind == "voice" and voice_settings is not None:
+                    clip = synthesize_voice_clip(
+                        self.voice_manager,
+                        persona_id=persona_id,
+                        settings=voice_settings,
+                        text=seg.tts_text,
+                        emotion=seg.emotion,
+                    )
+                    if clip is not None:
+                        assistant_messages.append({
+                            "role": "assistant",
+                            "content": [{
+                                "type": "voice",
+                                "path": clip["path"],
+                                "mime": clip["mime"],
+                                "duration_ms": int(clip["duration_ms"] or 0),
+                                "text": clip["text"],
+                            }],
+                            "source": "llm",
+                        })
+                        continue
+                for piece in split_reply(seg.raw, split_newline=do_split_newline):
                     assistant_messages.append({
                         "role": "assistant",
-                        "content": [{
-                            "type": "voice",
-                            "path": clip["path"],
-                            "mime": clip["mime"],
-                            "duration_ms": int(clip["duration_ms"] or 0),
-                            "text": clip["text"],
-                        }],
+                        "content": [{"type": "text", "text": piece}],
                         "source": "llm",
                     })
-                    continue
-                # Synthesis failed → fall through to the text degrade branch
-                # below (the helper already logged a warning).
-            for piece in split_reply(seg.raw, split_newline=do_split_newline):
-                assistant_messages.append({
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": piece}],
-                    "source": "llm",
-                })
 
-        for img in generated_images:
+        def append_image_message(image: dict) -> None:
+            image_block = {
+                "type": "image",
+                "path": image.get("path", ""),
+                "mime": image.get("mime", "image/png"),
+            }
+            for key in ("status", "task_id", "error"):
+                if image.get(key) is not None:
+                    image_block[key] = image[key]
             assistant_messages.append({
                 "role": "assistant",
-                "content": [{
-                    "type": "image",
-                    "path": img.get("path", ""),
-                    "mime": img.get("mime", "image/png"),
-                }],
+                "content": [image_block],
                 "source": "llm",
             })
+
+        if reply_events:
+            for event in reply_events:
+                if event.get("type") == "text":
+                    append_text_messages(event.get("text", ""))
+                elif event.get("type") == "image":
+                    append_image_message(event.get("image", {}))
+        else:
+            append_text_messages((response.text if response else None) or "")
+            for image in generated_images:
+                append_image_message(image)
 
         if not assistant_messages:
             assistant_messages.append({
@@ -404,11 +420,18 @@ class ChatService:
         pending_images: dict[str, dict],
         pending_files: dict[str, dict],
         generated_images: list[dict],
+        async_image_delivery: bool = False,
+        reply_events: list[dict] | None = None,
     ) -> LLMResponse | None:
         """Run the provider.chat / tool-call loop. Returns the terminal response.
 
         Loop terminates when the response's ``finish_reason`` is not
         ``tool_use`` (or after ``persona.tool_policy.max_iterations`` rounds).
+        In web-chat async image mode, a successfully queued ``generate_image``
+        call returns immediately to the model as a synthetic success result.
+        Text emitted before that tool call is preserved and later joined with
+        the model's continuation, while the image placeholder completes
+        independently.
         All call-scoped state (pending_images/files, generated_images) is
         passed in as args so concurrent rounds do not stomp on each other.
         """
@@ -428,6 +451,8 @@ class ChatService:
         timeout = tool_policy.get("timeout_seconds", 30)
 
         response: LLMResponse | None = None
+        preserved_reply_parts: list[str] = []
+        preserve_tool_text = False
         loop_completed = False
         for _ in range(max_iter):
             try:
@@ -459,6 +484,8 @@ class ChatService:
                 assistant_msg["reasoning_content"] = response.reasoning_content
             llm_messages.append(assistant_msg)
 
+            queued_async_image = False
+            recorded_lead_event = False
             for tc in response.tool_calls:
                 generated_image_count = len(generated_images)
                 try:
@@ -470,6 +497,7 @@ class ChatService:
                         generated_images=generated_images,
                         pending_images=pending_images,
                         pending_files=pending_files,
+                        async_image_delivery=async_image_delivery,
                     )
                 except Exception as exc:
                     result_blocks = [ContentBlock(
@@ -486,12 +514,39 @@ class ChatService:
                             result_blocks, persona_id=persona_id,
                         )
                         generated_images.extend(saved)
+                new_pending_images = [
+                    image
+                    for image in generated_images[generated_image_count:]
+                    if image.get("status") == "pending"
+                ]
+                if async_image_delivery and tc.name == "generate_image" and new_pending_images:
+                    queued_async_image = True
+                    if reply_events is not None:
+                        lead_in = (response.text or "").strip()
+                        if lead_in and not recorded_lead_event:
+                            reply_events.append({"type": "text", "text": lead_in})
+                            recorded_lead_event = True
+                        reply_events.extend(
+                            {"type": "image", "image": image}
+                            for image in new_pending_images
+                        )
                 llm_messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "_function_name": tc.name,
                     "content": result_blocks,
                 })
+
+            if queued_async_image:
+                preserve_tool_text = True
+            if preserve_tool_text and response.text and response.text.strip():
+                # Tool-use responses may contain natural dialogue written
+                # before each call. Once async image delivery starts, preserve
+                # every such segment so later tool calls cannot erase it.
+                lead_in = response.text.strip()
+                preserved_reply_parts.append(lead_in)
+                if reply_events is not None and not recorded_lead_event:
+                    reply_events.append({"type": "text", "text": lead_in})
 
         if response is not None and not loop_completed:
             # Hit when the LLM keeps asking for tools for max_iter rounds and
@@ -508,6 +563,14 @@ class ChatService:
                 f"工具调用次数已达上限（{max_iter} 次）仍未完成，"
                 f"请检查 MCP 服务是否阻塞，或 prompt 是否强制要求模型反复调用工具"
             )
+
+        if response is not None and preserved_reply_parts:
+            terminal_text = (response.text or "").strip()
+            if terminal_text:
+                preserved_reply_parts.append(terminal_text)
+                if reply_events is not None:
+                    reply_events.append({"type": "text", "text": terminal_text})
+            response.text = "\\".join(preserved_reply_parts)
 
         return response
 
@@ -617,10 +680,22 @@ class ChatService:
                 if b.get("type") == "text" and b.get("text")
             ]
             has_image = any(b.get("type") == "image" for b in content_blocks)
+            has_pending_image = any(
+                b.get("type") == "image" and b.get("status") == "pending"
+                for b in content_blocks
+            )
+            has_failed_image = any(
+                b.get("type") == "image" and b.get("status") == "failed"
+                for b in content_blocks
+            )
             file_hints = self._file_hints_from_blocks(content_blocks)
             voice_hints = self._voice_hints_from_blocks(content_blocks)
             text = "\n".join(text_parts)
-            if not text and has_image:
+            if not text and has_pending_image:
+                text = "[图片生成中]"
+            elif not text and has_failed_image:
+                text = "[图片生成失败]"
+            elif not text and has_image:
                 text = "[图片]"
             if file_hints:
                 text = f"{text}\n{file_hints}" if text else file_hints
@@ -984,6 +1059,12 @@ class ChatService:
                 )
 
             lines.extend([
+                "- **调用顺序（必须遵守）**：先输出一句符合当前人设和对话语境的简短自然台词，"
+                "再在同一次回复中调用 `generate_image`；禁止只调用工具而不输出台词。",
+                "- 工具调用前的台词应像真人准备发照片时会说的话，只承接当前聊天内容；"
+                "不要提及『生成图片』『工具』『任务』『提示词』等系统概念。",
+                "- 工具返回成功后，仅继续尚未表达的剩余内容，不要重复调用前的台词；"
+                "如果没有剩余内容，可以直接结束。",
                 "- 仅在用户明确请求图片或当前场景确实适合用图片回应时调用，不要滥用。",
                 "- 同一对话多次生图时，场景/动作要自然过渡，不要前后矛盾。",
                 "- 直接描述画面，不要写元指令（如『生成一张』『画一幅』）。",
@@ -1178,6 +1259,7 @@ class ChatService:
         generated_images: list[dict] | None = None,
         pending_images: dict[str, dict] | None = None,
         pending_files: dict[str, dict] | None = None,
+        async_image_delivery: bool = False,
     ) -> list[ContentBlock]:
         if self.capability_registry and self.capability_registry.is_capability_tool(tc.name):
             return self.capability_registry.execute(
@@ -1188,6 +1270,7 @@ class ChatService:
                     "persona": persona,
                     "persona_id": persona_id,
                     "generated_images": generated_images if generated_images is not None else [],
+                    "async_image_delivery": async_image_delivery,
                 },
                 timeout=timeout,
             )

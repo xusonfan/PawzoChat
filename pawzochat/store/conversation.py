@@ -441,6 +441,37 @@ class ConversationStore:
             self._write_file(persona_id, data)
             return msg
 
+    def replace_pending_image(
+        self,
+        persona_id: str,
+        task_id: str,
+        replacement: dict,
+    ) -> dict | None:
+        """Atomically replace one asynchronous image placeholder.
+
+        The message keeps its original sequence and timestamp so completion
+        cannot reorder the conversation. Returns a detached message copy for
+        SSE broadcasting, or ``None`` when the placeholder no longer exists.
+        """
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return None
+            for message in data.get("messages", []):
+                content = message.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for index, block in enumerate(content):
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "image" or block.get("task_id") != task_id:
+                        continue
+                    content[index] = dict(replacement)
+                    self._write_file(persona_id, data)
+                    return json.loads(json.dumps(message, ensure_ascii=False))
+            return None
+
     def get_messages(
         self,
         persona_id: str,

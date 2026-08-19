@@ -306,6 +306,10 @@ function initSSE() {
           markConversationRead(data.persona_id, data.message?._seq);
         }
       }
+      if (data.type === "assistant_message_updated") {
+        api.invalidate(k => k.startsWith(`/api/conversations/${data.persona_id}/messages`));
+        if (isViewingChat(data.persona_id)) refreshChatMessages();
+      }
       if (data.type === "new_message") {
         api.invalidate(k => k.startsWith("/api/conversations"));
         if (data.persona_id === chatPersonaId) refreshChatMessages();

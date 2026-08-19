@@ -2658,6 +2658,31 @@ select.qs-field-input {
   max-width:240px; max-height:240px; border-radius:8px;
   object-fit:contain; cursor:pointer;
 }
+.msg-image-placeholder {
+  width: min(240px, 62vw);
+  aspect-ratio: 4 / 3;
+  margin-top: 4px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--bg), var(--bg-hover));
+  color: var(--text-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.msg-image-placeholder-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--divider);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.msg-image-placeholder.failed { color: var(--danger); }
+.msg-image-placeholder.failed svg { width: 24px; height: 24px; }
 .linked-image-fallback {
   display: inline-block;
   max-width: 240px;

@@ -38,6 +38,8 @@ from __future__ import annotations
 import base64
 import logging
 import secrets
+import threading
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -45,6 +47,7 @@ from pawzochat.image.reference import resolve_reference_images
 from pawzochat.llm.base import ContentBlock
 from pawzochat.paths import CHATS_DIR
 from pawzochat.transport.models import normalize_image_generation
+from pawzochat.web.sse import broadcast
 
 if TYPE_CHECKING:
     from pawzochat.app import App
@@ -55,7 +58,8 @@ logger = logging.getLogger(__name__)
 TOOL_NAME = "generate_image"
 
 TOOL_DESCRIPTION = (
-    "生成一张图片并直接作为消息发给用户。"
+    "生成一张图片并直接作为消息发给用户。调用本工具前，必须先输出一句符合当前人设和语境的"
+    "简短自然台词；禁止用纯工具调用代替对话。"
     "适用场景：用户邀请你拍照（如『拍个照看看你现在在干嘛』）、想看你所在的场景、"
     "想看你描述的物品/食物/景色，或当前情节确实需要以图回应。"
     "用户已在角色配置中预设了画面风格和角色形象，会自动拼接到 prompt 之前——"
@@ -189,56 +193,129 @@ def make_handler(app: App) -> Callable[[dict, dict], list[ContentBlock]]:
         # so they won't append a misleading "Negative prompt" notice.
         neg_prompt_arg = settings["negative_prompt"].strip() if settings["negative_enabled"] else ""
 
-        try:
-            response = provider.generate(
-                full_prompt,
-                model=settings["model"],
-                width=width,
-                height=height,
-                negative_prompt=neg_prompt_arg,
-                reference_images=ref_images,
-            )
-        except Exception as exc:
-            logger.exception(
-                "生图调用失败 persona=%s provider=%s model=%s",
-                persona_id, settings["provider"], settings["model"],
-            )
-            return _err(f"图片生成失败：{exc}")
+        task_id = secrets.token_hex(8)
 
-        image_bytes = response.image_data
-        mime = response.mime_type or "image/png"
-        ext = "png" if mime.endswith("/png") else (
-            "jpg" if mime.endswith("/jpeg") or mime.endswith("/jpg") else "png"
-        )
-        image_id = secrets.token_hex(8)
-        out_dir = CHATS_DIR / persona_id / "images"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"gen_{image_id}.{ext}"
-        try:
-            out_path.write_bytes(image_bytes)
-        except Exception as exc:
-            logger.exception("保存生成图片失败 persona=%s path=%s", persona_id, out_path)
-            return _err(f"图片保存失败：{exc}")
+        def replace_placeholder(replacement: dict) -> dict | None:
+            # A fast provider can finish before the LLM's follow-up text and
+            # ReplyDispatcher persist the placeholder. This wait happens only
+            # in the image worker and never blocks the conversation pipeline.
+            deadline = time.monotonic() + 300.0
+            while time.monotonic() < deadline:
+                stored = app.conversation_store.replace_pending_image(
+                    persona_id, task_id, replacement,
+                )
+                if stored is not None:
+                    return stored
+                time.sleep(0.05)
+            return None
 
-        generated = context.get("generated_images")
-        if isinstance(generated, list):
-            generated.append({
+        def generate() -> tuple[dict | None, list[ContentBlock]]:
+            try:
+                response = provider.generate(
+                    full_prompt,
+                    model=settings["model"],
+                    width=width,
+                    height=height,
+                    negative_prompt=neg_prompt_arg,
+                    reference_images=ref_images,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "生图调用失败 persona=%s provider=%s model=%s",
+                    persona_id, settings["provider"], settings["model"],
+                )
+                return None, _err(f"图片生成失败：{exc}")
+
+            image_bytes = response.image_data
+            mime = response.mime_type or "image/png"
+            ext = "png" if mime.endswith("/png") else (
+                "jpg" if mime.endswith("/jpeg") or mime.endswith("/jpg") else "png"
+            )
+            out_dir = CHATS_DIR / persona_id / "images"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"gen_{task_id}.{ext}"
+            try:
+                out_path.write_bytes(image_bytes)
+            except Exception as exc:
+                logger.exception("保存生成图片失败 persona=%s path=%s", persona_id, out_path)
+                return None, _err(f"图片保存失败：{exc}")
+
+            image = {
                 "path": str(out_path),
                 "mime": mime,
                 "prompt": full_prompt,
-            })
+            }
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            logger.info(
+                "已生成图片 persona=%s provider=%s model=%s size=%dx%d bytes=%d",
+                persona_id, settings["provider"], settings["model"], width, height, len(image_bytes),
+            )
+            return image, [
+                ContentBlock(type="image", data=b64, mime_type=mime),
+                ContentBlock(
+                    type="text",
+                    text="图片已生成并展示给用户。请用一句简短自然的话回应这张图。",
+                ),
+            ]
 
-        b64 = base64.b64encode(image_bytes).decode("ascii")
-        logger.info(
-            "已生成图片 persona=%s provider=%s model=%s size=%dx%d bytes=%d",
-            persona_id, settings["provider"], settings["model"], width, height, len(image_bytes),
-        )
-        return [
-            ContentBlock(type="image", data=b64, mime_type=mime),
-            ContentBlock(
+        generated = context.get("generated_images")
+        if context.get("async_image_delivery"):
+            placeholder = {
+                "status": "pending",
+                "task_id": task_id,
+                "mime": "image/png",
+                "prompt": full_prompt,
+            }
+            if isinstance(generated, list):
+                generated.append(placeholder)
+
+            def generate_in_background() -> None:
+                image, result = generate()
+                if image is not None:
+                    replacement = {
+                        "type": "image",
+                        "path": image["path"],
+                        "mime": image["mime"],
+                    }
+                else:
+                    error = next((block.text for block in result if block.text), "图片生成失败")
+                    replacement = {
+                        "type": "image",
+                        "status": "failed",
+                        "task_id": task_id,
+                        "error": error,
+                    }
+                stored = replace_placeholder(replacement)
+                if stored is None:
+                    logger.warning(
+                        "异步生图完成但占位消息不存在 persona=%s task=%s",
+                        persona_id, task_id,
+                    )
+                    return
+                broadcast(
+                    "assistant_message_updated",
+                    persona_id=persona_id,
+                    message=stored,
+                )
+                broadcast("conversation_updated", persona_id=persona_id)
+
+            threading.Thread(
+                target=generate_in_background,
+                name=f"image-generation-{task_id}",
+                daemon=True,
+            ).start()
+            return [ContentBlock(
                 type="text",
-                text="图片已生成并展示给用户。请用一句简短自然的话回应这张图。",
-            ),
-        ]
+                text=(
+                    "图片生成任务已成功启动，图片会在后台完成后自动展示给用户。"
+                    "请继续输出被工具调用中断后的剩余内容，不要重复工具调用前已经输出的台词，"
+                    "也不要再次调用 generate_image。"
+                ),
+            )]
+
+        image, result_blocks = generate()
+        if image is not None and isinstance(generated, list):
+            generated.append(image)
+        return result_blocks
 
     return handler

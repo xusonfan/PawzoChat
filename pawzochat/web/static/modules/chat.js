@@ -457,6 +457,20 @@ function renderContentBlocks(content, renderLinkedImages = false) {
   let parts = "";
   for (const b of blocks) {
     if (b.type === "image") {
+      if (b.status === "pending") {
+        parts += `<div class="msg-image-placeholder" role="status" aria-live="polite">
+          <span class="msg-image-placeholder-spinner" aria-hidden="true"></span>
+          <span>图片加载中…</span>
+        </div>`;
+        continue;
+      }
+      if (b.status === "failed") {
+        parts += `<div class="msg-image-placeholder failed" title="${escAttr(b.error || "图片加载失败")}">
+          ${iconHtml("ri-image-off-line")}
+          <span>图片加载失败</span>
+        </div>`;
+        continue;
+      }
       let src = "";
       if (b.url) {
         src = /^(?:https?:\/\/|blob:|data:)/i.test(b.url) ? b.url : base + b.url;

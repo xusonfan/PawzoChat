@@ -463,6 +463,7 @@ class MessageQueue:
                     persona_id,
                     images=images,
                     files=files,
+                    async_image_generation=reply_ctx.get("channel", "web") == "web",
                 )
             except Exception:
                 logger.exception("LLM 调用失败 persona=%s", persona_id)
