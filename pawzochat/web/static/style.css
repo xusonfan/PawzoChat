@@ -1950,6 +1950,82 @@ body {
 #toast.error { background: var(--danger); }
 #toast.info { background: var(--text-2); }
 
+/* ---- Error banner ---- */
+.error-banner {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: 50%;
+  width: min(680px, calc(100vw - 24px));
+  z-index: 340;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  color: var(--text-1);
+  box-shadow: 0 8px 30px rgba(0,0,0,.18);
+  opacity: 0;
+  transform: translate(-50%, -14px);
+  transition: opacity .2s ease, transform .2s ease;
+}
+.error-banner.show { opacity: 1; transform: translate(-50%, 0); }
+.error-banner-icon {
+  flex: 0 0 auto;
+  width: 21px;
+  height: 21px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+.error-banner-content { min-width: 0; flex: 1; }
+.error-banner-title {
+  margin-bottom: 3px;
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.error-banner-message {
+  max-height: 4.5em;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.error-banner.expanded .error-banner-message {
+  max-height: min(45vh, 360px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.error-banner-toggle {
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  font: 500 12px/1.5 var(--font);
+  cursor: pointer;
+}
+.error-banner-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin: -4px -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  font: 22px/26px var(--font);
+  cursor: pointer;
+}
+.error-banner-toggle:focus-visible,
+.error-banner-close:focus-visible { outline: 2px solid var(--danger); outline-offset: 2px; }
+.error-banner-close:active { background: var(--bg-hover); }
+
 /* ---- Loading HUD ---- */
 #loading-hud {
   position: fixed;

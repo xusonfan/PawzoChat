@@ -35,6 +35,14 @@ if TYPE_CHECKING:
     from pawzochat.app import App
 
 logger = logging.getLogger(__name__)
+_ERROR_MESSAGE_LIMIT = 4000
+
+
+def _public_error_message(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    if len(message) <= _ERROR_MESSAGE_LIMIT:
+        return message
+    return message[:_ERROR_MESSAGE_LIMIT].rstrip() + "…"
 
 
 def _now_iso() -> str:
@@ -465,8 +473,15 @@ class MessageQueue:
                     files=files,
                     async_image_generation=reply_ctx.get("channel", "web") == "web",
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("LLM 调用失败 persona=%s", persona_id)
+                if reply_ctx.get("channel", "web") == "web":
+                    broadcast(
+                        "operation_error",
+                        persona_id=persona_id,
+                        title="消息回复失败",
+                        message=_public_error_message(exc),
+                    )
                 drafts = [{
                     "role": "assistant",
                     "content": [{"type": "text", "text": "抱歉，我遇到了一些问题，请稍后再试。"}],

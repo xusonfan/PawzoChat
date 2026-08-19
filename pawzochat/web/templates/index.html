@@ -145,6 +145,15 @@
   </div>
 </div>
 <div id="toast" class="hide"></div>
+<div id="error-banner" class="error-banner hide" role="alert" aria-live="assertive">
+  <svg class="error-banner-icon ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="{{ request.script_root }}/static/assets/vendor/remixicon/remixicon.symbol.svg#ri-error-warning-line"></use></svg>
+  <div class="error-banner-content">
+    <div class="error-banner-title">请求异常</div>
+    <div class="error-banner-message"></div>
+    <button type="button" class="error-banner-toggle hide" onclick="PawzoChat.toggleErrorBanner()">展开详情</button>
+  </div>
+  <button type="button" class="error-banner-close" aria-label="关闭异常提醒" onclick="PawzoChat.closeErrorBanner()">×</button>
+</div>
 
 <!-- build: 84aw4m7c964 -->
 

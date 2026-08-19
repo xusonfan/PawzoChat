@@ -21,9 +21,13 @@ import { esc, iconHtml } from "./modules/utils.js";
 import { api } from "./modules/api.js";
 import { state, content, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
+import {
+  showErrorBanner, toggleErrorBanner, closeErrorBanner,
+} from "./modules/error_banner.js";
 import { choicePickerSelect } from "./modules/choice_picker.js";
 import { openImagePreview, closeImagePreview } from "./modules/image_preview.js";
 import { rememberImageLayout } from "./modules/image_layout_cache.js";
+import { errorNoticeFromEvent } from "./modules/error_feedback.js";
 import {
   setTopBar, switchTab, goBack, pushPage,
   registerTabRenderer, registerPageRenderer,
@@ -284,6 +288,13 @@ function initSSE() {
   source.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+      const errorNotice = errorNoticeFromEvent(data);
+      if (
+        errorNotice
+        && (!data.persona_id || isViewingChat(data.persona_id))
+      ) {
+        showErrorBanner(errorNotice.message, errorNotice.title);
+      }
       if (data.type === "processing") {
         state.processingPersonas.add(data.persona_id);
         if (data.persona_id === chatPersonaId) showTypingIndicator();
@@ -308,7 +319,9 @@ function initSSE() {
       }
       if (data.type === "assistant_message_updated") {
         api.invalidate(k => k.startsWith(`/api/conversations/${data.persona_id}/messages`));
-        if (isViewingChat(data.persona_id)) refreshChatMessages();
+        if (isViewingChat(data.persona_id)) {
+          refreshChatMessages();
+        }
       }
       if (data.type === "new_message") {
         api.invalidate(k => k.startsWith("/api/conversations"));
@@ -354,6 +367,7 @@ window.PawzoChat = {
   switchTab, goBack, pushPage,
   requestPwaInstall,
   closeOverlay, closeConfirm, choicePickerSelect,
+  closeErrorBanner, toggleErrorBanner,
   openImagePreview, closeImagePreview, rememberImageLayout,
   newConversation, startChat, openChat,
   filterConvs, chatMore, clearChat, deleteChat,

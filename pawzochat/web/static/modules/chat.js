@@ -31,6 +31,7 @@ import {
 } from "./conversation_menu.js";
 import { ownsConversationListTarget } from "./conversation_list_ownership.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
+import { showErrorBanner } from "./error_banner.js";
 import {
   createChatBottomAnchor,
 } from "./chat_scroll.js";
@@ -561,7 +562,7 @@ export async function retryGeneratedImage(button) {
     );
     if (res.status >= 400) throw new Error(res.data?.error || "图片重试失败");
   } catch (e) {
-    toast(e.message || "图片重试失败", "error");
+    showErrorBanner(e.message || "图片重试失败", "图片重试失败");
     if (chatPersonaId === personaId) await refreshChatMessages();
   }
 }
