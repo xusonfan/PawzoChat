@@ -36,6 +36,30 @@
 <script>
 (function(){
   try {
+    if (matchMedia("(min-width: 768px)").matches) return;
+    if (!(matchMedia("(display-mode: standalone)").matches || navigator.standalone === true)) return;
+
+    var key = "pawzoNavigation";
+    var currentState = history.state || {};
+    var currentRoute = currentState[key];
+    if (currentRoute && currentRoute.rootGuard === true && Number(currentRoute.index) > 0) return;
+
+    var session = currentRoute && currentRoute.rootGuard === true
+      ? currentRoute.session
+      : Date.now() + "-" + Math.random().toString(36).slice(2);
+    var rootRoute = { session: session, index: 0, tab: "chat", depth: 0, rootGuard: true };
+    history.replaceState(Object.assign({}, currentState, { [key]: rootRoute }), "", location.href);
+    history.pushState(
+      Object.assign({}, currentState, { [key]: Object.assign({}, rootRoute, { index: 1 }) }),
+      "",
+      location.href
+    );
+  } catch (e) {}
+})();
+</script>
+<script>
+(function(){
+  try {
     var raw = localStorage.getItem("pawzo_theme_cache");
     var mode;
     if (raw) {

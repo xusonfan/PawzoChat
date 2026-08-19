@@ -67,6 +67,10 @@ const navigationSource = await readFile(
   join(__dirname, "../pawzochat/web/static/modules/navigation.js"),
   "utf8",
 );
+const indexTemplateSource = await readFile(
+  join(__dirname, "../pawzochat/web/templates/index.html"),
+  "utf8",
+);
 const contactsSource = await readFile(
   join(__dirname, "../pawzochat/web/static/modules/contacts.js"),
   "utf8",
@@ -90,6 +94,31 @@ assert.match(
   navigationSource,
   /const steps = Math\.max\(0, _historyIndex - targetIndex\)/,
   "同一页面索引的覆盖层返回不能额外弹出当前页面",
+);
+assert.match(
+  navigationSource,
+  /function _initRootBackGuard\(\)[\s\S]*?_isStandaloneApp\(\)[\s\S]*?_writeBrowserRoute\("replace"\);[\s\S]*?_writeBrowserRoute\("push"\);/,
+  "独立 PWA 的移动端根页面应建立返回键保护层",
+);
+assert.match(
+  indexTemplateSource,
+  /display-mode: standalone[\s\S]*?rootGuard: true[\s\S]*?history\.replaceState[\s\S]*?history\.pushState/,
+  "冷启动应在主应用模块加载前同步建立根页面返回保护层",
+);
+assert.match(
+  navigationSource,
+  /const _bootstrapRoute = history\.state\?\.\[_historyKey\][\s\S]*?_bootstrapRoute\?\.rootGuard/,
+  "导航模块应接管冷启动阶段已经建立的返回保护层",
+);
+assert.match(
+  navigationSource,
+  /state\.pageStack\.length === 0[\s\S]*?targetIndex === 0[\s\S]*?history\.forward\(\);/,
+  "根页面消费系统返回后应回到既有保护层，持续避免退出应用",
+);
+assert.doesNotMatch(
+  navigationSource,
+  /if \(isDesktop\(\) \|\| state\.pageStack\.length === 0\) return;/,
+  "根页面的 popstate 不能在恢复返回键保护前提前结束",
 );
 assert.match(
   navigationSource,

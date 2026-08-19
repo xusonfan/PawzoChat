@@ -23,9 +23,21 @@ import {
 const tabRenderers = {};
 const pageRenderers = {};
 
-const _historySession = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const _historyKey = "pawzoNavigation";
-let _historyIndex = 0;
+const _bootstrapRoute = history.state?.[_historyKey];
+const _historySession = _bootstrapRoute?.rootGuard
+  ? _bootstrapRoute.session
+  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let _historyIndex = _bootstrapRoute?.session === _historySession
+  ? Number(_bootstrapRoute.index) || 0
+  : 0;
+let _rootBackGuardInitialized = _bootstrapRoute?.session === _historySession
+  && _bootstrapRoute.rootGuard === true;
+
+function _isStandaloneApp() {
+  return window.matchMedia("(display-mode: standalone)").matches
+    || window.navigator.standalone === true;
+}
 
 function _browserRoute() {
   return {
@@ -33,6 +45,7 @@ function _browserRoute() {
     index: _historyIndex,
     tab: state.currentTab,
     depth: state.pageStack.length,
+    rootGuard: _rootBackGuardInitialized,
   };
 }
 
@@ -41,6 +54,13 @@ function _writeBrowserRoute(mode) {
   if (mode === "push") _historyIndex += 1;
   const browserState = { ...(history.state || {}), [_historyKey]: _browserRoute() };
   history[mode === "push" ? "pushState" : "replaceState"](browserState, "", location.href);
+}
+
+function _initRootBackGuard() {
+  if (_rootBackGuardInitialized || isDesktop() || !_isStandaloneApp()) return;
+  _rootBackGuardInitialized = true;
+  _writeBrowserRoute("replace");
+  _writeBrowserRoute("push");
 }
 
 export function registerTabRenderer(tab, fn) {
@@ -660,6 +680,7 @@ export function switchTab(tab) {
     if (!_restoreTabDom(tab)) {
       _mountFreshMobileTab(tab);
     }
+    _initRootBackGuard();
     _writeBrowserRoute("replace");
   }
 }
@@ -709,7 +730,7 @@ export function goBack() {
 }
 
 window.addEventListener("popstate", event => {
-  if (isDesktop() || state.pageStack.length === 0) return;
+  if (isDesktop()) return;
 
   const route = event.state?.[_historyKey];
   const targetIndex = route?.session === _historySession
@@ -721,9 +742,17 @@ window.addEventListener("popstate", event => {
   }
   _historyIndex = targetIndex;
 
+  if (_rootBackGuardInitialized
+    && state.pageStack.length === 0
+    && route?.session === _historySession
+    && targetIndex === 0) {
+    history.forward();
+    return;
+  }
+
   if (route?.session !== _historySession) {
-    // The root entry may predate this module. Keep the user inside the app for
-    // the first Android back action, then let a later back leave from the root.
+    // The root entry may predate this module. Keep navigation state attached to
+    // the current document without trapping normal browser-tab navigation.
     _writeBrowserRoute("replace");
   }
 });
