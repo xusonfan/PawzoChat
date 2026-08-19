@@ -1,5 +1,18 @@
 export const IMAGE_PREVIEW_MIN_SCALE = 1;
 export const IMAGE_PREVIEW_MAX_SCALE = 5;
+export const IMAGE_PREVIEW_DOUBLE_TAP_DELAY = 420;
+export const IMAGE_PREVIEW_DOUBLE_TAP_DISTANCE = 48;
+
+export function isPreviewDoubleTap(previousTap, currentTap) {
+  if (!previousTap?.time || !currentTap?.time) return false;
+  const elapsed = currentTap.time - previousTap.time;
+  return elapsed > 0
+    && elapsed <= IMAGE_PREVIEW_DOUBLE_TAP_DELAY
+    && Math.hypot(
+      currentTap.x - previousTap.x,
+      currentTap.y - previousTap.y,
+    ) <= IMAGE_PREVIEW_DOUBLE_TAP_DISTANCE;
+}
 
 export function previewSequence(currentSource, candidates = []) {
   const current = typeof currentSource === "string" ? currentSource.trim() : "";

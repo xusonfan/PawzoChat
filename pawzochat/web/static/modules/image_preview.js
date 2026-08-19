@@ -18,6 +18,7 @@
 import { toast } from "./ui.js";
 import {
   clampPreviewView,
+  isPreviewDoubleTap,
   pinchPreviewView,
   pointerCenter,
   pointerDistance,
@@ -42,6 +43,24 @@ let _view = { scale: 1, x: 0, y: 0 };
 let _gesture = null;
 let _suppressTap = false;
 let _lastTap = { time: 0, x: 0, y: 0 };
+let _navigationTimer = null;
+let _switchTimer = null;
+let _isSwitching = false;
+const NAVIGATION_VISIBLE_MS = 2600;
+const IMAGE_SWITCH_DURATION_MS = 280;
+
+function _hideNavigation() {
+  if (_navigationTimer) clearTimeout(_navigationTimer);
+  _navigationTimer = null;
+  _modalEl?.classList.remove("navigation-visible");
+}
+
+function _showNavigationBriefly() {
+  if (!_modalEl) return;
+  if (_navigationTimer) clearTimeout(_navigationTimer);
+  _modalEl.classList.add("navigation-visible");
+  _navigationTimer = setTimeout(_hideNavigation, NAVIGATION_VISIBLE_MS);
+}
 
 function _imageDimensions() {
   return {
@@ -61,7 +80,9 @@ function _applyView({ settle = false } = {}) {
   if (!_imgEl) return;
   _imgEl.classList.toggle("settling", settle);
   _imgEl.style.transform = `translate3d(${_view.x}px, ${_view.y}px, 0) scale(${_view.scale})`;
-  _modalEl?.classList.toggle("is-zoomed", _view.scale > 1);
+  const isZoomed = _view.scale > 1;
+  _modalEl?.classList.toggle("is-zoomed", isZoomed);
+  if (isZoomed) _hideNavigation();
   if (settle) setTimeout(() => _imgEl?.classList.remove("settling"), 220);
 }
 
@@ -82,6 +103,7 @@ function _resetView() {
   _pointers.clear();
   _gesture = null;
   _suppressTap = false;
+  _lastTap = { time: 0, x: 0, y: 0 };
   _view = { scale: 1, x: 0, y: 0 };
   _applyView();
 }
@@ -120,13 +142,39 @@ function _syncNavigation() {
   }
 }
 
+function _finishImageSwitch() {
+  _isSwitching = false;
+  _switchTimer = null;
+  _imgEl?.classList.remove("switching-next", "switching-previous");
+  _modalEl?.querySelectorAll?.(".ipv-switch-outgoing").forEach(element => element.remove());
+}
+
+function _animateImageSwitch(delta) {
+  const direction = delta > 0 ? "next" : "previous";
+  const content = _modalEl?.querySelector(".ipv-content");
+  const outgoing = _imgEl?.cloneNode?.(false);
+  if (outgoing && content?.appendChild) {
+    outgoing.removeAttribute?.("id");
+    outgoing.className = `ipv-switch-outgoing switching-${direction}`;
+    outgoing.removeAttribute?.("style");
+    outgoing.setAttribute?.("aria-hidden", "true");
+    content.appendChild(outgoing);
+  }
+
+  _isSwitching = true;
+  _imgEl?.classList.remove("switching-next", "switching-previous");
+  _imgEl?.classList.add(`switching-${direction}`);
+  if (_switchTimer) clearTimeout(_switchTimer);
+  _switchTimer = setTimeout(_finishImageSwitch, IMAGE_SWITCH_DURATION_MS);
+}
+
 function _switchImage(delta) {
   const nextIndex = _sourceIndex + delta;
-  if (nextIndex < 0 || nextIndex >= _sources.length || !_imgEl) return false;
+  if (_isSwitching || nextIndex < 0 || nextIndex >= _sources.length || !_imgEl) return false;
+  _animateImageSwitch(delta);
   _sourceIndex = nextIndex;
   _currentSrc = _sources[_sourceIndex];
   _resetView();
-  _imgEl.classList.add(delta > 0 ? "switching-next" : "switching-previous");
   _imgEl.src = _currentSrc;
   if (_historyToken) {
     _historySources.set(_historyToken, {
@@ -135,10 +183,8 @@ function _switchImage(delta) {
       captions: [..._captions],
     });
   }
-  requestAnimationFrame(() => {
-    _imgEl?.classList.remove("switching-next", "switching-previous");
-  });
   _syncNavigation();
+  _showNavigationBriefly();
   return true;
 }
 
@@ -224,14 +270,13 @@ function _bindGestures(contentEl) {
       }
     }
     if (event.pointerType !== "mouse" && _pointers.size === 0 && !_suppressTap) {
-      const now = Date.now();
-      const nearLastTap = Math.hypot(point.x - _lastTap.x, point.y - _lastTap.y) < 28;
-      if (now - _lastTap.time < 300 && nearLastTap) {
-        _lastTap.time = 0;
+      const currentTap = { time: Date.now(), ...point };
+      if (isPreviewDoubleTap(_lastTap, currentTap)) {
+        _lastTap = { time: 0, x: 0, y: 0 };
         _toggleZoom(point);
         return;
       }
-      _lastTap = { time: now, ...point };
+      _lastTap = currentTap;
     }
     if (_pointers.size === 0) _suppressTap = false;
     _clampView({ settle: true });
@@ -349,6 +394,7 @@ function _showImagePreview(src, sources = null, captions = null) {
   _currentSrc = _sources[_sourceIndex] || src;
   _imgEl.src = _currentSrc;
   _syncNavigation();
+  _showNavigationBriefly();
   _modalEl.classList.remove("hide");
   requestAnimationFrame(() => _modalEl.classList.add("show"));
 
@@ -364,6 +410,9 @@ function _showImagePreview(src, sources = null, captions = null) {
 
 function _hideImagePreview() {
   if (!_modalEl) return;
+  _hideNavigation();
+  if (_switchTimer) clearTimeout(_switchTimer);
+  _finishImageSwitch();
   _resetView();
   _modalEl.classList.remove("show");
   setTimeout(() => {

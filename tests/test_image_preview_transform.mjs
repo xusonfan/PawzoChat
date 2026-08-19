@@ -9,6 +9,7 @@ const moduleUrl = pathToFileURL(join(
 )).href;
 const {
   clampPreviewView,
+  isPreviewDoubleTap,
   pinchPreviewView,
   pointerCenter,
   pointerDistance,
@@ -47,6 +48,31 @@ assert.equal(
   previewSwipeDirection({ x: 0, y: 0 }, { x: 30, y: 90 }, 1),
   0,
   "纵向或短距离手势不应误触图片切换",
+);
+
+assert.equal(
+  isPreviewDoubleTap(
+    { time: 1000, x: 20, y: 30 },
+    { time: 1410, x: 60, y: 50 },
+  ),
+  true,
+  "移动端双击应允许合理的点击间隔和落点偏差",
+);
+assert.equal(
+  isPreviewDoubleTap(
+    { time: 1000, x: 20, y: 30 },
+    { time: 1430, x: 20, y: 30 },
+  ),
+  false,
+  "超过双击时间窗口的两次点击应保持独立",
+);
+assert.equal(
+  isPreviewDoubleTap(
+    { time: 1000, x: 20, y: 30 },
+    { time: 1200, x: 80, y: 30 },
+  ),
+  false,
+  "距离过远的两次点击不应触发缩放",
 );
 
 assert.equal(pointerDistance({ x: 0, y: 0 }, { x: 3, y: 4 }), 5);
