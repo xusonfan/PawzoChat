@@ -15,11 +15,23 @@ import { toast } from "./ui.js";
 import { openChoicePicker } from "./choice_picker.js";
 
 const RADAR_CACHE_KEY = "pawzo_radar_recommendations_v1";
+const RADAR_PERSONA_TYPES = [
+  "偏真人角色",
+  "偏动漫角色",
+  "游戏角色",
+  "影视剧角色",
+  "小说角色",
+  "虚拟偶像",
+  "历史幻想角色",
+  "非人类角色",
+];
 
 const _radar = {
   providers: [],
   selectedProvider: "",
   selectedModel: "",
+  personaType: "",
+  personaTypeInitialized: false,
   recommendations: [],
   requestVersion: 0,
 };
@@ -42,6 +54,7 @@ function _readRecommendationCache() {
     return {
       provider: typeof cached.provider === "string" ? cached.provider : "",
       model: typeof cached.model === "string" ? cached.model : "",
+      personaType: typeof cached.personaType === "string" ? cached.personaType : "",
       recommendations,
     };
   } catch (error) {
@@ -49,11 +62,12 @@ function _readRecommendationCache() {
   }
 }
 
-function _writeRecommendationCache(provider, model, recommendations) {
+function _writeRecommendationCache(provider, model, personaType, recommendations) {
   try {
     localStorage.setItem(RADAR_CACHE_KEY, JSON.stringify({
       provider,
       model,
+      personaType,
       recommendations,
     }));
   } catch (error) {
@@ -116,6 +130,31 @@ function radarOpenModelPicker() {
   });
 }
 
+function radarSetPersonaType(value) {
+  _radar.personaType = typeof value === "string" ? value.slice(0, 50) : "";
+  _radar.personaTypeInitialized = true;
+}
+
+function radarOpenPersonaTypePicker() {
+  openChoicePicker({
+    title: "选择角色类型",
+    selectedValue: _radar.personaType,
+    options: [
+      {
+        value: "",
+        label: "不限类型",
+        description: "自由探索不同类型的角色",
+      },
+      ...RADAR_PERSONA_TYPES.map(type => ({ value: type, label: type })),
+    ],
+    onSelect: personaType => {
+      radarSetPersonaType(personaType);
+      const input = $("radar-persona-type");
+      if (input) input.value = personaType;
+    },
+  });
+}
+
 function _renderRecommendations() {
   const target = $("radar-results");
   if (!target) return;
@@ -139,6 +178,8 @@ function _renderRecommendations() {
 async function radarRefresh() {
   const provider = _radar.selectedProvider;
   const model = _radar.selectedModel;
+  const personaType = ($("radar-persona-type")?.value || _radar.personaType).trim();
+  radarSetPersonaType(personaType);
   if (!provider || !model) {
     toast("请先选择服务商与模型", "error");
     return;
@@ -154,7 +195,11 @@ async function radarRefresh() {
   if (results) results.innerHTML = `<div class="radar-loading"><div class="spinner"></div><span>AI 正在搜索新的角色灵感…</span></div>`;
 
   try {
-    const response = await api.post("/api/persona-writer/recommendations", { provider, model });
+    const response = await api.post("/api/persona-writer/recommendations", {
+      provider,
+      model,
+      persona_type: personaType,
+    });
     if (version !== _radar.requestVersion) return;
     if (response.status < 200 || response.status >= 300 || !response.data?.ok) {
       _radar.recommendations = previousRecommendations;
@@ -170,7 +215,7 @@ async function radarRefresh() {
       return;
     }
     _radar.recommendations = recommendations;
-    _writeRecommendationCache(provider, model, recommendations);
+    _writeRecommendationCache(provider, model, personaType, recommendations);
     _renderRecommendations();
   } catch (error) {
     if (version !== _radar.requestVersion) return;
@@ -214,6 +259,10 @@ async function renderRadar() {
   }
 
   const cached = _readRecommendationCache();
+  if (!_radar.personaTypeInitialized) {
+    _radar.personaType = cached?.personaType || "";
+    _radar.personaTypeInitialized = true;
+  }
   const lastProvider = cached?.provider || localStorage.getItem("pw_last_provider") || "";
   const lastModel = cached?.model || localStorage.getItem("pw_last_model") || "";
   const selectedProvider = _radar.providers.some(provider => provider.name === lastProvider)
@@ -250,6 +299,23 @@ async function renderRadar() {
           <span class="row-arrow" aria-hidden="true">›</span>
         </button>
       </div>
+      <div class="form-group radar-type-group">
+        <div class="form-row radar-type-row">
+          <label for="radar-persona-type">角色类型 <span>可选</span></label>
+          <div class="radar-type-control">
+            <input id="radar-persona-type" maxlength="50"
+              value="${esc(_radar.personaType)}" placeholder="自由输入类型"
+              autocomplete="off" spellcheck="false"
+              oninput="PawzoChat.radarSetPersonaType(this.value)">
+            <button type="button" class="radar-type-preset-btn"
+              aria-label="选择预设角色类型"
+              onclick="PawzoChat.radarOpenPersonaTypePicker()">
+              <span>预设</span><span class="row-arrow" aria-hidden="true">›</span>
+            </button>
+          </div>
+        </div>
+        <div class="radar-type-hint">可以自由输入，也可以从统一预设列表中选择；留空则不限制类型</div>
+      </div>
     </div>
     <button class="btn-primary" id="radar-refresh-btn" onclick="PawzoChat.radarRefresh()">${cached ? "换一批" : "开始探索"}</button>
     <div class="radar-section-title"><span>本次发现</span><small>选择一个方向继续完善</small></div>
@@ -268,6 +334,8 @@ registerPageRenderer("radar", renderRadar);
 export {
   radarOpenProviderPicker,
   radarOpenModelPicker,
+  radarOpenPersonaTypePicker,
+  radarSetPersonaType,
   radarRefresh,
   radarUseRecommendation,
 };

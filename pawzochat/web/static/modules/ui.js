@@ -19,6 +19,9 @@ import { state, $ } from "./state.js";
 
 let toastTimer = null;
 let overlayCloseTimer = null;
+let overlayHistoryToken = "";
+let overlayHistorySequence = 0;
+const OVERLAY_HISTORY_KEY = "pawzoOverlay";
 
 export function toast(msg, type = "info") {
   const el = $("toast");
@@ -51,19 +54,39 @@ export function closeConfirm(result) {
 
 let _onOverlayClose = null;
 
+function _pushOverlayHistory() {
+  if (overlayHistoryToken
+    && history.state?.[OVERLAY_HISTORY_KEY]?.token === overlayHistoryToken) return;
+
+  const token = `${Date.now()}-${++overlayHistorySequence}`;
+  try {
+    history.pushState({
+      ...(history.state || {}),
+      [OVERLAY_HISTORY_KEY]: { token },
+    }, "", location.href);
+    overlayHistoryToken = token;
+  } catch (_) {
+    overlayHistoryToken = "";
+  }
+}
+
 export function showSheet(html, onClose) {
   _onOverlayClose = onClose || null;
   clearTimeout(overlayCloseTimer);
   $("sheet-content").innerHTML = html;
   $("overlay").classList.remove("hide");
   $("action-sheet").classList.remove("hide");
+  _pushOverlayHistory();
   requestAnimationFrame(() => {
     $("overlay").classList.add("show");
     $("action-sheet").classList.add("show");
   });
 }
 
-export function closeOverlay() {
+export function closeOverlay({ fromHistory = false } = {}) {
+  const ownsHistoryEntry = !!overlayHistoryToken
+    && history.state?.[OVERLAY_HISTORY_KEY]?.token === overlayHistoryToken;
+  overlayHistoryToken = "";
   $("overlay").classList.remove("show");
   $("action-sheet").classList.remove("show");
   clearTimeout(overlayCloseTimer);
@@ -74,7 +97,15 @@ export function closeOverlay() {
   const cb = _onOverlayClose;
   _onOverlayClose = null;
   if (cb) cb();
+  if (!fromHistory && ownsHistoryEntry) history.back();
 }
+
+globalThis.window?.addEventListener?.("popstate", event => {
+  if (!overlayHistoryToken) return;
+  const currentToken = event.state?.[OVERLAY_HISTORY_KEY]?.token;
+  if (currentToken === overlayHistoryToken) return;
+  closeOverlay({ fromHistory: true });
+});
 
 let loadingTimer = null;
 

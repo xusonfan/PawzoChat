@@ -214,8 +214,8 @@ import {
 } from "./modules/image_gallery.js";
 
 import {
-  radarOpenProviderPicker, radarOpenModelPicker,
-  radarRefresh, radarUseRecommendation,
+  radarOpenProviderPicker, radarOpenModelPicker, radarOpenPersonaTypePicker,
+  radarSetPersonaType, radarRefresh, radarUseRecommendation,
 } from "./modules/radar.js";
 
 import {
@@ -489,8 +489,8 @@ window.PawzoChat = {
   imageGalleryGenerate, imageGalleryOpen, imageGalleryReusePrompt,
   imageGalleryDelete, imageGalleryEnterSelection, imageGalleryExitSelection,
   imageGalleryToggleAll, imageGalleryDeleteSelected,
-  radarOpenProviderPicker, radarOpenModelPicker,
-  radarRefresh, radarUseRecommendation,
+  radarOpenProviderPicker, radarOpenModelPicker, radarOpenPersonaTypePicker,
+  radarSetPersonaType, radarRefresh, radarUseRecommendation,
   stickerMakerOpenProviderPicker, stickerMakerOpenModelPicker,
   stickerMakerPickReference, stickerMakerReferenceSelected,
   stickerMakerGenerate, stickerMakerSave,
