@@ -67,7 +67,25 @@ const navigationSource = await readFile(
   join(__dirname, "../pawzochat/web/static/modules/navigation.js"),
   "utf8",
 );
+const contactsSource = await readFile(
+  join(__dirname, "../pawzochat/web/static/modules/contacts.js"),
+  "utf8",
+);
+const personaWriterSource = await readFile(
+  join(__dirname, "../pawzochat/web/static/modules/persona_writer.js"),
+  "utf8",
+);
 assert.match(navigationSource, /topBarMomentsCoverOverlay:[\s\S]*?topBarCoverHidden:/);
+assert.match(
+  personaWriterSource,
+  /pushPage\("personaEdit", \{[\s\S]*?personaId: r\.data\.id,[\s\S]*?openDetailAfterSave: true/,
+  "人设编写助手创建角色后应声明保存完成后打开角色名片",
+);
+assert.match(
+  contactsSource,
+  /if \(openDetailAfterSave\) \{[\s\S]*?switchTab\("contacts"\);[\s\S]*?pushPage\("personaDetail", \{ personaId: savedPersonaId \}\)/,
+  "角色设置保存完成后应清理旧页面栈并打开新角色名片",
+);
 assert.match(
   navigationSource,
   /const steps = Math\.max\(0, _historyIndex - targetIndex\)/,

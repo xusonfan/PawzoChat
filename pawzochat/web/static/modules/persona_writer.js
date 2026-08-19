@@ -246,7 +246,10 @@ async function pwCreatePersona() {
         failedCount ? `角色已创建，但有 ${failedCount} 张图片保存失败` : "角色创建成功",
         failedCount ? "error" : "success",
       );
-      pushPage("personaEdit", { personaId: r.data.id });
+      pushPage("personaEdit", {
+        personaId: r.data.id,
+        openDetailAfterSave: true,
+      });
     } else {
       toast((r.data && r.data.error) || "创建失败", "error");
     }

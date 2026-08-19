@@ -22,7 +22,7 @@ import { prepareNotificationIcons } from "./notification_feedback.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showLoading, hideLoading, showSheet, closeOverlay } from "./ui.js";
 import {
-  setTopBar, pushPage, goBack, navigateToPage,
+  setTopBar, pushPage, goBack, navigateToPage, switchTab,
   registerTabRenderer, registerPageRenderer,
   isDesktop, setSidebarBar, refreshSidebar,
 } from "./navigation.js";
@@ -582,11 +582,12 @@ export async function deletePersona(personaId) {
 
 /* ---- Persona Edit ---- */
 
-async function renderPersonaEdit(data) {
+async function renderPersonaEdit(data = {}) {
   _pendingAvatarBlob = null;
   const isNew = data.isNew;
+  const openDetailAfterSave = data.openDetailAfterSave === true;
   setTopBar(isNew ? "新建角色" : "编辑角色", true,
-    `<button class="btn-text" onclick="PawzoChat.savePersona(${isNew})" style="font-size:15px;font-weight:500">保存</button>`
+    `<button class="btn-text" onclick="PawzoChat.savePersona(${isNew},${openDetailAfterSave})" style="font-size:15px;font-weight:500">保存</button>`
   );
 
   let providers = [];
@@ -1182,7 +1183,7 @@ export function switchPersonaEditTab(name) {
   }
 }
 
-export async function savePersona(isNew) {
+export async function savePersona(isNew, openDetailAfterSave = false) {
   const name = $("pe-name").value.trim();
   if (!name) { toast("角色名称不能为空", "error"); return; }
   if (name.length > 100) { toast("角色名称过长（最多 100 个字符）", "error"); return; }
@@ -1288,7 +1289,12 @@ export async function savePersona(isNew) {
       return;
     }
     toast("已保存", "success");
-    goBack();
+    if (openDetailAfterSave) {
+      switchTab("contacts");
+      pushPage("personaDetail", { personaId: savedPersonaId });
+    } else {
+      goBack();
+    }
     refreshSidebar();
   } catch (e) { toast("保存失败", "error"); }
   finally { hideLoading(); }
