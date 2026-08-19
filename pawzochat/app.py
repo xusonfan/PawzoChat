@@ -117,6 +117,13 @@ class App:
         logger.info("  PawzoChat 启动中…")
         logger.info("=" * 50)
 
+        recovered_image_tasks = self.conversation_store.recover_interrupted_image_tasks()
+        if recovered_image_tasks:
+            logger.warning(
+                "已将 %d 个因服务重启中断的图片任务标记为失败",
+                recovered_image_tasks,
+            )
+
         try:
             self.web_push_service = WebPushService()
         except Exception:

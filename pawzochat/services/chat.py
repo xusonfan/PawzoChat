@@ -231,7 +231,7 @@ class ChatService:
                 "path": image.get("path", ""),
                 "mime": image.get("mime", "image/png"),
             }
-            for key in ("status", "task_id", "error"):
+            for key in ("status", "task_id", "error", "retry_arguments"):
                 if image.get(key) is not None:
                     image_block[key] = image[key]
             assistant_messages.append({
@@ -428,10 +428,8 @@ class ChatService:
         Loop terminates when the response's ``finish_reason`` is not
         ``tool_use`` (or after ``persona.tool_policy.max_iterations`` rounds).
         In web-chat async image mode, a successfully queued ``generate_image``
-        call returns immediately to the model as a synthetic success result.
-        Text emitted before that tool call is preserved and later joined with
-        the model's continuation, while the image placeholder completes
-        independently.
+        call is terminal for the dialogue turn: the model's short lead-in is
+        kept before the placeholder, and no post-image continuation is requested.
         All call-scoped state (pending_images/files, generated_images) is
         passed in as args so concurrent rounds do not stomp on each other.
         """
@@ -451,8 +449,6 @@ class ChatService:
         timeout = tool_policy.get("timeout_seconds", 30)
 
         response: LLMResponse | None = None
-        preserved_reply_parts: list[str] = []
-        preserve_tool_text = False
         loop_completed = False
         for _ in range(max_iter):
             try:
@@ -538,15 +534,12 @@ class ChatService:
                 })
 
             if queued_async_image:
-                preserve_tool_text = True
-            if preserve_tool_text and response.text and response.text.strip():
-                # Tool-use responses may contain natural dialogue written
-                # before each call. Once async image delivery starts, preserve
-                # every such segment so later tool calls cannot erase it.
-                lead_in = response.text.strip()
-                preserved_reply_parts.append(lead_in)
-                if reply_events is not None and not recorded_lead_event:
-                    reply_events.append({"type": "text", "text": lead_in})
+                # Image replies intentionally use one compact lead-in followed
+                # by the placeholder. A follow-up model call tends to create a
+                # second cluster of dialogue after the image and feels unlike
+                # natural messaging.
+                loop_completed = True
+                break
 
         if response is not None and not loop_completed:
             # Hit when the LLM keeps asking for tools for max_iter rounds and
@@ -563,14 +556,6 @@ class ChatService:
                 f"工具调用次数已达上限（{max_iter} 次）仍未完成，"
                 f"请检查 MCP 服务是否阻塞，或 prompt 是否强制要求模型反复调用工具"
             )
-
-        if response is not None and preserved_reply_parts:
-            terminal_text = (response.text or "").strip()
-            if terminal_text:
-                preserved_reply_parts.append(terminal_text)
-                if reply_events is not None:
-                    reply_events.append({"type": "text", "text": terminal_text})
-            response.text = "\\".join(preserved_reply_parts)
 
         return response
 
@@ -1059,12 +1044,13 @@ class ChatService:
                 )
 
             lines.extend([
-                "- **调用顺序（必须遵守）**：先输出一句符合当前人设和对话语境的简短自然台词，"
-                "再在同一次回复中调用 `generate_image`；禁止只调用工具而不输出台词。",
-                "- 工具调用前的台词应像真人准备发照片时会说的话，只承接当前聊天内容；"
+                "- **发送节奏（必须遵守）**：严格只输出一句符合当前人设和语境的简短自然台词，"
+                "紧接着在同一次回复中调用 `generate_image`；禁止只调用工具，也禁止在台词中用"
+                "反斜线或换行拆成多句。",
+                "- 这唯一一句台词应像真人准备发照片时会说的话，只承接当前聊天内容；"
                 "不要提及『生成图片』『工具』『任务』『提示词』等系统概念。",
-                "- 工具返回成功后，仅继续尚未表达的剩余内容，不要重复调用前的台词；"
-                "如果没有剩余内容，可以直接结束。",
+                "- 调用 `generate_image` 后本轮立即结束，不再补充任何台词；"
+                "最终消息节奏必须是『一句短台词 → 图片』。",
                 "- 仅在用户明确请求图片或当前场景确实适合用图片回应时调用，不要滥用。",
                 "- 同一对话多次生图时，场景/动作要自然过渡，不要前后矛盾。",
                 "- 直接描述画面，不要写元指令（如『生成一张』『画一幅』）。",

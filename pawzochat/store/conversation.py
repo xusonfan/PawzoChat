@@ -472,6 +472,84 @@ class ConversationStore:
                     return json.loads(json.dumps(message, ensure_ascii=False))
             return None
 
+    def recover_interrupted_image_tasks(self) -> int:
+        """Mark image tasks left pending by a previous process as failed."""
+        recovered = 0
+        for persona_id in list(self._cache):
+            lock = self._get_lock(persona_id)
+            with lock:
+                data = self._read_file(persona_id)
+                if data is None:
+                    continue
+                changed = False
+                for message in data.get("messages", []):
+                    content = message.get("content", [])
+                    if not isinstance(content, list):
+                        continue
+                    for index, block in enumerate(content):
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") != "image" or block.get("status") != "pending":
+                            continue
+                        replacement = {
+                            "type": "image",
+                            "status": "failed",
+                            "task_id": block.get("task_id", ""),
+                            "error": "服务重启，图片生成任务已中断",
+                        }
+                        retry_arguments = block.get("retry_arguments")
+                        if isinstance(retry_arguments, dict):
+                            replacement["retry_arguments"] = dict(retry_arguments)
+                        content[index] = replacement
+                        recovered += 1
+                        changed = True
+                if changed:
+                    self._write_file(persona_id, data)
+        return recovered
+
+    def claim_failed_image_retry(
+        self,
+        persona_id: str,
+        task_id: str,
+    ) -> tuple[str, dict | None, dict | None]:
+        """Atomically move a failed image task back to pending.
+
+        Returns ``(status, retry_arguments, updated_message)``. Only ``failed``
+        placeholders can be claimed, which prevents duplicate paid requests
+        when the user taps retry more than once.
+        """
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return "not_found", None, None
+            for message in data.get("messages", []):
+                content = message.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for index, block in enumerate(content):
+                    if not isinstance(block, dict) or block.get("task_id") != task_id:
+                        continue
+                    if block.get("type") != "image":
+                        return "invalid", None, None
+                    if block.get("status") == "pending":
+                        return "pending", None, None
+                    if block.get("status") != "failed":
+                        return "not_retryable", None, None
+                    retry_arguments = block.get("retry_arguments")
+                    if not isinstance(retry_arguments, dict):
+                        return "not_retryable", None, None
+                    content[index] = {
+                        "type": "image",
+                        "status": "pending",
+                        "task_id": task_id,
+                        "retry_arguments": dict(retry_arguments),
+                    }
+                    self._write_file(persona_id, data)
+                    updated = json.loads(json.dumps(message, ensure_ascii=False))
+                    return "ok", dict(retry_arguments), updated
+            return "not_found", None, None
+
     def get_messages(
         self,
         persona_id: str,

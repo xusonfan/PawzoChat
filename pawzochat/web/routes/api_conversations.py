@@ -19,17 +19,20 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
 from pawzochat.paths import CHATS_DIR, EMOJI_DIR
+from pawzochat.web.message_serialization import messages_for_api
 from pawzochat.web.routes import get_app
 from pawzochat.web.sse import broadcast
 
 api_conversations_bp = Blueprint("api_conversations", __name__)
 logger = logging.getLogger(__name__)
+_IMAGE_TASK_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _images_dir(persona_id: str) -> Path:
@@ -207,7 +210,7 @@ def get_messages(persona_id: str):
         return jsonify({
             "persona_id": persona_id,
             "date": date_filter,
-            "messages": messages,
+            "messages": messages_for_api(messages),
         })
 
     rounds = request.args.get("rounds", 10, type=int)
@@ -228,9 +231,89 @@ def get_messages(persona_id: str):
         "persona_id": persona_id,
         # Key kept as wechat_link for frontend back-compat; carries the channel.
         "wechat_link": link_info,
-        "messages": messages,
+        "messages": messages_for_api(messages),
         "has_more": has_more,
     })
+
+
+@api_conversations_bp.route(
+    "/<persona_id>/images/<task_id>/retry",
+    methods=["POST"],
+)
+def retry_generated_image(persona_id: str, task_id: str):
+    app = get_app()
+    if not _IMAGE_TASK_ID_RE.fullmatch(task_id):
+        return jsonify({"error": "Invalid image task ID"}), 400
+
+    personas = app.config.load_personas()
+    persona = personas.get(persona_id)
+    if persona is None or app.conversation_store.get_conversation(persona_id) is None:
+        return jsonify({"error": "Conversation not found"}), 404
+    if app.capability_registry is None:
+        return jsonify({"error": "Image generation is unavailable"}), 503
+
+    status, arguments, pending_message = app.conversation_store.claim_failed_image_retry(
+        persona_id, task_id,
+    )
+    if status == "not_found":
+        return jsonify({"error": "Image task not found"}), 404
+    if status == "pending":
+        return jsonify({"error": "Image task is already loading"}), 409
+    if status != "ok" or arguments is None or pending_message is None:
+        return jsonify({"error": "Image task cannot be retried"}), 409
+
+    broadcast(
+        "assistant_message_updated",
+        persona_id=persona_id,
+        message=pending_message,
+    )
+
+    def fail_retry(error: str):
+        failed_message = app.conversation_store.replace_pending_image(
+            persona_id,
+            task_id,
+            {
+                "type": "image",
+                "status": "failed",
+                "task_id": task_id,
+                "error": error,
+                "retry_arguments": arguments,
+            },
+        )
+        if failed_message is not None:
+            broadcast(
+                "assistant_message_updated",
+                persona_id=persona_id,
+                message=failed_message,
+            )
+        return jsonify({"error": error}), 503
+
+    generated_images: list[dict] = []
+    try:
+        result = app.capability_registry.execute(
+            "generate_image",
+            arguments,
+            context={
+                "persona": persona,
+                "persona_id": persona_id,
+                "generated_images": generated_images,
+                "async_image_delivery": True,
+                "image_task_id": task_id,
+            },
+        )
+    except Exception:
+        logger.exception("Failed to restart image task %s for %s", task_id, persona_id)
+        return fail_retry("图片重试失败")
+
+    started = any(
+        image.get("status") == "pending" and image.get("task_id") == task_id
+        for image in generated_images
+    )
+    if not started:
+        error = next((block.text for block in result if block.text), "图片重试失败")
+        return fail_retry(error)
+
+    return jsonify({"ok": True, "task_id": task_id}), 202
 
 
 @api_conversations_bp.route("/<persona_id>/messages", methods=["POST"])

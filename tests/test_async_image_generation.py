@@ -10,6 +10,7 @@ from pawzochat.llm.base import ContentBlock, LLMResponse, ToolCall
 from pawzochat.mcp.builtin import image_generation
 from pawzochat.services.chat import ChatService
 from pawzochat.store.conversation import ConversationStore
+from pawzochat.web.message_serialization import messages_for_api
 
 
 class _Provider:
@@ -69,28 +70,23 @@ class AsyncImageGenerationTests(unittest.TestCase):
             active_tool_names={"generate_image"},
         )
 
-        self.assertIn("先输出一句", guidance)
-        self.assertIn("禁止只调用工具而不输出台词", guidance)
-        self.assertIn("不要重复调用前的台词", guidance)
+        self.assertIn("严格只输出一句", guidance)
+        self.assertIn("禁止只调用工具", guidance)
+        self.assertIn("反斜线或换行拆成多句", guidance)
+        self.assertIn("调用 `generate_image` 后本轮立即结束", guidance)
         self.assertIn("不要提及『生成图片』", guidance)
 
-    def test_tool_loop_preserves_pre_tool_text_and_appends_continuation(self):
+    def test_tool_loop_stops_after_lead_in_and_async_image(self):
         provider = Mock()
-        provider.chat.side_effect = [
-            LLMResponse(
-                text="等我一下，我拍给你看。",
-                finish_reason="tool_use",
-                tool_calls=[ToolCall(
-                    id="call-1",
-                    name="generate_image",
-                    arguments={"prompt": "sunny room"},
-                )],
-            ),
-            LLMResponse(
-                text="今天窗边的光线特别好。",
-                finish_reason="stop",
-            ),
-        ]
+        provider.chat.return_value = LLMResponse(
+            text="等我一下，我拍给你看。",
+            finish_reason="tool_use",
+            tool_calls=[ToolCall(
+                id="call-1",
+                name="generate_image",
+                arguments={"prompt": "sunny room"},
+            )],
+        )
         service = ChatService(None, None, _LLMManager(provider))
 
         def queue_image(_tool_call, **kwargs):
@@ -125,18 +121,14 @@ class AsyncImageGenerationTests(unittest.TestCase):
             reply_events=reply_events,
         )
 
-        self.assertEqual(
-            response.text,
-            "等我一下，我拍给你看。\\今天窗边的光线特别好。",
-        )
-        self.assertEqual(provider.chat.call_count, 2)
+        self.assertEqual(response.text, "等我一下，我拍给你看。")
+        self.assertEqual(provider.chat.call_count, 1)
         self.assertEqual(generated[0]["status"], "pending")
         self.assertEqual(
             [event["type"] for event in reply_events],
-            ["text", "image", "text"],
+            ["text", "image"],
         )
         self.assertEqual(reply_events[0]["text"], "等我一下，我拍给你看。")
-        self.assertEqual(reply_events[2]["text"], "今天窗边的光线特别好。")
 
     def test_async_handler_returns_placeholder_before_background_result(self):
         store = _Store()
@@ -162,13 +154,14 @@ class AsyncImageGenerationTests(unittest.TestCase):
                     "persona_id": "cat",
                     "generated_images": generated,
                     "async_image_delivery": True,
+                    "image_task_id": "0123456789abcdef",
                 },
             )
             self.assertEqual(generated[0]["status"], "pending")
-            self.assertTrue(generated[0]["task_id"])
-            self.assertIn("后台", result[0].text)
-            self.assertIn("剩余内容", result[0].text)
-            self.assertIn("不要重复", result[0].text)
+            self.assertEqual(generated[0]["task_id"], "0123456789abcdef")
+            self.assertEqual(generated[0]["retry_arguments"], {"prompt": "a cat"})
+            self.assertIn("后台加载队列", result[0].text)
+            self.assertIn("无需继续回复", result[0].text)
             self.assertTrue(store.updated.wait(1))
             self.assertEqual(store.replacement["type"], "image")
             self.assertTrue(Path(store.replacement["path"]).is_file())
@@ -199,6 +192,109 @@ class AsyncImageGenerationTests(unittest.TestCase):
             self.assertEqual(updated["_seq"], original["_seq"])
             self.assertEqual(updated["timestamp"], original["timestamp"])
             self.assertEqual(updated["content"][0]["path"], "/tmp/cat.png")
+
+    def test_store_claims_failed_image_retry_only_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ConversationStore(Path(temporary))
+            store.ensure_conversation("cat")
+            original = store.add_message(
+                "cat",
+                "assistant",
+                [{
+                    "type": "image",
+                    "status": "failed",
+                    "task_id": "0123456789abcdef",
+                    "error": "provider unavailable",
+                    "retry_arguments": {"prompt": "a cat"},
+                }],
+                "llm",
+            )
+
+            status, arguments, updated = store.claim_failed_image_retry(
+                "cat", "0123456789abcdef",
+            )
+            duplicate_status, _, _ = store.claim_failed_image_retry(
+                "cat", "0123456789abcdef",
+            )
+
+            self.assertEqual(status, "ok")
+            self.assertEqual(arguments, {"prompt": "a cat"})
+            self.assertEqual(updated["_seq"], original["_seq"])
+            self.assertEqual(updated["content"][0], {
+                "type": "image",
+                "status": "pending",
+                "task_id": "0123456789abcdef",
+                "retry_arguments": {"prompt": "a cat"},
+            })
+            self.assertEqual(duplicate_status, "pending")
+
+    def test_store_recovers_pending_images_after_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ConversationStore(Path(temporary))
+            store.ensure_conversation("cat")
+            store.add_message(
+                "cat",
+                "assistant",
+                [
+                    {
+                        "type": "image",
+                        "status": "pending",
+                        "task_id": "0123456789abcdef",
+                        "retry_arguments": {"prompt": "a cat"},
+                    },
+                    {
+                        "type": "image",
+                        "status": "pending",
+                        "task_id": "fedcba9876543210",
+                    },
+                ],
+                "llm",
+            )
+
+            recovered = store.recover_interrupted_image_tasks()
+            messages, _ = store.get_messages("cat")
+            replayable, legacy = messages[-1]["content"]
+
+            self.assertEqual(recovered, 2)
+            self.assertEqual(replayable["status"], "failed")
+            self.assertEqual(replayable["retry_arguments"], {"prompt": "a cat"})
+            self.assertEqual(legacy["status"], "failed")
+            self.assertNotIn("retry_arguments", legacy)
+            self.assertEqual(store.recover_interrupted_image_tasks(), 0)
+
+    def test_api_marks_only_replayable_failures_for_retry(self):
+        messages = [{
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "image",
+                    "status": "failed",
+                    "task_id": "0123456789abcdef",
+                    "retry_arguments": {"prompt": "a cat"},
+                },
+                {
+                    "type": "image",
+                    "status": "failed",
+                    "task_id": "fedcba9876543210",
+                },
+                {
+                    "type": "image",
+                    "status": "pending",
+                    "task_id": "0011223344556677",
+                    "retry_arguments": {"prompt": "hidden"},
+                },
+            ],
+        }]
+
+        public_messages = messages_for_api(messages)
+        replayable, legacy, pending = public_messages[0]["content"]
+
+        self.assertTrue(replayable["retryable"])
+        self.assertFalse(legacy["retryable"])
+        self.assertNotIn("retry_arguments", replayable)
+        self.assertNotIn("retry_arguments", pending)
+        self.assertNotIn("retryable", pending)
+        self.assertIn("retry_arguments", messages[0]["content"][0])
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ import {
   toggleEmojiPicker, switchEmojiTab, insertEmoji, sendSticker,
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
-  playVoiceMessage, toggleVoiceTranscript,
+  playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage,
 } from "./modules/chat.js";
 
 import {
@@ -372,7 +372,7 @@ window.PawzoChat = {
   toggleEmojiPicker, switchEmojiTab, insertEmoji, sendSticker,
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
-  playVoiceMessage, toggleVoiceTranscript,
+  playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage,
   filterPersonas, contactsIndexStart, contactsIndexMove, contactsIndexEnd, jumpToContactInitial,
   chatWithPersona, deletePersona,
   savePersona, switchPersonaEditTab, resetSystemInstructions, onPersonaProviderChange,

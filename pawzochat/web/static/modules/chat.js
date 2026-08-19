@@ -465,9 +465,14 @@ function renderContentBlocks(content, renderLinkedImages = false) {
         continue;
       }
       if (b.status === "failed") {
+        const retryButton = b.retryable === true && /^[0-9a-f]{16}$/.test(b.task_id || "")
+          ? `<button type="button" class="msg-image-retry" data-task-id="${escAttr(b.task_id)}"
+              onclick="event.stopPropagation();PawzoChat.retryGeneratedImage(this)">重试</button>`
+          : "";
         parts += `<div class="msg-image-placeholder failed" title="${escAttr(b.error || "图片加载失败")}">
           ${iconHtml("ri-image-off-line")}
           <span>图片加载失败</span>
+          ${retryButton}
         </div>`;
         continue;
       }
@@ -532,6 +537,33 @@ function renderContentBlocks(content, renderLinkedImages = false) {
     return `<div class="msg-bubble">${esc(text)}</div>`;
   }
   return parts;
+}
+
+export async function retryGeneratedImage(button) {
+  const taskId = button?.dataset?.taskId || "";
+  const personaId = chatPersonaId;
+  const placeholder = button?.closest?.(".msg-image-placeholder");
+  if (!personaId || !placeholder || !/^[0-9a-f]{16}$/.test(taskId)) return;
+
+  placeholder.classList.remove("failed");
+  placeholder.removeAttribute("title");
+  placeholder.innerHTML = `
+    <span class="msg-image-placeholder-spinner" aria-hidden="true"></span>
+    <span>图片加载中…</span>
+  `;
+  placeholder.setAttribute("role", "status");
+  placeholder.setAttribute("aria-live", "polite");
+
+  try {
+    const res = await api.post(
+      `/api/conversations/${encodeURIComponent(personaId)}/images/${taskId}/retry`,
+      {},
+    );
+    if (res.status >= 400) throw new Error(res.data?.error || "图片重试失败");
+  } catch (e) {
+    toast(e.message || "图片重试失败", "error");
+    if (chatPersonaId === personaId) await refreshChatMessages();
+  }
 }
 
 // ---- Voice bubble playback (singleton Audio; playing a new one auto-stops the previous) ----

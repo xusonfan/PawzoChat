@@ -58,8 +58,8 @@ logger = logging.getLogger(__name__)
 TOOL_NAME = "generate_image"
 
 TOOL_DESCRIPTION = (
-    "生成一张图片并直接作为消息发给用户。调用本工具前，必须先输出一句符合当前人设和语境的"
-    "简短自然台词；禁止用纯工具调用代替对话。"
+    "生成一张图片并直接作为消息发给用户。调用本工具前，必须严格只输出一句符合当前人设和语境的"
+    "简短自然台词，不能用反斜线或换行拆成多句；调用后立即结束本轮，不再补充台词。"
     "适用场景：用户邀请你拍照（如『拍个照看看你现在在干嘛』）、想看你所在的场景、"
     "想看你描述的物品/食物/景色，或当前情节确实需要以图回应。"
     "用户已在角色配置中预设了画面风格和角色形象，会自动拼接到 prompt 之前——"
@@ -193,7 +193,7 @@ def make_handler(app: App) -> Callable[[dict, dict], list[ContentBlock]]:
         # so they won't append a misleading "Negative prompt" notice.
         neg_prompt_arg = settings["negative_prompt"].strip() if settings["negative_enabled"] else ""
 
-        task_id = secrets.token_hex(8)
+        task_id = context.get("image_task_id") or secrets.token_hex(8)
 
         def replace_placeholder(replacement: dict) -> dict | None:
             # A fast provider can finish before the LLM's follow-up text and
@@ -265,6 +265,7 @@ def make_handler(app: App) -> Callable[[dict, dict], list[ContentBlock]]:
                 "task_id": task_id,
                 "mime": "image/png",
                 "prompt": full_prompt,
+                "retry_arguments": dict(arguments),
             }
             if isinstance(generated, list):
                 generated.append(placeholder)
@@ -284,6 +285,7 @@ def make_handler(app: App) -> Callable[[dict, dict], list[ContentBlock]]:
                         "status": "failed",
                         "task_id": task_id,
                         "error": error,
+                        "retry_arguments": dict(arguments),
                     }
                 stored = replace_placeholder(replacement)
                 if stored is None:
@@ -306,11 +308,7 @@ def make_handler(app: App) -> Callable[[dict, dict], list[ContentBlock]]:
             ).start()
             return [ContentBlock(
                 type="text",
-                text=(
-                    "图片生成任务已成功启动，图片会在后台完成后自动展示给用户。"
-                    "请继续输出被工具调用中断后的剩余内容，不要重复工具调用前已经输出的台词，"
-                    "也不要再次调用 generate_image。"
-                ),
+                text="图片已进入后台加载队列，本轮无需继续回复。",
             )]
 
         image, result_blocks = generate()
