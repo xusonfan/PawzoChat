@@ -54,14 +54,17 @@ class _PersonaQueue:
     """Per-persona accumulation buffer."""
 
     __slots__ = (
-        "last_message_time", "processing", "reply_ctx", "pending_messages",
+        "last_message_time", "processing", "reply_started", "reply_ctx",
+        "pending_messages", "generation",
     )
 
     def __init__(self):
         self.last_message_time: float = 0.0
         self.processing: bool = False
+        self.reply_started: bool = False
         self.reply_ctx: dict | None = None
         self.pending_messages: list[dict] = []
+        self.generation: int = 0
 
 
 def _sanitize_content_blocks(content_blocks: list[dict]) -> list[dict]:
@@ -191,6 +194,7 @@ class MessageQueue:
             if queue.processing or queue.pending_messages:
                 return False
             queue.processing = True
+            queue.reply_started = True
             return True
 
     def end_proactive(self, persona_id: str) -> None:
@@ -203,6 +207,7 @@ class MessageQueue:
             if queue is None:
                 return
             queue.processing = False
+            queue.reply_started = False
 
     def _wait_for_processing(self, timeout: float = 30.0) -> None:
         """Block until all active ``_process()`` threads finish."""
@@ -383,12 +388,27 @@ class MessageQueue:
             if persona_id not in self._queues:
                 self._queues[persona_id] = _PersonaQueue()
             queue = self._queues[persona_id]
+            supersedes_reply = queue.processing and not queue.reply_started
             queue.pending_messages.append(pending_message)
-            queue.last_message_time = time.time()
+            queue.last_message_time = 0.0 if supersedes_reply else time.time()
+            queue.generation += 1
             if reply_ctx:
                 queue.reply_ctx = dict(reply_ctx)
 
         return message
+
+    def _round_is_current(self, persona_id: str, generation: int) -> bool:
+        with self._lock:
+            queue = self._queues.get(persona_id)
+            return queue is not None and queue.generation == generation
+
+    def _begin_reply(self, persona_id: str, generation: int) -> bool:
+        with self._lock:
+            queue = self._queues.get(persona_id)
+            if queue is None or queue.generation != generation:
+                return False
+            queue.reply_started = True
+            return True
 
     def retry_reply(self, persona_id: str, message_seq: int) -> str:
         """Retry the unanswered latest user turn without storing it again."""
@@ -412,15 +432,22 @@ class MessageQueue:
             if queue.processing or queue.pending_messages:
                 return "busy"
             queue.processing = True
+            queue.reply_started = False
+            round_generation = queue.generation
 
         threading.Thread(
             target=self._retry_reply,
-            args=(persona_id, message_seq),
+            args=(persona_id, message_seq, round_generation),
             daemon=True,
         ).start()
         return "ok"
 
-    def _retry_reply(self, persona_id: str, message_seq: int) -> None:
+    def _retry_reply(
+        self,
+        persona_id: str,
+        message_seq: int,
+        round_generation: int,
+    ) -> None:
         try:
             conversation = self._app.conversation_store.get_conversation(persona_id)
             messages = conversation.get("messages", []) if conversation else []
@@ -461,6 +488,9 @@ class MessageQueue:
                     async_image_generation=True,
                 )
             except Exception as exc:
+                if not self._round_is_current(persona_id, round_generation):
+                    logger.info("重试回复已被新消息取代 persona=%s", persona_id)
+                    return
                 logger.exception("重试 LLM 调用失败 persona=%s", persona_id)
                 broadcast(
                     "operation_error",
@@ -469,6 +499,10 @@ class MessageQueue:
                     message=_public_error_message(exc),
                     retry_message_seq=message_seq,
                 )
+                return
+
+            if not self._round_is_current(persona_id, round_generation):
+                logger.info("重试回复已被新消息取代 persona=%s", persona_id)
                 return
 
             if self._app.emoji_service:
@@ -488,8 +522,14 @@ class MessageQueue:
                 persona_id,
                 compose_event.messages,
                 reply_ctx={"channel": "web"},
+                before_first_message=lambda: self._begin_reply(
+                    persona_id, round_generation,
+                ),
             )
         except Exception as exc:
+            if not self._round_is_current(persona_id, round_generation):
+                logger.info("重试回复已被新消息取代 persona=%s", persona_id)
+                return
             logger.exception("重试消息回复失败 persona=%s", persona_id)
             broadcast(
                 "operation_error",
@@ -503,6 +543,7 @@ class MessageQueue:
                 queue = self._queues.get(persona_id)
                 if queue:
                     queue.processing = False
+                    queue.reply_started = False
 
     def _checker_loop(self) -> None:
         wait_seconds = self._app.config.get(
@@ -521,6 +562,7 @@ class MessageQueue:
                         and now - queue.last_message_time >= wait_seconds
                     ):
                         queue.processing = True
+                        queue.reply_started = False
                         ready.append(persona_id)
 
             for persona_id in ready:
@@ -539,6 +581,7 @@ class MessageQueue:
                 pending = list(queue.pending_messages)
                 n_pending = len(pending)
                 reply_ctx = dict(queue.reply_ctx or {})
+                round_generation = queue.generation
                 queue.reply_ctx = None
 
             texts, images, files, has_voice = _extract_from_pending(pending)
@@ -591,6 +634,9 @@ class MessageQueue:
                     async_image_generation=reply_ctx.get("channel", "web") == "web",
                 )
             except Exception as exc:
+                if not self._round_is_current(persona_id, round_generation):
+                    logger.info("当前回复已被新消息取代 persona=%s", persona_id)
+                    return
                 logger.exception("LLM 调用失败 persona=%s", persona_id)
                 if reply_ctx.get("channel", "web") == "web":
                     broadcast(
@@ -600,6 +646,10 @@ class MessageQueue:
                         message=_public_error_message(exc),
                         retry_message_seq=(last_stored_message or {}).get("_seq"),
                     )
+                return
+
+            if not self._round_is_current(persona_id, round_generation):
+                logger.info("当前回复已被新消息取代 persona=%s", persona_id)
                 return
 
             if self._app.emoji_service:
@@ -619,11 +669,27 @@ class MessageQueue:
             )
             self._app.extension_manager.dispatch_reply_compose(compose_event)
 
+            reply_started = False
+
+            def begin_reply() -> bool:
+                nonlocal reply_started
+                if not self._begin_reply(persona_id, round_generation):
+                    return False
+                reply_started = True
+                return True
+
             delivered_messages = self._app.reply_dispatcher.deliver_messages(
                 persona_id,
                 compose_event.messages,
                 reply_ctx=reply_ctx,
+                before_first_message=begin_reply,
             )
+            if (
+                not reply_started
+                and not self._round_is_current(persona_id, round_generation)
+            ):
+                logger.info("当前回复已被新消息取代 persona=%s", persona_id)
+                return
             logger.info(
                 "处理完成 persona=%s, %d 条用户消息 → %d 条回复",
                 persona_id,
@@ -669,6 +735,7 @@ class MessageQueue:
                 queue = self._queues.get(persona_id)
                 if queue:
                     queue.processing = False
+                    queue.reply_started = False
 
     def _check_memory_bg(self, persona_id: str, cutoff_timestamp: str):
         try:

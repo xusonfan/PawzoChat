@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from pawzochat.core.extensions.hooks import ReplyPreSendEvent, ReplySentEvent
@@ -55,11 +56,14 @@ class ReplyDispatcher:
         persona_id: str,
         messages: list[dict],
         reply_ctx: dict | None = None,
+        before_first_message: Callable[[], bool] | None = None,
     ) -> list[dict]:
         delivered_messages: list[dict] = []
         channel = (reply_ctx or {}).get("channel", "web")
         account_id = (reply_ctx or {}).get("account_id", "")
         user_id = (reply_ctx or {}).get("user_id", "")
+        reply_started = False
+        superseded = False
 
         for index, draft in enumerate(messages):
             is_first = index == 0
@@ -91,6 +95,11 @@ class ReplyDispatcher:
                     persona_id,
                     message.get("content", []),
                 )
+            if not reply_started:
+                if before_first_message is not None and not before_first_message():
+                    superseded = True
+                    break
+                reply_started = True
             stored = self._app.conversation_store.add_message(
                 persona_id,
                 message.get("role", "assistant"),
@@ -156,7 +165,8 @@ class ReplyDispatcher:
                 ),
             )
 
-        broadcast("conversation_updated", persona_id=persona_id)
+        if not superseded:
+            broadcast("conversation_updated", persona_id=persona_id)
         return delivered_messages
 
     def _image_cache_worker(self) -> None:
