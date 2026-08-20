@@ -95,6 +95,27 @@ class OpenAIImageProviderTests(unittest.TestCase):
         )
 
     @patch("pawzochat.image.providers.openai_image.requests.post")
+    def test_retry_without_size_parameter_when_rejected(self, post):
+        post.side_effect = [
+            _Response(
+                ok=False,
+                status_code=400,
+                text='{"error":{"message":"Provider API error: Argument not supported: size"}}',
+            ),
+            self.success,
+        ]
+
+        result = self.provider.generate(
+            "draw a cat",
+            model="grok-imagine-image",
+        )
+
+        self.assertEqual(result.image_data, self.image_bytes)
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("size", post.call_args_list[0].kwargs["json"])
+        self.assertNotIn("size", post.call_args_list[1].kwargs["json"])
+
+    @patch("pawzochat.image.providers.openai_image.requests.post")
     def test_grok_reference_image_uses_edits_multipart(self, post):
         post.return_value = self.success
 
@@ -112,7 +133,7 @@ class OpenAIImageProviderTests(unittest.TestCase):
         self.assertEqual(len(post.call_args.kwargs["files"]), 1)
 
     @patch("pawzochat.image.providers.openai_image.requests.post")
-    def test_non_gpt_image_model_ignores_references(self, post):
+    def test_unverified_model_ignores_references_by_default(self, post):
         post.return_value = self.success
 
         self.provider.generate(
@@ -122,6 +143,24 @@ class OpenAIImageProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(post.call_args.args[0], "https://image.example/v1/images/generations")
+        self.assertNotIn("files", post.call_args.kwargs)
+
+    @patch("pawzochat.image.providers.openai_image.requests.post")
+    def test_explicit_disabled_capability_ignores_references(self, post):
+        post.return_value = self.success
+        provider = OpenAIImageProvider(
+            base_url="https://relay.example/v1",
+            api_key="test-key",
+            supports_reference_images=False,
+        )
+
+        provider.generate(
+            "draw a cat",
+            model="dall-e-3",
+            reference_images=[(b"reference", "image/png")],
+        )
+
+        self.assertEqual(post.call_args.args[0], "https://relay.example/v1/images/generations")
         self.assertNotIn("files", post.call_args.kwargs)
 
     @patch("pawzochat.image.providers.openai_image.requests.post")

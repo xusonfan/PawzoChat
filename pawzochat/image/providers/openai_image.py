@@ -61,7 +61,7 @@ _IMAGE_FILE_EXTENSIONS = {
 
 
 def openai_model_supports_reference_images(model: str) -> bool:
-    """Return whether a known OpenAI image model supports ``/images/edits``."""
+    """Return whether a verified OpenAI-compatible model supports image edits."""
     return (model or "").strip().lower() in OPENAI_REFERENCE_IMAGE_MODELS
 
 
@@ -73,6 +73,7 @@ def _reference_image_file(index: int, image_data: bytes, mime_type: str) -> tupl
 
 class OpenAIImageProvider(ImageProvider):
     provider_type = "openai_image"
+    supports_reference_images = True
 
     def __init__(self, base_url: str, api_key: str, **kwargs):
         self.base_url = base_url.rstrip("/")
@@ -185,36 +186,44 @@ class OpenAIImageProvider(ImageProvider):
         raise ImageGenerationError(self.provider_type, f"无图像数据: {first}")
 
     def _post_with_format_fallback(self, url, headers, body, *, files=None):
-        """POST once, retrying without ``response_format`` when rejected."""
-        resp = self._post(url, headers, body, files=files)
+        """POST once, progressively stripping unsupported fields on upstream 400/422 errors."""
+        current_body = dict(body)
+        resp = self._post(url, headers, dict(current_body), files=files)
+
+        for _ in range(2):
+            if resp.ok:
+                return resp
+
+            text_lower = (resp.text or "").lower()
+            if resp.status_code not in (400, 422):
+                break
+
+            dropped = False
+            if "response_format" in current_body and "response_format" in text_lower:
+                logger.info("上游拒绝 response_format 参数，去掉后重试")
+                current_body = {
+                    key: value
+                    for key, value in current_body.items()
+                    if key != "response_format"
+                }
+                dropped = True
+
+            if "size" in current_body and "size" in text_lower:
+                logger.info("上游拒绝 size 参数，去掉后重试")
+                current_body = {
+                    key: value
+                    for key, value in current_body.items()
+                    if key != "size"
+                }
+                dropped = True
+
+            if not dropped:
+                break
+
+            resp = self._post(url, headers, dict(current_body), files=files)
+
         if resp.ok:
             return resp
-
-        text_lower = (resp.text or "").lower()
-        if (
-            resp.status_code in (400, 422)
-            and "response_format" in body
-            and "response_format" in text_lower
-        ):
-            logger.info("上游拒绝 response_format，去掉后重试")
-            body_without_format = {
-                key: value
-                for key, value in body.items()
-                if key != "response_format"
-            }
-            retry = self._post(
-                url,
-                headers,
-                body_without_format,
-                files=files,
-            )
-            if retry.ok:
-                return retry
-            raise ImageGenerationError(
-                self.provider_type,
-                f"HTTP {retry.status_code}: {retry.text[:300]}",
-                status_code=retry.status_code,
-            )
 
         raise ImageGenerationError(
             self.provider_type,

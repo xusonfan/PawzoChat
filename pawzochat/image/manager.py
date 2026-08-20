@@ -175,6 +175,8 @@ def model_supports_reference_images(
 
     model_type = resolve_model_type(provider_cfg, model_entry)
     if model_type == "openai_image":
+        if provider_cfg.get("preset", "custom") == "custom":
+            return bool(model_entry.get("id"))
         return openai_model_supports_reference_images(model_entry.get("id", ""))
     return model_type_supports_reference_images(model_type)
 

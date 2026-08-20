@@ -23,6 +23,7 @@ const providers = availableStickerProviders([
     models: [
       { id: "plain", type: "openai_image", supports_reference_images: false },
       { id: "reference", type: "gemini_image", supports_reference_images: true },
+      { id: "default-open", type: "openai_image" },
     ],
   },
   {
@@ -33,10 +34,11 @@ const providers = availableStickerProviders([
 ]);
 
 assert.equal(providers.length, 1);
-assert.deepEqual(providers[0].models.map(model => model.id), ["plain", "reference"]);
+assert.deepEqual(providers[0].models.map(model => model.id), ["plain", "reference", "default-open"]);
 assert.equal(selectedStickerModel(providers, "mixed", "plain")?.type, "openai_image");
 assert.equal(modelSupportsReferenceImages(providers, "mixed", "plain"), false);
 assert.equal(modelSupportsReferenceImages(providers, "mixed", "reference"), true);
+assert.equal(modelSupportsReferenceImages(providers, "mixed", "default-open"), false);
 assert.equal(modelSupportsReferenceImages(providers, "mixed", "missing"), false);
 assert.equal(referenceImageFileError({ type: "image/png", size: 1024 }), "");
 assert.equal(

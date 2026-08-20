@@ -36,7 +36,9 @@ export function selectedStickerModel(providers, providerName, modelId) {
 }
 
 export function modelSupportsReferenceImages(providers, providerName, modelId) {
-  return !!selectedStickerModel(providers, providerName, modelId)?.supports_reference_images;
+  const model = selectedStickerModel(providers, providerName, modelId);
+  if (!model) return false;
+  return model.supports_reference_images === true;
 }
 
 export function referenceImageFileError(file, maxBytes = 10 * 1024 * 1024) {

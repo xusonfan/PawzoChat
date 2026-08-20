@@ -13,10 +13,10 @@ class ImageModelCapabilityTests(unittest.TestCase):
         self.assertTrue(model_type_supports_reference_images("gemini_image"))
         self.assertTrue(model_type_supports_reference_images("gemini_chat_image"))
         self.assertTrue(model_type_supports_reference_images("novelai_image"))
-        self.assertFalse(model_type_supports_reference_images("openai_image"))
+        self.assertTrue(model_type_supports_reference_images("openai_image"))
         self.assertFalse(model_type_supports_reference_images("unknown"))
 
-    def test_openai_reference_support_is_model_specific(self):
+    def test_openai_reference_support_is_open_by_default(self):
         provider_cfg = {"preset": "custom"}
         self.assertTrue(model_supports_reference_images(
             provider_cfg,
@@ -42,7 +42,7 @@ class ImageModelCapabilityTests(unittest.TestCase):
             provider_cfg,
             {"id": "grok-imagine-image-quality", "type": "openai_image"},
         ))
-        self.assertFalse(model_supports_reference_images(
+        self.assertTrue(model_supports_reference_images(
             provider_cfg,
             {"id": "dall-e-3", "type": "openai_image"},
         ))
@@ -63,19 +63,38 @@ class ImageModelCapabilityTests(unittest.TestCase):
             },
         ))
 
+    def test_official_openai_preset_uses_verified_capabilities(self):
+        provider_cfg = {"preset": "openai"}
+        self.assertTrue(model_supports_reference_images(
+            provider_cfg,
+            {"id": "gpt-image-2", "type": "openai_image"},
+        ))
+        self.assertFalse(model_supports_reference_images(
+            provider_cfg,
+            {"id": "dall-e-3", "type": "openai_image"},
+        ))
+        self.assertFalse(model_supports_reference_images(
+            provider_cfg,
+            {"id": "dall-e-2", "type": "openai_image"},
+        ))
+        self.assertFalse(model_supports_reference_images(
+            provider_cfg,
+            {"id": "unverified-official-model", "type": "openai_image"},
+        ))
+
     def test_model_summaries_expose_capability(self):
         models = ensure_image_models_list({
             "preset": "custom",
             "models": [
                 {"id": "text-only", "type": "openai_image"},
                 {"id": "gpt-image-2", "type": "openai_image"},
-                {"id": "with-reference", "type": "gemini_chat_image"},
+                {"id": "disabled-ref", "type": "gemini_chat_image", "supports_reference_images": False},
             ],
         })
 
-        self.assertFalse(models[0]["supports_reference_images"])
+        self.assertTrue(models[0]["supports_reference_images"])
         self.assertTrue(models[1]["supports_reference_images"])
-        self.assertTrue(models[2]["supports_reference_images"])
+        self.assertFalse(models[2]["supports_reference_images"])
 
     def test_manager_resolves_capability_per_model(self):
         manager = ImageManager()
@@ -85,14 +104,14 @@ class ImageModelCapabilityTests(unittest.TestCase):
                 "api_key": "test",
                 "models": [
                     {"id": "plain", "type": "openai_image"},
-                    {"id": "gpt-image-2", "type": "openai_image"},
+                    {"id": "disabled", "type": "openai_image", "supports_reference_images": False},
                     {"id": "reference", "type": "gemini_image"},
                 ],
             },
         })
 
-        self.assertFalse(manager.model_supports_reference_images("mixed", "plain"))
-        self.assertTrue(manager.model_supports_reference_images("mixed", "gpt-image-2"))
+        self.assertTrue(manager.model_supports_reference_images("mixed", "plain"))
+        self.assertFalse(manager.model_supports_reference_images("mixed", "disabled"))
         self.assertTrue(manager.model_supports_reference_images("mixed", "reference"))
         self.assertFalse(manager.model_supports_reference_images("mixed", "missing"))
 
