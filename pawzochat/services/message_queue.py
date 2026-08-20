@@ -410,6 +410,36 @@ class MessageQueue:
             queue.reply_started = True
             return True
 
+    def regenerate_reply(self, persona_id: str, message_seq: int) -> str:
+        """Replace replies after the latest user turn and process that turn again."""
+        with self._lock:
+            queue = self._queues.get(persona_id)
+            if queue is None:
+                queue = _PersonaQueue()
+                self._queues[persona_id] = queue
+            if queue.processing or queue.pending_messages:
+                return "busy"
+
+            status = self._app.conversation_store.rewind_to_latest_user(
+                persona_id,
+                message_seq,
+            )
+            if status != "ok":
+                return status
+
+            queue.processing = True
+            queue.reply_started = False
+            round_generation = queue.generation
+
+        broadcast("new_message", persona_id=persona_id)
+        broadcast("conversation_updated", persona_id=persona_id)
+        threading.Thread(
+            target=self._retry_reply,
+            args=(persona_id, message_seq, round_generation),
+            daemon=True,
+        ).start()
+        return "ok"
+
     def retry_reply(self, persona_id: str, message_seq: int) -> str:
         """Retry the unanswered latest user turn without storing it again."""
         conversation = self._app.conversation_store.get_conversation(persona_id)

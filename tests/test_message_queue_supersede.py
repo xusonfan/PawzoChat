@@ -39,6 +39,23 @@ class _ConversationStore:
         with self._lock:
             return {"messages": list(self.messages)}
 
+    def rewind_to_latest_user(self, persona_id, message_seq):
+        with self._lock:
+            latest_user_index = next(
+                (
+                    index
+                    for index in range(len(self.messages) - 1, -1, -1)
+                    if self.messages[index].get("role") == "user"
+                ),
+                None,
+            )
+            if latest_user_index is None:
+                return "not_retryable"
+            if self.messages[latest_user_index].get("_seq") != message_seq:
+                return "not_retryable"
+            del self.messages[latest_user_index + 1:]
+            return "ok"
+
     def text_history(self):
         with self._lock:
             return [
@@ -196,6 +213,28 @@ class MessageQueueSupersedeTests(unittest.TestCase):
             dispatcher.replies[0]["content"][0]["text"],
             "旧回复",
         )
+
+    @patch("pawzochat.services.message_queue.broadcast")
+    def test_regenerate_removes_latest_reply_and_reuses_user_turn(self, broadcast):
+        queue, store, chat_service, dispatcher = _make_queue()
+        user = store.add_message("cat", "user", [{"type": "text", "text": "再说一次"}], "web")
+        store.add_message("cat", "assistant", [{"type": "text", "text": "旧回复"}], "llm")
+
+        self.assertEqual(queue.regenerate_reply("cat", user["_seq"]), "ok")
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            with queue._lock:
+                processing = queue._queues["cat"].processing
+            if not processing:
+                break
+            time.sleep(0.01)
+
+        self.assertFalse(processing)
+        self.assertEqual([message["role"] for message in store.messages], ["user"])
+        self.assertEqual(chat_service.histories, [["再说一次"]])
+        self.assertEqual(len(dispatcher.replies), 1)
+        broadcast.assert_any_call("new_message", persona_id="cat")
+        broadcast.assert_any_call("processing", persona_id="cat")
 
 
 class ReplyDispatcherSupersedeTests(unittest.TestCase):

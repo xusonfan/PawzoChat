@@ -43,6 +43,17 @@ class ConversationPaginationTests(unittest.TestCase):
         self.assertNotIn(9, [message["_seq"] for message in page])
         self.assertEqual([message["_seq"] for message in page], [5, 6, 7, 8])
 
+    def test_rewind_only_accepts_latest_user_and_preserves_sequence_counter(self):
+        self.assertEqual(self.store.rewind_to_latest_user("cat", 9), "not_retryable")
+        self.assertEqual(self.store.rewind_to_latest_user("cat", 11), "ok")
+
+        messages = self.store.get_conversation("cat")["messages"]
+        self.assertEqual([message["_seq"] for message in messages], list(range(1, 12)))
+        regenerated = self.store.add_message(
+            "cat", "assistant", _text("重新生成的答复"), "llm"
+        )
+        self.assertEqual(regenerated["_seq"], 13)
+
 
 if __name__ == "__main__":
     unittest.main()

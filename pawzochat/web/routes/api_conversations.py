@@ -323,6 +323,24 @@ def retry_generated_image(persona_id: str, task_id: str):
 
 
 @api_conversations_bp.route(
+    "/<persona_id>/messages/<int:message_seq>/regenerate",
+    methods=["POST"],
+)
+def regenerate_message_reply(persona_id: str, message_seq: int):
+    if message_seq <= 0:
+        return jsonify({"error": "Invalid message sequence"}), 400
+
+    status = get_app().message_queue.regenerate_reply(persona_id, message_seq)
+    if status == "not_found":
+        return jsonify({"error": "Conversation not found"}), 404
+    if status == "not_retryable":
+        return jsonify({"error": "只能重新生成最后一条用户消息的回复"}), 409
+    if status == "busy":
+        return jsonify({"error": "正在处理其他消息，请稍后重试"}), 409
+    return jsonify({"ok": True}), 202
+
+
+@api_conversations_bp.route(
     "/<persona_id>/messages/<int:message_seq>/retry",
     methods=["POST"],
 )

@@ -105,6 +105,7 @@ const _quotePop = {
   el: null,
   quoteText: "",
   voiceEl: null,
+  regenerateSeq: null,
   outsideHandler: null,
   keyHandler: null,
 };
@@ -790,6 +791,7 @@ function _closeQuotePop() {
   _quotePop.el = null;
   _quotePop.quoteText = "";
   _quotePop.voiceEl = null;
+  _quotePop.regenerateSeq = null;
   _quotePop.outsideHandler = null;
   _quotePop.keyHandler = null;
   _ignoreNextDocClick = false;
@@ -805,6 +807,13 @@ function _openQuotePop(row, armIgnore, voiceEl = null) {
   if (!quoteText) return;
 
   const isUser = row.classList.contains("user");
+  const rawRegenerateSeq = Number(row.dataset.messageSeq);
+  const regenerateSeq = isUser
+    && row.dataset.latestUser === "true"
+    && Number.isInteger(rawRegenerateSeq)
+    && rawRegenerateSeq > 0
+    ? rawRegenerateSeq
+    : null;
   const anchor = voiceEl || row.querySelector(
     ".msg-bubble, .msg-image, .msg-emoji, .msg-file, .msg-file-inline, .msg-voice",
   ) || row;
@@ -823,6 +832,10 @@ function _openQuotePop(row, armIgnore, voiceEl = null) {
       buttons += `<button class="map-btn" onclick="PawzoChat.toggleVoiceTranscript()">${iconHtml("ri-file-text-line")}<span>转文字</span></button>`;
     }
   }
+  if (regenerateSeq !== null) {
+    if (buttons) buttons += `<span class="map-divider" aria-hidden="true"></span>`;
+    buttons += `<button class="map-btn" onclick="PawzoChat.regenerateChatReply()">${iconHtml("ri-refresh-line")}<span>重新生成</span></button>`;
+  }
   el.innerHTML = buttons;
   document.body.appendChild(el);
   el.style.visibility = "hidden";
@@ -834,6 +847,7 @@ function _openQuotePop(row, armIgnore, voiceEl = null) {
   _quotePop.el = el;
   _quotePop.quoteText = quoteText;
   _quotePop.voiceEl = voiceEl;
+  _quotePop.regenerateSeq = regenerateSeq;
   _ignoreNextDocClick = !!armIgnore;
   _quotePop.outsideHandler = (e) => {
     if (_ignoreNextDocClick) { _ignoreNextDocClick = false; return; }
@@ -928,6 +942,35 @@ export function quoteMessage() {
   _renderQuotePreview();
   const inp = $("chat-input");
   if (inp) inp.focus();
+}
+
+export async function regenerateChatReply() {
+  const personaId = chatPersonaId;
+  const messageSeq = _quotePop.regenerateSeq;
+  _closeQuotePop();
+  if (!personaId || !Number.isInteger(messageSeq) || messageSeq <= 0) return;
+
+  try {
+    const res = await api.post(
+      `/api/conversations/${encodeURIComponent(personaId)}/messages/${messageSeq}/regenerate`,
+      {},
+    );
+    if (res.status >= 400) throw new Error(res.data?.error || "重新生成失败");
+    if (!_isActiveChatWindow(personaId)) return;
+
+    _failedReplies.delete(_failedReplyKey(personaId, messageSeq));
+    _chatHistory.messages = _chatHistory.messages.filter(message => {
+      const sequence = Number(messageSequence(message));
+      return !Number.isInteger(sequence) || sequence <= messageSeq;
+    });
+    renderMessages(_chatHistory.messages);
+    state.processingPersonas.add(personaId);
+    showTypingIndicator();
+    toast("正在重新生成…", "success");
+  } catch (e) {
+    toast(e.message || "重新生成失败", "error");
+    void refreshChatMessages(personaId);
+  }
 }
 
 export function toggleVoiceTranscript(trigger = null) {
@@ -1152,6 +1195,13 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
   const _userName = state.profile?.name || "我";
   const _userAvUrl = profileAvatarUrl(state.profile);
 
+  let latestUserSequence = "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role !== "user") continue;
+    latestUserSequence = messageSequence(messages[index]);
+    break;
+  }
+
   let html = "";
   let lastTimestamp = null;
   for (const m of messages) {
@@ -1168,11 +1218,14 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
     const sequenceAttr = sequence
       ? ` data-message-seq="${escAttr(sequence)}"`
       : "";
+    const latestUserAttr = role === "user" && sequence === latestUserSequence
+      ? ` data-latest-user="true"`
+      : "";
     const retryStatus = role === "user" && sequence
       ? _retryStatusHtml(chatPersonaId, sequence)
       : "";
 
-    html += `<div class="msg-row ${role}"${sequenceAttr} data-message-timestamp="${escAttr(m.timestamp || "")}">
+    html += `<div class="msg-row ${role}"${sequenceAttr}${latestUserAttr} data-message-timestamp="${escAttr(m.timestamp || "")}">
       ${av}
       <div>
         ${bubbleHtml}

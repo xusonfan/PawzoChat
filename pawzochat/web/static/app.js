@@ -61,7 +61,7 @@ import {
   handleChatOperationError,
   toggleEmojiPicker, switchEmojiTab, insertEmoji, sendSticker,
   togglePlusMenu,
-  quoteMessage, clearPendingQuote,
+  quoteMessage, clearPendingQuote, regenerateChatReply,
   playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage, retryChatReply,
   scrollToLatestMessage,
 } from "./modules/chat.js";
@@ -390,7 +390,7 @@ window.PawzoChat = {
   pickFile, onFileSelected, removePendingFile,
   toggleEmojiPicker, switchEmojiTab, insertEmoji, sendSticker,
   togglePlusMenu,
-  quoteMessage, clearPendingQuote,
+  quoteMessage, clearPendingQuote, regenerateChatReply,
   playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage, retryChatReply,
   scrollToLatestMessage,
   filterPersonas, contactsIndexStart, contactsIndexMove, contactsIndexEnd, jumpToContactInitial,

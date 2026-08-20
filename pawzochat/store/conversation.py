@@ -633,6 +633,33 @@ class ConversationStore:
                 self._write_file(persona_id, data)
             return True
 
+    def rewind_to_latest_user(self, persona_id: str, message_seq: int) -> str:
+        """Delete replies after the latest user message while preserving sequence IDs."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return "not_found"
+            messages = data.get("messages", [])
+            latest_user_index = next(
+                (
+                    index
+                    for index in range(len(messages) - 1, -1, -1)
+                    if messages[index].get("role") == "user"
+                ),
+                None,
+            )
+            if latest_user_index is None:
+                return "not_retryable"
+            latest_user = messages[latest_user_index]
+            if latest_user.get("_seq") != message_seq:
+                return "not_retryable"
+
+            del messages[latest_user_index + 1:]
+            data["updated_at"] = _now_iso()
+            self._write_file(persona_id, data)
+            return "ok"
+
     def clear_messages(self, persona_id: str) -> bool:
         lock = self._get_lock(persona_id)
         with lock:

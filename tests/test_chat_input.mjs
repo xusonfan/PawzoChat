@@ -108,6 +108,22 @@ assert.match(
 assert.match(apiSource, /async post\(url, body, \{ keepalive = false \} = \{\}\)/);
 assert.match(apiSource, /body: JSON\.stringify\(body\),\s*keepalive,/);
 assert.match(appSource, /onChatCompositionStart, onChatCompositionEnd/, "组合输入事件应暴露给页面");
+assert.match(
+  chatSource,
+  /const latestUserAttr = role === "user" && sequence === latestUserSequence[\s\S]*?data-latest-user="true"/,
+  "只有最后一条已保存的用户消息应标记为可重新生成",
+);
+assert.match(
+  chatSource,
+  /row\.dataset\.latestUser === "true"[\s\S]*?PawzoChat\.regenerateChatReply\(\)/,
+  "长按菜单应只为最后用户消息增加重新生成按钮",
+);
+assert.match(
+  chatSource,
+  /\/messages\/\$\{messageSeq\}\/regenerate/,
+  "重新生成操作应调用独立接口",
+);
+assert.match(appSource, /regenerateChatReply/, "重新生成操作应暴露给页面");
 
 const keyHandlerMatch = chatSource.match(
   /export function onChatKey\(e\) \{([\s\S]*?)\n\}\n\nfunction _setVoiceButtonState/,
