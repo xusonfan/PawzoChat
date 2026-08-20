@@ -213,9 +213,14 @@ def get_messages(persona_id: str):
             "messages": messages_for_api(messages),
         })
 
-    rounds = request.args.get("rounds", 10, type=int)
+    rounds = min(max(request.args.get("rounds", 10, type=int) or 10, 1), 50)
+    before_seq = request.args.get("before_seq", type=int)
+    if before_seq is not None and before_seq <= 0:
+        return jsonify({"error": "before_seq must be a positive integer"}), 400
     messages, has_more = app.conversation_store.get_messages(
-        persona_id, rounds=rounds
+        persona_id,
+        rounds=rounds,
+        before_seq=before_seq,
     )
 
     link = app.conversation_store.channel_link(persona_id)
@@ -233,6 +238,7 @@ def get_messages(persona_id: str):
         "wechat_link": link_info,
         "messages": messages_for_api(messages),
         "has_more": has_more,
+        "next_before_seq": messages[0].get("_seq") if has_more and messages else None,
     })
 
 

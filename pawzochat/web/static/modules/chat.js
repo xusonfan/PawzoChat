@@ -41,7 +41,7 @@ import {
   removePendingUserMessage,
 } from "./chat_pending.js";
 import { shouldShowMessageTime } from "./chat_message_time.js";
-import { hasRenderedMessage, messageSequence } from "./chat_message_identity.js";
+import { hasRenderedMessage, mergeMessagesBySequence, messageSequence } from "./chat_message_identity.js";
 import {
   setTopBar, pushPage, goBack, switchTab,
   registerTabRenderer, registerPageRenderer,
@@ -76,6 +76,15 @@ let _keyboardBlurTimer = 0;
 let _chatInputComposing = false;
 
 const _chatBottomAnchor = createChatBottomAnchor();
+const _CHAT_PAGE_ROUNDS = 10;
+const _CHAT_HISTORY_TOP_THRESHOLD = 48;
+let _chatHistory = {
+  personaId: null,
+  messages: [],
+  hasMore: false,
+  loadingOlder: false,
+  generation: 0,
+};
 
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
@@ -600,12 +609,82 @@ export function playVoiceMessage(el) {
   });
 }
 
+function _latestMessageSequence(messages) {
+  return (messages || []).reduce(
+    (latest, message) => Math.max(latest, Number(messageSequence(message)) || 0),
+    0,
+  );
+}
+
+function _mergeLatestHistory(current, latest) {
+  if (!latest.length) return [];
+  const firstLatestSequence = Number(messageSequence(latest[0]));
+  const older = firstLatestSequence > 0
+    ? (current || []).filter(message => {
+      const sequence = Number(messageSequence(message));
+      return sequence > 0 && sequence < firstLatestSequence;
+    })
+    : [];
+  return mergeMessagesBySequence(older, latest);
+}
+
+function _setNewMessageButtonVisible(visible) {
+  const button = $("chat-new-message-btn");
+  if (button) button.hidden = !visible;
+}
+
+export function scrollToLatestMessage() {
+  const messagesEl = $("chat-msgs");
+  if (!messagesEl) return;
+  _chatBottomAnchor.scrollToBottom(messagesEl);
+  _chatBottomAnchor.scheduleBottom(messagesEl);
+  _setNewMessageButtonVisible(false);
+}
+
 function _bindChatScroll(el) {
   _chatBottomAnchor.bind(el, { initial: true, lifecycleRoot: content() });
+  el.addEventListener("scroll", () => {
+    if (_chatBottomAnchor.isNearBottom(el)) _setNewMessageButtonVisible(false);
+    if (el.scrollTop <= _CHAT_HISTORY_TOP_THRESHOLD) void _loadOlderMessages(el);
+  }, { passive: true });
+}
+
+async function _loadOlderMessages(el) {
+  const history = _chatHistory;
+  const firstSequence = Number(messageSequence(history.messages[0]));
+  if (
+    history.personaId !== chatPersonaId
+    || !history.hasMore
+    || history.loadingOlder
+    || !firstSequence
+    || el !== $("chat-msgs")
+  ) return;
+
+  history.loadingOlder = true;
+  const generation = history.generation;
+  try {
+    const res = await api.get(
+      `/api/conversations/${encodeURIComponent(history.personaId)}/messages?rounds=${_CHAT_PAGE_ROUNDS}&before_seq=${firstSequence}`,
+      { bypassCache: true },
+    );
+    if (
+      generation !== history.generation
+      || history.personaId !== chatPersonaId
+      || el !== $("chat-msgs")
+    ) return;
+    history.messages = mergeMessagesBySequence(res.messages || [], history.messages);
+    history.hasMore = res.has_more === true;
+    renderMessages(history.messages, { preservePrepend: true });
+  } catch (e) {
+    if (generation === history.generation) toast("加载更早消息失败", "error");
+  } finally {
+    if (generation === history.generation) history.loadingOlder = false;
+  }
 }
 
 function _scrollAfterInsert(el, insertedRoot = el.lastElementChild) {
   _chatBottomAnchor.scrollAfterInsert(el, insertedRoot);
+  if (_chatBottomAnchor.isNearBottom(el)) _setNewMessageButtonVisible(false);
 }
 
 function _syncMobileViewport() {
@@ -879,7 +958,15 @@ export function clearPendingQuote() {
 async function renderChatWindow(data) {
   chatPersonaId = data.personaId;
   const renderedPersonaId = chatPersonaId;
-  const messagesUrl = `/api/conversations/${renderedPersonaId}/messages?rounds=10`;
+  const historyGeneration = _chatHistory.generation + 1;
+  _chatHistory = {
+    personaId: renderedPersonaId,
+    messages: [],
+    hasMore: false,
+    loadingOlder: false,
+    generation: historyGeneration,
+  };
+  const messagesUrl = `/api/conversations/${encodeURIComponent(renderedPersonaId)}/messages?rounds=${_CHAT_PAGE_ROUNDS}`;
   const cachedMessages = api.peek(messagesUrl);
   const pname = state.personas.find(p => p.id === chatPersonaId)?.name || chatPersonaId;
   const asrEnabled = state.settings?.asr?.enabled !== false;
@@ -898,6 +985,12 @@ async function renderChatWindow(data) {
   _closeQuotePop(); // never let a popup (in document.body) outlive the chat that spawned it
   content().innerHTML = `<div class="chat-container">
     <div class="chat-messages" id="chat-msgs">${cachedMessages ? "" : `<div class="loading-center"><div class="spinner"></div></div>`}</div>
+    <div class="chat-new-message-anchor">
+      <button type="button" class="chat-new-message-btn" id="chat-new-message-btn" hidden onclick="PawzoChat.scrollToLatestMessage()" aria-label="查看新消息">
+        <span>查看新消息</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
     <div id="img-preview-bar" class="img-preview-bar" style="display:none"></div>
     <div id="file-preview-bar" class="file-preview-bar" style="display:none"></div>
     <div id="quote-preview-bar" class="quote-preview-bar" style="display:none"></div>
@@ -974,15 +1067,25 @@ async function renderChatWindow(data) {
 
   if (cachedMessages) {
     const cached = cachedMessages.messages || [];
+    _chatHistory.messages = cached;
+    _chatHistory.hasMore = cachedMessages.has_more === true;
     renderMessages(cached);
     markRenderedMessagesRead(renderedPersonaId, cached);
   }
 
   try {
     const res = await api.get(messagesUrl, { bypassCache: true });
-    if (_isActiveChatWindow(renderedPersonaId)) {
+    if (
+      _isActiveChatWindow(renderedPersonaId)
+      && _chatHistory.generation === historyGeneration
+    ) {
       const messages = res.messages || [];
-      renderMessages(messages);
+      const currentFirst = Number(messageSequence(_chatHistory.messages[0]));
+      const freshFirst = Number(messageSequence(messages[0]));
+      const alreadyLoadedOlder = currentFirst > 0 && freshFirst > 0 && currentFirst < freshFirst;
+      _chatHistory.messages = _mergeLatestHistory(_chatHistory.messages, messages);
+      if (!alreadyLoadedOlder) _chatHistory.hasMore = res.has_more === true;
+      renderMessages(_chatHistory.messages);
       markRenderedMessagesRead(renderedPersonaId, messages);
     }
   } catch (e) {
@@ -1004,17 +1107,25 @@ function _lastRenderedMessageTimestamp(messagesEl) {
   return rows.length ? rows[rows.length - 1].dataset.messageTimestamp : null;
 }
 
-function renderMessages(messages) {
+function renderMessages(messages, { preservePrepend = false } = {}) {
   const el = $("chat-msgs");
   if (!el) return;
   messages = mergePendingUserMessages(chatPersonaId, messages);
   _closeQuotePop();  // a full in-place re-render (e.g. SSE refresh) detaches the popup anchor
 
+  const previousScrollHeight = el.scrollHeight;
+  const previousScrollTop = el.scrollTop;
   const renderState = _chatBottomAnchor.beginRender(el);
+  const finishRender = () => {
+    _chatBottomAnchor.finishRender(renderState, el);
+    if (preservePrepend) {
+      el.scrollTop = previousScrollTop + Math.max(0, el.scrollHeight - previousScrollHeight);
+    }
+  };
 
   if (messages.length === 0) {
     el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="empty-text">开始对话吧</div></div>`;
-    requestAnimationFrame(() => _chatBottomAnchor.finishRender(renderState, el));
+    requestAnimationFrame(finishRender);
     return;
   }
 
@@ -1052,7 +1163,7 @@ function renderMessages(messages) {
     </div>`;
   }
   el.innerHTML = html;
-  requestAnimationFrame(() => _chatBottomAnchor.finishRender(renderState, el));
+  requestAnimationFrame(finishRender);
 }
 
 function markRenderedMessagesRead(personaId, messages) {
@@ -1596,6 +1707,10 @@ export function appendAssistantMessage(message, isLast) {
   const msgsEl = $("chat-msgs");
   if (!msgsEl) return;
 
+  if (_chatHistory.personaId === chatPersonaId) {
+    _chatHistory.messages = mergeMessagesBySequence(_chatHistory.messages, [message]);
+  }
+
   if (hasRenderedMessage(msgsEl, message)) {
     if (isLast) hideTypingIndicator();
     return;
@@ -1630,7 +1745,11 @@ export function appendAssistantMessage(message, isLast) {
     showTypingIndicator();
   }
 
-  if (wasAtBottom) _scrollAfterInsert(msgsEl);
+  if (wasAtBottom) {
+    _scrollAfterInsert(msgsEl);
+  } else {
+    _setNewMessageButtonVisible(true);
+  }
 }
 
 /* ---- Emoji Picker ---- */
@@ -1973,14 +2092,22 @@ export async function refreshUnreadCounts() {
 export async function refreshChatMessages(personaId = chatPersonaId) {
   if (!personaId || !isViewingChat(personaId)) return;
   hideTypingIndicator();
+  const previousLatestSequence = _latestMessageSequence(_chatHistory.messages);
   try {
     const res = await api.get(
-      `/api/conversations/${personaId}/messages?rounds=10`,
+      `/api/conversations/${encodeURIComponent(personaId)}/messages?rounds=${_CHAT_PAGE_ROUNDS}`,
       { bypassCache: true },
     );
-    if (!isViewingChat(personaId)) return;
+    if (!isViewingChat(personaId) || _chatHistory.personaId !== personaId) return;
     const messages = res.messages || [];
-    renderMessages(messages);
+    const hasNewMessages = _latestMessageSequence(messages) > previousLatestSequence;
+    const wasAtBottom = _chatBottomAnchor.followsBottom($("chat-msgs"));
+    _chatHistory.messages = _mergeLatestHistory(_chatHistory.messages, messages);
+    _chatHistory.hasMore = _chatHistory.messages.length > messages.length
+      ? _chatHistory.hasMore
+      : res.has_more === true;
+    renderMessages(_chatHistory.messages);
+    if (hasNewMessages && !wasAtBottom) _setNewMessageButtonVisible(true);
     markRenderedMessagesRead(personaId, messages);
   } catch (e) { /* silent */ }
 }

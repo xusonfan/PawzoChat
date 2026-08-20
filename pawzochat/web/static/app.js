@@ -62,6 +62,7 @@ import {
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
   playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage,
+  scrollToLatestMessage,
 } from "./modules/chat.js";
 
 import {
@@ -387,6 +388,7 @@ window.PawzoChat = {
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
   playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage,
+  scrollToLatestMessage,
   filterPersonas, contactsIndexStart, contactsIndexMove, contactsIndexEnd, jumpToContactInitial,
   chatWithPersona, deletePersona,
   savePersona, switchPersonaEditTab, resetSystemInstructions, onPersonaProviderChange,

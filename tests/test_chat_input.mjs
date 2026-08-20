@@ -39,6 +39,24 @@ assert.match(inputBar, /id="plus-menu-btn"[^>]+aria-label="打开附件面板"/)
 assert.match(inputBar, /id="chat-input"[^>]+enterkeyhint="send"/);
 assert.match(chatSource, /id="emoji-picker-panel"/);
 assert.match(chatSource, /id="plus-menu-panel"/);
+assert.match(
+  chatSource,
+  /id="chat-new-message-btn" hidden onclick="PawzoChat\.scrollToLatestMessage\(\)"/,
+  "聊天页应提供输入框上方的新消息按钮",
+);
+assert.match(
+  chatSource,
+  /if \(wasAtBottom\)[\s\S]*?_scrollAfterInsert\(msgsEl\);[\s\S]*?else[\s\S]*?_setNewMessageButtonVisible\(true\);/,
+  "离开底部收到实时消息时应显示按钮",
+);
+assert.match(
+  chatSource,
+  /export function scrollToLatestMessage\(\)[\s\S]*?scrollToBottom\(messagesEl\)[\s\S]*?_setNewMessageButtonVisible\(false\)/,
+  "点击按钮应滚到底部并隐藏按钮",
+);
+assert.match(appSource, /scrollToLatestMessage/, "回到底部操作应暴露给页面");
+assert.match(css, /\.chat-new-message-anchor\s*\{[^}]*height:\s*0;/s);
+assert.match(css, /\.chat-new-message-btn\s*\{[^}]*position:\s*absolute;[^}]*right:\s*12px;[^}]*bottom:\s*10px;/s);
 assert.doesNotMatch(chatSource, /id="camera-file-input"/, "拍照不应再依赖可能打开相册的文件输入");
 assert.match(
   chatSource,

@@ -554,21 +554,28 @@ class ConversationStore:
         self,
         persona_id: str,
         rounds: int = 10,
+        *,
+        before_seq: int | None = None,
     ) -> tuple[list[dict], bool]:
-        """Return messages from the most recent *rounds* conversation rounds.
+        """Return one page of conversation rounds, newest page first.
 
-        A round = a run of consecutive user messages followed by a run of
-        consecutive assistant messages.  Round boundaries are detected where
-        role transitions from ``assistant`` back to ``user``.
-
-        Returns ``(messages, has_more)``.
+        ``before_seq`` is an exclusive, stable cursor.  The returned messages
+        remain in chronological order while ``has_more`` indicates that an
+        older page exists.
         """
         lock = self._get_lock(persona_id)
         with lock:
             data = self._read_file(persona_id)
             if data is None:
                 return [], False
-            messages = data.get("messages", [])
+            all_messages = data.get("messages", [])
+            if before_seq is None:
+                messages = all_messages
+            else:
+                messages = [
+                    message for message in all_messages
+                    if message.get("_seq", 0) < before_seq
+                ]
             starts = _round_start_indices(messages)
             if len(starts) <= rounds:
                 return list(messages), False

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   hasRenderedMessage,
+  mergeMessagesBySequence,
   messageSequence,
 } from "../pawzochat/web/static/modules/chat_message_identity.js";
 
@@ -32,6 +33,15 @@ assert.equal(
   hasRenderedMessage(container, { role: "assistant" }),
   false,
   "没有服务端序号时不应根据文本猜测去重",
+);
+
+assert.deepEqual(
+  mergeMessagesBySequence(
+    [{ _seq: 3, text: "旧值" }, { _seq: 4 }],
+    [{ _seq: 1 }, { _seq: 2 }, { _seq: 3, text: "新值" }],
+  ),
+  [{ _seq: 1 }, { _seq: 2 }, { _seq: 3, text: "新值" }, { _seq: 4 }],
+  "历史分页必须按序号合并、排序，并以新响应覆盖同序号消息",
 );
 
 console.log("chat message identity tests passed");
