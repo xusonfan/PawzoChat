@@ -2890,6 +2890,7 @@ function renderSettingsNetwork() {
   setTopBar("网络设置", true, "");
   const w = state.settings?.web || {};
   const hasPw = !!w.has_password;
+  const adminHasPw = !!state.settings?.admin?.has_password;
   const publicOn = !!w.public_enabled;
 
   let publicBlock = "";
@@ -2930,6 +2931,15 @@ function renderSettingsNetwork() {
         <span class="row-label">公网访问密码</span>
         <span class="row-value">${hasPw ? "已设置" : "未设置"}</span><span class="row-arrow">›</span>
       </div>
+      <div class="card-row" onclick="PawzoChat.pushPage('settingsAdminPassword')">
+        <div class="row-icon blue">${iconHtml("ri-shield-keyhole-line")}</div>
+        <span class="row-label">管理员密码</span>
+        <span class="row-value">${adminHasPw ? "已设置" : "未设置"}</span><span class="row-arrow">›</span>
+      </div>
+      ${adminHasPw ? `<div class="card-row" onclick="window.location.href=(window.PAWZOCHAT_BASE || '') + '/admin'">
+        <div class="row-icon green">${iconHtml("ri-dashboard-line")}</div>
+        <span class="row-label">人物管理后台</span><span class="row-arrow">›</span>
+      </div>` : ""}
     </div>
     <div class="card" style="margin-top:12px">
       <div class="form-group"><div class="form-row">
@@ -2996,6 +3006,70 @@ export async function clearPassword() {
     toast("密码已关闭，公网访问已同时关闭，重启后生效", "success");
     goBack();
   } catch (e) { toast("操作失败", "error"); }
+  finally { hideLoading(); }
+}
+
+function renderSettingsAdminPassword() {
+  if (state.settings?.is_public) {
+    setTopBar("管理员密码", true, "");
+    content().innerHTML = `<div class="page"><div class="card" style="margin:16px"><div style="padding:20px;text-align:center;color:var(--text-3);font-size:14px">管理员密码仅支持从本地访问修改</div></div></div>`;
+    return;
+  }
+  const hasPassword = !!state.settings?.admin?.has_password;
+  setTopBar("管理员密码", true,
+    `<button class="btn-text" onclick="PawzoChat.saveAdminPassword()" style="font-size:15px;font-weight:500">保存</button>`
+  );
+  content().innerHTML = `<div class="page">
+    <div class="card">
+      <div class="form-group"><div class="form-row"><label>${hasPassword ? "新密码" : "设置密码"}</label>
+        <input type="password" id="admin-pw" placeholder="8位以上，含大小写字母和数字"></div></div>
+      <div class="form-group"><div class="form-row"><label>确认密码</label>
+        <input type="password" id="admin-pw2" placeholder="再次输入密码"></div></div>
+    </div>
+    <div class="form-hint" style="margin:12px 16px;line-height:1.6">此密码独立保护人物管理后台（<code>/admin</code>）。设置后可集中维护人物配置、提示词架构和能力开关。</div>
+    ${hasPassword ? `
+    <div style="padding:16px 16px 0;display:grid;gap:10px">
+      <button class="btn-primary" onclick="window.location.href=(window.PAWZOCHAT_BASE || '') + '/admin'" style="width:100%">进入人物管理后台</button>
+      <button class="btn-outline" onclick="PawzoChat.clearAdminPassword()" style="width:100%;color:var(--danger);border-color:var(--danger)">关闭管理后台密码</button>
+    </div>` : ""}
+  </div>`;
+}
+
+export async function saveAdminPassword() {
+  const password = $("admin-pw")?.value || "";
+  const confirmation = $("admin-pw2")?.value || "";
+  if (!password) { toast("请输入密码", "error"); return; }
+  if (password !== confirmation) { toast("两次输入的密码不一致", "error"); return; }
+  showLoading("保存中…");
+  try {
+    const response = await api.patch("/api/settings", { admin: { password } });
+    if (response.status && response.status >= 400) {
+      toast(response.data?.error || "保存失败", "error");
+      return;
+    }
+    state.settings = state.settings || {};
+    state.settings.admin = response.data?.admin || { has_password: true };
+    toast("管理员密码已设置", "success");
+    goBack();
+  } catch (error) { toast("保存失败", "error"); }
+  finally { hideLoading(); }
+}
+
+export async function clearAdminPassword() {
+  const ok = await confirm("关闭管理后台密码", "关闭后人物管理后台将不可进入，确认继续？", true);
+  if (!ok) return;
+  showLoading("操作中…");
+  try {
+    const response = await api.patch("/api/settings", { admin: { password: "" } });
+    if (response.status && response.status >= 400) {
+      toast(response.data?.error || "操作失败", "error");
+      return;
+    }
+    state.settings = state.settings || {};
+    state.settings.admin = response.data?.admin || { has_password: false };
+    toast("管理员密码已关闭", "success");
+    goBack();
+  } catch (error) { toast("操作失败", "error"); }
   finally { hideLoading(); }
 }
 
@@ -4033,6 +4107,7 @@ registerPageRenderer("emojiGroup", renderEmojiGroup);
 registerPageRenderer("emojiEmotion", renderEmojiEmotion);
 registerPageRenderer("settingsNetwork", renderSettingsNetwork);
 registerPageRenderer("settingsPassword", renderSettingsPassword);
+registerPageRenderer("settingsAdminPassword", renderSettingsAdminPassword);
 registerPageRenderer("settingsAbout", renderSettingsAbout);
 registerPageRenderer("settingsPrivacy", renderSettingsPrivacy);
 registerPageRenderer("settingsStatement", renderSettingsStatement);

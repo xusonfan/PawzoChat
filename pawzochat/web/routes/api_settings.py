@@ -24,7 +24,7 @@ import re
 import secrets
 import socket
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from pawzochat.paths import THEME_DIR
 from pawzochat.utils.crypto import hash_password
@@ -33,7 +33,7 @@ from pawzochat.web.routes import get_app
 api_settings_bp = Blueprint("api_settings", __name__)
 
 EXPOSED_SECTIONS = [
-    "chat", "reply", "web", "theme",
+    "chat", "reply", "web", "theme", "admin",
 ]
 
 
@@ -91,6 +91,10 @@ def get_settings():
     if "web" in result and result["web"]:
         result["web"]["has_password"] = bool(result["web"].get("password"))
         result["web"].pop("password", None)
+    if "admin" in result:
+        result["admin"] = {
+            "has_password": bool((result.get("admin") or {}).get("password")),
+        }
     result["is_public"] = is_public
     return jsonify(result)
 
@@ -100,6 +104,22 @@ def update_settings():
     app = get_app()
     data = request.get_json(force=True)
     is_public = request.environ.get("pawzochat.is_public", False)
+
+    if "admin" in data:
+        if is_public:
+            return jsonify({"error": "管理员密码仅限本地访问修改"}), 403
+        admin_patch = data["admin"] or {}
+        if "password" in admin_patch:
+            pw = str(admin_patch["password"] or "")
+            if pw:
+                err = _validate_password(pw)
+                if err:
+                    return jsonify({"error": err}), 400
+                app.config._data.setdefault("admin", {})["password"] = hash_password(pw)
+            else:
+                app.config._data.setdefault("admin", {})["password"] = ""
+            session.pop("admin_authenticated", None)
+        data = {k: v for k, v in data.items() if k != "admin"}
 
     if "web" in data:
         if is_public:
@@ -150,7 +170,12 @@ def update_settings():
 
     app.config.save()
 
-    result = {"ok": True}
+    result = {
+        "ok": True,
+        "admin": {
+            "has_password": bool(app.config.get("admin", "password", default="")),
+        },
+    }
     if not is_public:
         web_out = copy.deepcopy(app.config.get("web", default={}))
         web_out["has_password"] = bool(web_out.get("password"))

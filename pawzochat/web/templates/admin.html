@@ -1,0 +1,261 @@
+<!--
+  PawzoChat - Multi-platform LLM-powered chatbot
+  Copyright (C) 2026  iwyxdxl
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#060b13">
+<title>PawzoChat 人物管理后台</title>
+<link rel="icon" type="image/png" href="{{ request.script_root }}/static/logo.png">
+<link rel="stylesheet" href="{{ request.script_root }}/static/admin/style.css">
+<script data-base="{{ request.script_root }}">window.PAWZOCHAT_BASE = document.currentScript.dataset.base;</script>
+</head>
+<body>
+<div class="admin-shell">
+  <aside class="sidebar">
+    <a class="brand" href="{{ request.script_root }}/admin">
+      <div class="brand-logo-glow">
+        <img src="{{ request.script_root }}/static/logo.png" alt="PawzoChat">
+      </div>
+      <div class="brand-text">
+        <div class="brand-title-wrap">
+          <strong>PawzoChat</strong>
+          <span class="brand-badge">Admin</span>
+        </div>
+        <span class="brand-subtitle">人物管理后台</span>
+      </div>
+    </a>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-section="personas">
+        <span class="nav-item-left">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+          <span>人物列表</span>
+        </span>
+        <small id="nav-persona-count" class="counter-badge">0</small>
+      </button>
+      <button class="nav-item" data-action="templates">
+        <span class="nav-item-left">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span>提示词模板</span>
+        </span>
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="footer-link" href="{{ request.script_root }}/">
+        <svg class="footer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>返回聊天面板</span>
+      </a>
+      <a class="footer-link danger-link" href="{{ request.script_root }}/admin/logout">
+        <svg class="footer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+          <polyline points="16 17 21 12 16 7"></polyline>
+          <line x1="21" y1="12" x2="9" y2="12"></line>
+        </svg>
+        <span>退出后台</span>
+      </a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="page-title-block">
+        <div class="page-badge">Studio Management</div>
+        <h1>人物管理</h1>
+        <p>集中维护人物设定、提示词架构、LLM 参数与多模态能力开关</p>
+      </div>
+      <div class="header-actions">
+        <input id="import-files" type="file" accept=".png,.json,.zip,.ppack" multiple hidden>
+        <button class="btn secondary btn-iconed" data-action="import">
+          <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          <span>批量导入</span>
+        </button>
+        <button class="btn secondary btn-iconed btn-sparkles" data-action="create">
+          <svg class="btn-svg sparkle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path>
+          </svg>
+          <span>创作人物</span>
+        </button>
+        <button class="btn primary btn-iconed" data-action="batch">
+          <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+          <span>批量编辑</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="stats-grid" id="stats"></section>
+
+    <section class="panel filters-panel">
+      <div class="filter-item search-box">
+        <label for="filter-query">搜索人物</label>
+        <div class="search-input-wrap">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input id="filter-query" placeholder="按名称、ID 或签名快速搜索…">
+        </div>
+      </div>
+      <div class="filter-item">
+        <label for="filter-status">状态</label>
+        <div class="select-wrap">
+          <select id="filter-status">
+            <option value="all">全部状态</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+          </select>
+        </div>
+      </div>
+      <div class="filter-item">
+        <label for="filter-provider">LLM 服务商</label>
+        <div class="select-wrap">
+          <select id="filter-provider">
+            <option value="">全部服务商</option>
+          </select>
+        </div>
+      </div>
+      <div class="filter-item">
+        <label for="filter-capability">能力开关</label>
+        <div class="select-wrap">
+          <select id="filter-capability">
+            <option value="">全部能力</option>
+            <option value="memory">记忆功能</option>
+            <option value="emoji">表情包</option>
+            <option value="image">生图功能</option>
+            <option value="voice">语音朗读</option>
+            <option value="proactive">主动消息</option>
+          </select>
+        </div>
+      </div>
+      <div class="filter-item">
+        <label for="filter-worldbook">世界书</label>
+        <div class="select-wrap">
+          <select id="filter-worldbook">
+            <option value="">全部世界书</option>
+          </select>
+        </div>
+      </div>
+      <div class="filter-reset-wrap">
+        <button class="btn ghost btn-iconed" data-action="reset-filters" title="重置所有筛选条件">
+          <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="1 4 1 10 7 10"></polyline>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+          </svg>
+          <span>重置</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="check">
+                <input id="select-page" type="checkbox" aria-label="选择当前页">
+              </th>
+              <th>人物</th>
+              <th>状态</th>
+              <th>模型配置</th>
+              <th>已开能力</th>
+              <th>绑定世界书</th>
+              <th class="actions-header">操作</th>
+            </tr>
+          </thead>
+          <tbody id="persona-rows">
+            <tr><td colspan="7" class="empty">正在加载人物数据…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <footer class="pagination">
+        <span id="page-summary" class="page-info"></span>
+        <div class="pagination-buttons">
+          <button class="btn ghost compact btn-iconed" data-action="previous-page">
+            <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+            <span>上一页</span>
+          </button>
+          <button class="btn ghost compact btn-iconed" data-action="next-page">
+            <span>下一页</span>
+            <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+          </button>
+        </div>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<div id="selection-bar" class="selection-bar hidden">
+  <div class="selection-indicator">
+    <span class="selection-pulse"></span>
+    <strong id="selection-count">已选择 0 项</strong>
+  </div>
+  <button class="btn-pill-ghost" data-action="clear-selection">取消选择</button>
+  <div class="selection-divider"></div>
+  <div class="selection-actions">
+    <button class="btn-pill" data-action="export">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      <span>导出</span>
+    </button>
+    <button class="btn-pill" data-action="clone">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <span>复制</span>
+    </button>
+    <button class="btn-pill primary" data-action="batch">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9"></path>
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+      </svg>
+      <span>批量编辑</span>
+    </button>
+    <button class="btn-pill danger" data-action="delete">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      </svg>
+      <span>删除</span>
+    </button>
+  </div>
+</div>
+
+<div id="drawer-backdrop" class="backdrop hidden"></div>
+<aside id="editor-drawer" class="drawer hidden" aria-label="人物编辑"></aside>
+<div id="modal-backdrop" class="backdrop hidden"></div>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true"></div>
+<div id="toast" class="toast hidden" role="status"></div>
+<script type="module" src="{{ request.script_root }}/static/admin/app.js"></script>
+</body>
+</html>

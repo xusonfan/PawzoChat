@@ -255,6 +255,8 @@ def retry_generated_image(persona_id: str, task_id: str):
     persona = personas.get(persona_id)
     if persona is None or app.conversation_store.get_conversation(persona_id) is None:
         return jsonify({"error": "Conversation not found"}), 404
+    if not persona.enabled:
+        return jsonify({"error": "人物已停用，无法重试图片生成"}), 409
     if app.capability_registry is None:
         return jsonify({"error": "Image generation is unavailable"}), 503
 
@@ -337,6 +339,8 @@ def regenerate_message_reply(persona_id: str, message_seq: int):
         return jsonify({"error": "只能重新生成最后一条用户消息的回复"}), 409
     if status == "busy":
         return jsonify({"error": "正在处理其他消息，请稍后重试"}), 409
+    if status == "disabled":
+        return jsonify({"error": "人物已停用，无法重新生成回复"}), 409
     return jsonify({"ok": True}), 202
 
 
@@ -355,6 +359,8 @@ def retry_message_reply(persona_id: str, message_seq: int):
         return jsonify({"error": "该消息已收到回复或不是最新消息"}), 409
     if status == "busy":
         return jsonify({"error": "正在处理其他消息，请稍后重试"}), 409
+    if status == "disabled":
+        return jsonify({"error": "人物已停用，无法重试回复"}), 409
     return jsonify({"ok": True}), 202
 
 

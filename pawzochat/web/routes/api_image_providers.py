@@ -47,6 +47,14 @@ _NAME_RE = re.compile(r'^[a-zA-Z0-9一-鿿][a-zA-Z0-9一-鿿_\-]*$')
 _SAFE_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 
+class ImageGenerationRequestError(ValueError):
+    """A validated image-generation failure suitable for API responses."""
+
+    def __init__(self, message: str, *, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _validate_provider_name(name: str) -> str | None:
     if not name:
         return "名称不能为空"
@@ -316,32 +324,21 @@ def delete_image_model(name: str, model_id: str):
     return jsonify({"ok": True})
 
 
-# ---- Test invocation -----------------------------------------------------
-
-@api_image_providers_bp.route("/<name>/_test", methods=["POST"])
-@api_image_providers_bp.route("/<name>/generate", methods=["POST"])
-def test_image_provider(name: str):
-    """Invoke the provider with a minimal prompt and return the image inline.
-
-    The (provider_name, model_id) pair routes to whichever class the model's
-    type points to — same path business code will use later.
-    """
-    app = get_app()
-    data = request.get_json(force=True)
-    model = (data.get("model") or "").strip()
-    prompt = (data.get("prompt") or "").strip()
-    persona_id = (data.get("persona_id") or "").strip()
-    purpose = (data.get("purpose") or "square").strip()
+def generate_image_payload(app, name: str, data: dict) -> dict:
+    """Generate one validated image response without coupling it to a route."""
+    model = str(data.get("model") or "").strip()
+    prompt = str(data.get("prompt") or "").strip()
+    persona_id = str(data.get("persona_id") or "").strip()
+    purpose = str(data.get("purpose") or "square").strip()
     if purpose not in {"square", "avatar", "moments_cover"}:
-        return jsonify({"error": "不支持的图片用途"}), 400
-
+        raise ImageGenerationRequestError("不支持的图片用途")
     if not model:
-        return jsonify({"error": "请选择模型"}), 400
+        raise ImageGenerationRequestError("请选择模型")
     if not prompt:
-        return jsonify({"error": "请输入提示词"}), 400
+        raise ImageGenerationRequestError("请输入提示词")
 
     try:
-        resp = generate_configured_image(
+        response = generate_configured_image(
             app,
             provider_name=name,
             model=model,
@@ -349,20 +346,33 @@ def test_image_provider(name: str):
             persona_id=persona_id,
             purpose=purpose,
         )
-    except ImageConfigurationError as e:
-        return jsonify({"error": str(e)}), e.status_code
-    except ImageGenerationError as e:
-        status = e.status_code or 502
+    except ImageConfigurationError as exc:
+        raise ImageGenerationRequestError(str(exc), status_code=exc.status_code) from exc
+    except ImageGenerationError as exc:
+        status = exc.status_code or 502
         if status < 400 or status >= 600:
             status = 502
-        return jsonify({"error": str(e)}), status
-    except Exception as e:
+        raise ImageGenerationRequestError(str(exc), status_code=status) from exc
+    except Exception as exc:
         logger.exception("生图测试调用失败: name=%s model=%s", name, model)
-        return jsonify({"error": f"调用失败: {e}"}), 500
+        raise ImageGenerationRequestError(f"调用失败: {exc}", status_code=500) from exc
 
-    return jsonify({
+    return {
         "ok": True,
-        "image_b64": base64.b64encode(resp.image_data).decode("ascii"),
-        "mime_type": _normalize_image_mime_type(resp.mime_type),
-        "seed_used": resp.seed_used,
-    })
+        "image_b64": base64.b64encode(response.image_data).decode("ascii"),
+        "mime_type": _normalize_image_mime_type(response.mime_type),
+        "seed_used": response.seed_used,
+    }
+
+
+# ---- Test invocation -----------------------------------------------------
+
+@api_image_providers_bp.route("/<name>/_test", methods=["POST"])
+@api_image_providers_bp.route("/<name>/generate", methods=["POST"])
+def test_image_provider(name: str):
+    """Invoke the configured provider and return the generated image inline."""
+    data = request.get_json(force=True)
+    try:
+        return jsonify(generate_image_payload(get_app(), name, data))
+    except ImageGenerationRequestError as exc:
+        return jsonify({"error": str(exc)}), exc.status_code

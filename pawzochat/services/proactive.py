@@ -479,7 +479,7 @@ class ProactiveService:
     def _persona_proactive_cfg(self, persona_id: str) -> dict | None:
         personas_cfg = self._app.config.get("personas", default={}) or {}
         pcfg = personas_cfg.get(persona_id)
-        if not isinstance(pcfg, dict):
+        if not isinstance(pcfg, dict) or not pcfg.get("enabled", True):
             return None
         raw = pcfg.get("proactive") or {}
         merged: dict = {

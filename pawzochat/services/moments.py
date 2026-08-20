@@ -360,7 +360,8 @@ class MomentsService:
         counter_pending = False
         if target_author and target_author != "user":
             personas = self._config.load_personas()
-            if target_author in personas:
+            target = personas.get(target_author)
+            if target is not None and target.enabled:
                 self._counter_reply_queue.put((moment_id, target_author, reply_id))
                 counter_pending = True
 
@@ -569,7 +570,7 @@ class MomentsService:
             if not isinstance(pid, str) or not pid or pid in seen:
                 continue
             persona = personas.get(pid)
-            if persona is None:
+            if persona is None or not persona.enabled:
                 continue
             if not persona.llm_provider or not persona.llm_model:
                 continue

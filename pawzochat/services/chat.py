@@ -1288,5 +1288,8 @@ class ChatService:
     def _resolve_persona(self, persona_id: str):
         personas = self.config.load_personas()
         if persona_id in personas:
-            return personas[persona_id]
+            persona = personas[persona_id]
+            if not persona.enabled:
+                raise ValueError(f"人物已停用: {persona_id}")
+            return persona
         raise ValueError(f"Persona not found: {persona_id}")

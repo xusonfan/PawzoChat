@@ -52,6 +52,7 @@ APP_HOME = _detect_app_home()
 DATA_DIR = (APP_HOME / "data").resolve()
 USER_DATA_DIR = _user_data_dir()
 
+ADMIN_DIR = DATA_DIR / "admin"
 AUTH_DIR = DATA_DIR / "auth"
 BOOKS_DIR = DATA_DIR / "books"
 CERTS_DIR = DATA_DIR / "certs"
@@ -72,6 +73,7 @@ THEME_DIR = DATA_DIR / "theme"
 PUSH_DIR = DATA_DIR / "push"
 
 MOMENTS_STORE_PATH = MOMENTS_DIR / "moments.json"
+PROMPT_TEMPLATES_PATH = ADMIN_DIR / "prompt_templates.json"
 PUSH_SUBSCRIPTIONS_PATH = PUSH_DIR / "subscriptions.json"
 PUSH_VAPID_PRIVATE_KEY_PATH = PUSH_DIR / "vapid_private.pem"
 

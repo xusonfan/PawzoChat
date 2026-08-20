@@ -253,6 +253,7 @@ def list_personas():
         sort_key, initial = persona_sort_metadata(p.name)
         result.append({
             "id": pid,
+            "enabled": p.enabled,
             "name": p.name,
             "sort_key": sort_key,
             "initial": initial,
@@ -295,6 +296,7 @@ def get_persona(persona_id: str):
     link = app.conversation_store.channel_link(persona_id) or {}
     return jsonify({
         "id": p.id,
+        "enabled": p.enabled,
         "name": p.name,
         "signature": p.signature,
         "llm_provider": p.llm_provider,
@@ -409,6 +411,7 @@ def create_persona():
         _persist_image_prompts(app, persona_id, ig_cfg)
 
         personas_cfg[persona_id] = {
+            "enabled": bool(data.get("enabled", True)),
             "name": name,
             "signature": signature,
             "llm_provider": data.get("llm_provider", ""),
@@ -473,6 +476,8 @@ def update_persona(persona_id: str):
             if signature_err:
                 return jsonify({"error": signature_err}), 400
 
+        if "enabled" in data:
+            cfg["enabled"] = bool(data["enabled"])
         if "name" in data:
             cfg["name"] = new_name
         if "signature" in data:

@@ -41,6 +41,14 @@ api_persona_writer_bp = Blueprint("api_persona_writer", __name__)
 MAX_REQUEST_LEN = 2000
 MAX_PERSONA_TYPE_LEN = 50
 
+
+class PersonaWriterError(ValueError):
+    """A validated persona-generation failure suitable for API responses."""
+
+    def __init__(self, message: str, *, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
 # Internal, hidden generation-guidance prompt. The user never sees or edits
 # this — the only "system prompt" the user can edit on the page is the created
 # persona's own [系统指令] section. The model is asked to emit a single JSON
@@ -368,31 +376,24 @@ def recommendations():
     return jsonify({"ok": True, "recommendations": result})
 
 
-@api_persona_writer_bp.route("/generate", methods=["POST"])
-def generate():
-    app = get_app()
-    payload = request.get_json(force=True, silent=True)
-    data = payload if isinstance(payload, dict) else {}
+def generate_persona_draft(app, data: dict) -> dict:
+    """Generate and normalize an editable persona draft without persisting it."""
     provider = _payload_text(data, "provider")
     model = _payload_text(data, "model")
     user_request = _payload_text(data, "request")
 
     if not provider or not model:
-        return jsonify({"error": "请先选择服务商与模型"}), 400
+        raise PersonaWriterError("请先选择服务商与模型")
     if not user_request:
-        return jsonify({"error": "请输入生成需求"}), 400
+        raise PersonaWriterError("请输入生成需求")
     if len(user_request) > MAX_REQUEST_LEN:
-        return jsonify({"error": f"需求描述过长（最多 {MAX_REQUEST_LEN} 字）"}), 400
+        raise PersonaWriterError(f"需求描述过长（最多 {MAX_REQUEST_LEN} 字）")
     if app.chat_service is None:
-        return jsonify({"error": "对话服务尚未就绪"}), 503
+        raise PersonaWriterError("对话服务尚未就绪", status_code=503)
     if app.llm_manager.get_provider(provider) is None:
-        return jsonify({
-            "error": f"服务商「{provider}」不可用，请检查服务商配置与 API Key",
-        }), 400
+        raise PersonaWriterError(f"服务商「{provider}」不可用，请检查服务商配置与 API Key")
     if not _configured_model_exists(app, provider, model):
-        return jsonify({
-            "error": f"模型「{model}」不在服务商「{provider}」的已配置模型列表中",
-        }), 400
+        raise PersonaWriterError(f"模型「{model}」不在服务商「{provider}」的已配置模型列表中")
 
     try:
         raw = app.chat_service.generate_persona_draft(
@@ -401,17 +402,17 @@ def generate():
             system_prompt=DEFAULT_PERSONA_WRITER_PROMPT,
             user_request=user_request,
         )
-    except Exception:  # model not configured / provider unavailable / tool loop limit exceeded, etc.
+    except Exception as exc:
         logger.exception(
             "人设编写助手生成失败 provider=%s model=%s", provider, model,
         )
-        # Don't echo the raw exception text back to the client (it may contain
-        # internal paths/provider details); the details are already logged, so
-        # this only gives an actionable generic hint.
-        return jsonify({"error": "生成失败，请检查所选模型与服务商配置后重试"}), 500
+        raise PersonaWriterError(
+            "生成失败，请检查所选模型与服务商配置后重试",
+            status_code=500,
+        ) from exc
 
     if not (raw or "").strip():
-        return jsonify({"error": "模型未返回内容，请重试或更换模型"}), 502
+        raise PersonaWriterError("模型未返回内容，请重试或更换模型", status_code=502)
 
     (
         name,
@@ -421,7 +422,7 @@ def generate():
         avatar_prompt,
         background_prompt,
     ) = _parse_persona_draft(raw)
-    return jsonify({
+    return {
         "ok": True,
         "name": name,
         "signature": signature,
@@ -429,4 +430,14 @@ def generate():
         "output_examples": output_examples,
         "avatar_prompt": avatar_prompt,
         "background_prompt": background_prompt,
-    })
+    }
+
+
+@api_persona_writer_bp.route("/generate", methods=["POST"])
+def generate():
+    payload = request.get_json(force=True, silent=True)
+    data = payload if isinstance(payload, dict) else {}
+    try:
+        return jsonify(generate_persona_draft(get_app(), data))
+    except PersonaWriterError as exc:
+        return jsonify({"error": str(exc)}), exc.status_code

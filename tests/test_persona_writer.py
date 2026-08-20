@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import copy
 import json
 import unittest
+from types import SimpleNamespace
 
+from pawzochat.core.config import ConfigManager, DEFAULTS
 from pawzochat.web.routes.api_persona_writer import (
     RADAR_RECOMMENDATION_PROMPT,
+    PersonaWriterError,
     _apply_radar_type,
     _parse_persona_draft,
     _parse_radar_recommendations,
     _radar_generation_context,
+    generate_persona_draft,
 )
 
 
@@ -50,6 +55,62 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
     def test_legacy_markers_leave_new_fields_empty(self):
         result = _parse_persona_draft("[人设设定]\n角色设定\n[输出示例]\n你好\\再见")
         self.assertEqual(result, ("", "", "角色设定", "你好\\再见", "", ""))
+
+    def test_shared_generation_service_returns_editable_draft(self):
+        config = ConfigManager()
+        config._data = copy.deepcopy(DEFAULTS)
+        config._data["llm_providers"] = {
+            "writer": {"models": [{"id": "creative-model"}]},
+        }
+
+        class LLMManager:
+            @staticmethod
+            def get_provider(name):
+                return object() if name == "writer" else None
+
+        class ChatService:
+            @staticmethod
+            def generate_persona_draft(**kwargs):
+                self.assertEqual(kwargs["provider"], "writer")
+                self.assertEqual(kwargs["model"], "creative-model")
+                return json.dumps({
+                    "name": "雾港守灯人",
+                    "signature": "守住最后一束光",
+                    "character_prompt": "完整人设",
+                    "output_examples": ["今晚\\雾很大"],
+                    "avatar_prompt": "银发守灯人",
+                    "background_prompt": "雾港灯塔",
+                }, ensure_ascii=False)
+
+        app = SimpleNamespace(
+            config=config,
+            llm_manager=LLMManager(),
+            chat_service=ChatService(),
+        )
+        result = generate_persona_draft(app, {
+            "provider": "writer",
+            "model": "creative-model",
+            "request": "创作一名守灯人",
+        })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["name"], "雾港守灯人")
+        self.assertEqual(result["avatar_prompt"], "银发守灯人")
+
+    def test_shared_generation_service_validates_model(self):
+        config = ConfigManager()
+        config._data = copy.deepcopy(DEFAULTS)
+        app = SimpleNamespace(
+            config=config,
+            llm_manager=SimpleNamespace(get_provider=lambda _name: None),
+            chat_service=object(),
+        )
+        with self.assertRaisesRegex(PersonaWriterError, "不可用"):
+            generate_persona_draft(app, {
+                "provider": "missing",
+                "model": "model",
+                "request": "创作人物",
+            })
 
     def test_parses_radar_recommendations(self):
         raw = json.dumps({

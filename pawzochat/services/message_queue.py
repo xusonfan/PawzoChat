@@ -162,6 +162,13 @@ class MessageQueue:
         self._lock = threading.Lock()
         self._running = False
 
+    def _persona_enabled(self, persona_id: str) -> bool:
+        config = getattr(self._app, "config", None)
+        if config is None:
+            return True
+        persona_cfg = (config.get("personas", default={}) or {}).get(persona_id)
+        return isinstance(persona_cfg, dict) and bool(persona_cfg.get("enabled", True))
+
     def start(self) -> None:
         self._running = True
         threading.Thread(
@@ -412,6 +419,8 @@ class MessageQueue:
 
     def regenerate_reply(self, persona_id: str, message_seq: int) -> str:
         """Replace replies after the latest user turn and process that turn again."""
+        if not self._persona_enabled(persona_id):
+            return "disabled"
         with self._lock:
             queue = self._queues.get(persona_id)
             if queue is None:
@@ -442,6 +451,8 @@ class MessageQueue:
 
     def retry_reply(self, persona_id: str, message_seq: int) -> str:
         """Retry the unanswered latest user turn without storing it again."""
+        if not self._persona_enabled(persona_id):
+            return "disabled"
         conversation = self._app.conversation_store.get_conversation(persona_id)
         if conversation is None:
             return "not_found"
@@ -646,6 +657,16 @@ class MessageQueue:
             if stored_count == 0:
                 return
             broadcast("new_message", persona_id=persona_id)
+            if not self._persona_enabled(persona_id):
+                logger.info("人物已停用，消息仅保存不生成回复 persona=%s", persona_id)
+                if reply_ctx.get("channel", "web") == "web":
+                    broadcast(
+                        "operation_error",
+                        persona_id=persona_id,
+                        title="人物已停用",
+                        message="消息已保存，但该人物当前不会生成回复。",
+                    )
+                return
             if stored_count < n_pending:
                 return
 

@@ -22,6 +22,8 @@ import json
 import logging
 import os
 import secrets
+import threading
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -131,6 +133,8 @@ def create_app(app_instance: App) -> Flask:
     flask_app.config["SESSION_COOKIE_SECURE"] = bool(
         app_instance.config.get("web", "public_enabled", default=False)
     )
+    admin_login_state = {"failures": 0, "locked_until": 0.0}
+    admin_login_lock = threading.Lock()
 
     # ---- Auth middleware ----
 
@@ -151,10 +155,32 @@ def create_app(app_instance: App) -> Flask:
         return redirect(url_for("login"))
 
     @flask_app.before_request
+    def require_admin_login():
+        path = request.path
+        is_admin_page = path == "/admin" or path.startswith("/admin/")
+        is_admin_api = path.startswith("/api/admin")
+        if not is_admin_page and not is_admin_api:
+            return None
+        if path in ("/admin/login", "/admin/logout"):
+            return None
+
+        configured = bool(app_instance.config.get("admin", "password", default=""))
+        if not configured:
+            if is_admin_api:
+                return {"error": "admin_password_not_configured"}, 503
+            return redirect(url_for("admin_login"))
+        if session.get("admin_authenticated"):
+            return None
+        if is_admin_api:
+            return {"error": "admin_unauthorized"}, 401
+        return redirect(url_for("admin_login"))
+
+    @flask_app.before_request
     def require_same_origin_for_public_writes():
         if request.method not in _STATEFUL_METHODS:
             return None
-        if not request.environ.get("pawzochat.is_public", False):
+        is_admin_write = request.path.startswith("/api/admin")
+        if not request.environ.get("pawzochat.is_public", False) and not is_admin_write:
             return None
         if request.path == "/login":
             return None
@@ -228,6 +254,72 @@ def create_app(app_instance: App) -> Flask:
     def logout():
         session.clear()
         return redirect(url_for("login"))
+
+    @flask_app.route("/admin/login", methods=["GET", "POST"])
+    def admin_login():
+        stored_password = app_instance.config.get("admin", "password", default="")
+
+        def render_admin_login(error=None):
+            token = secrets.token_hex(32)
+            session["admin_csrf_token"] = token
+            return render_template(
+                "admin_login.html",
+                error=error,
+                csrf_token=token,
+                configured=bool(stored_password),
+            )
+
+        if request.method == "GET":
+            if session.get("admin_authenticated") and stored_password:
+                return redirect(url_for("admin_index"))
+            return render_admin_login()
+
+        submitted_token = request.form.get("csrf_token", "")
+        expected_token = session.get("admin_csrf_token", "")
+        if (
+            not submitted_token
+            or not expected_token
+            or not secrets.compare_digest(submitted_token, expected_token)
+        ):
+            return render_admin_login("请求无效，请刷新页面重试")
+        if not stored_password:
+            return render_admin_login("请先从本地面板的网络设置中设置管理员密码")
+
+        now = time.monotonic()
+        with admin_login_lock:
+            locked_until = admin_login_state["locked_until"]
+        if now < locked_until:
+            wait_seconds = max(1, int(locked_until - now))
+            return render_admin_login(f"登录尝试过多，请在 {wait_seconds} 秒后重试")
+
+        submitted_password = request.form.get("password", "")
+        if verify_password(submitted_password, stored_password):
+            with admin_login_lock:
+                admin_login_state.update(failures=0, locked_until=0.0)
+            session.permanent = True
+            session.pop("admin_csrf_token", None)
+            session["admin_authenticated"] = True
+            return redirect(url_for("admin_index"))
+
+        with admin_login_lock:
+            admin_login_state["failures"] += 1
+            failures = admin_login_state["failures"]
+            if failures >= 5:
+                admin_login_state.update(failures=0, locked_until=now + 300)
+        error = "密码错误"
+        if failures >= 5:
+            error = "登录尝试过多，已锁定 5 分钟"
+        return render_admin_login(error)
+
+    @flask_app.route("/admin/logout")
+    def admin_logout():
+        session.pop("admin_authenticated", None)
+        session.pop("admin_csrf_token", None)
+        return redirect(url_for("admin_login"))
+
+    @flask_app.route("/admin")
+    def admin_index():
+        return render_template("admin.html")
 
     # ---- PWA / Static files ----
 
@@ -322,6 +414,7 @@ def create_app(app_instance: App) -> Flask:
     from pawzochat.web.routes.api_image_gallery import api_image_gallery_bp
     from pawzochat.web.routes.api_voice_providers import api_voice_providers_bp
     from pawzochat.web.routes.api_accounts import api_accounts_bp
+    from pawzochat.web.routes.api_admin import api_admin_bp
     from pawzochat.web.routes.api_asr import api_asr_bp
     from pawzochat.web.routes.api_emoji import api_emoji_bp
     from pawzochat.web.routes.api_sticker_maker import api_sticker_maker_bp
@@ -344,6 +437,7 @@ def create_app(app_instance: App) -> Flask:
     flask_app.register_blueprint(api_image_gallery_bp, url_prefix="/api/image-gallery")
     flask_app.register_blueprint(api_voice_providers_bp, url_prefix="/api/voice-providers")
     flask_app.register_blueprint(api_accounts_bp, url_prefix="/api/accounts")
+    flask_app.register_blueprint(api_admin_bp, url_prefix="/api/admin")
     flask_app.register_blueprint(api_asr_bp, url_prefix="/api/asr")
     flask_app.register_blueprint(api_emoji_bp, url_prefix="/api/emoji")
     flask_app.register_blueprint(api_sticker_maker_bp, url_prefix="/api/emoji")

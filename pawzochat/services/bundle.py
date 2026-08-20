@@ -73,6 +73,8 @@ def _persona_config_from(persona: Persona) -> dict:
     """Serialise the Persona-level config that lives in config.yaml."""
     return {
         "name": persona.name,
+        "signature": persona.signature,
+        "enabled": persona.enabled,
         "llm_provider": persona.llm_provider,
         "llm_model": persona.llm_model,
         "temperature": persona.temperature,

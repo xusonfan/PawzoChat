@@ -285,6 +285,7 @@ class Account:
 @dataclass
 class Persona:
     id: str = ""
+    enabled: bool = True
     name: str = ""
     signature: str = ""
     character_prompt: str = ""

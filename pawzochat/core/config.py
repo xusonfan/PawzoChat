@@ -86,6 +86,9 @@ DEFAULTS: dict = {
         "public_port": 0,
         "public_secret": "",
     },
+    "admin": {
+        "password": "",
+    },
     "theme": {
         "mode": "light",       # "light" | "dark" | "auto"
         "active": [],          # ordered list of theme folder names to layer
@@ -411,6 +414,7 @@ class ConfigManager:
 
             result[pid] = Persona(
                 id=pid,
+                enabled=bool(pdata.get("enabled", True)),
                 name=name,
                 signature=str(pdata.get("signature", "") or ""),
                 character_prompt=character,
