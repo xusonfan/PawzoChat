@@ -16,8 +16,10 @@ import ipaddress
 import logging
 import os
 import re
+import secrets
 import socket
 import tempfile
+import threading
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -32,6 +34,8 @@ _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _MAX_IMAGES_PER_MESSAGE = 8
 _MAX_REDIRECTS = 4
 _REQUEST_TIMEOUT = (4, 12)
+_URL_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_URL_LOCKS_GUARD = threading.Lock()
 
 # Clash/Mihomo 等透明代理默认会把公网域名映射到基准测试网段，实际连接仍由
 # 代理转发到公网。只兼容这个无真实主机语义的专用网段；RFC1918、回环、链路本地
@@ -188,7 +192,41 @@ def _images_dir(persona_id: str) -> Path | None:
     return resolved
 
 
+def _cached_remote_image(persona_id: str, url: str) -> dict | None:
+    directory = _images_dir(persona_id)
+    if directory is None or not directory.is_dir():
+        return None
+
+    prefix = f"remote_url_{hashlib.sha256(url.encode('utf-8')).hexdigest()[:24]}."
+    try:
+        matches = [
+            path for path in directory.glob(f"{prefix}*")
+            if path.is_file() and path.stat().st_size > 0
+        ]
+    except OSError:
+        return None
+    if not matches:
+        return None
+
+    output = matches[0]
+    mime = next(
+        (candidate_mime for candidate_mime, extension in _FORMATS.values()
+         if extension == output.suffix.lstrip(".").lower()),
+        "application/octet-stream",
+    )
+    return {
+        "type": "image",
+        "path": str(output),
+        "mime": mime,
+        "original_url": url,
+    }
+
+
 def _save_remote_image(persona_id: str, url: str) -> dict | None:
+    cached = _cached_remote_image(persona_id, url)
+    if cached is not None:
+        return cached
+
     downloaded = _download_image(url)
     if downloaded is None:
         return None
@@ -197,8 +235,8 @@ def _save_remote_image(persona_id: str, url: str) -> dict | None:
     if directory is None:
         return None
 
-    digest = hashlib.sha256(raw).hexdigest()
-    filename = f"remote_{digest[:24]}.{extension}"
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    filename = f"remote_url_{digest[:24]}.{extension}"
     output = directory / filename
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -235,6 +273,79 @@ def _image_references(text: str) -> list[tuple[int, int, str]]:
             references.append((start, end, url.rstrip(")]}>，。！？；：、,.!?;:")))
     references.sort(key=lambda item: item[0])
     return references
+
+
+def prepare_external_images(
+    persona_id: str,
+    content: list[dict],
+) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Return immediately renderable content plus deferred cache jobs.
+
+    Cached URLs become local image blocks. Cache misses remain directly
+    renderable through their remote URL and are tagged so a background worker
+    can replace them in-place after persistence.
+    """
+    result: list[dict] = []
+    jobs: list[tuple[str, str]] = []
+    resolved: dict[str, dict | None] = {}
+
+    def prepared(url: str) -> dict:
+        if url not in resolved:
+            resolved[url] = _cached_remote_image(persona_id, url)
+        entry = resolved[url]
+        if entry is not None:
+            return dict(entry)
+        task_id = secrets.token_hex(8)
+        jobs.append((task_id, url))
+        return {
+            "type": "image",
+            "url": url,
+            "original_url": url,
+            "task_id": task_id,
+        }
+
+    queued_count = 0
+    for source_block in content:
+        block = dict(source_block)
+        block_type = block.get("type")
+
+        if block_type == "image" and isinstance(block.get("url"), str):
+            url = block["url"].strip()
+            if url.startswith(("http://", "https://")) and queued_count < _MAX_IMAGES_PER_MESSAGE:
+                result.append(prepared(url))
+                queued_count += 1
+                continue
+
+        if block_type != "text" or not isinstance(block.get("text"), str):
+            result.append(block)
+            continue
+
+        text = block["text"]
+        references = _image_references(text)[:_MAX_IMAGES_PER_MESSAGE - queued_count]
+        if not references:
+            result.append(block)
+            continue
+
+        cursor = 0
+        for start, end, url in references:
+            if start > cursor:
+                result.append({"type": "text", "text": text[cursor:start]})
+            result.append(prepared(url))
+            queued_count += 1
+            cursor = end
+        if cursor < len(text):
+            result.append({"type": "text", "text": text[cursor:]})
+
+    return result, jobs
+
+
+def cache_external_image(persona_id: str, url: str) -> dict | None:
+    """Cache one external image, reusing a prior URL-keyed local file."""
+    key = (persona_id, url)
+    with _URL_LOCKS_GUARD:
+        lock = _URL_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        return _save_remote_image(persona_id, url)
 
 
 def cache_external_images(persona_id: str, content: list[dict]) -> list[dict]:

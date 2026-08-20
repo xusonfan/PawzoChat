@@ -19,10 +19,16 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from typing import TYPE_CHECKING
 
 from pawzochat.core.extensions.hooks import ReplyPreSendEvent, ReplySentEvent
-from pawzochat.services.image_cache import cache_external_images
+from pawzochat.services.image_cache import (
+    cache_external_image,
+    cache_external_images,
+    prepare_external_images,
+)
 from pawzochat.utils.message_text import clean_assistant_reply_text
 from pawzochat.web.sse import broadcast
 
@@ -37,6 +43,12 @@ class ReplyDispatcher:
 
     def __init__(self, app: App):
         self._app = app
+        self._image_cache_queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
+        threading.Thread(
+            target=self._image_cache_worker,
+            name="external-image-cache",
+            daemon=True,
+        ).start()
 
     def deliver_messages(
         self,
@@ -68,10 +80,17 @@ class ReplyDispatcher:
                 continue
 
             message = self._normalize_message(pre_send.message)
-            message["content"] = cache_external_images(
-                persona_id,
-                message.get("content", []),
-            )
+            cache_jobs: list[tuple[str, str]] = []
+            if channel == "web":
+                message["content"], cache_jobs = prepare_external_images(
+                    persona_id,
+                    message.get("content", []),
+                )
+            else:
+                message["content"] = cache_external_images(
+                    persona_id,
+                    message.get("content", []),
+                )
             stored = self._app.conversation_store.add_message(
                 persona_id,
                 message.get("role", "assistant"),
@@ -107,6 +126,9 @@ class ReplyDispatcher:
                 is_last=is_last,
                 unread_count=self._app.conversation_store.unread_count(persona_id),
             )
+            if cache_jobs:
+                for task_id, url in cache_jobs:
+                    self._image_cache_queue.put((persona_id, task_id, url))
             if self._app.web_push_service:
                 self._app.web_push_service.send_assistant_message(
                     persona_id=persona_id,
@@ -136,6 +158,33 @@ class ReplyDispatcher:
 
         broadcast("conversation_updated", persona_id=persona_id)
         return delivered_messages
+
+    def _image_cache_worker(self) -> None:
+        while True:
+            persona_id, task_id, url = self._image_cache_queue.get()
+            try:
+                replacement = cache_external_image(persona_id, url)
+                if replacement is None:
+                    continue
+                updated = self._app.conversation_store.replace_pending_image(
+                    persona_id,
+                    task_id,
+                    replacement,
+                )
+                if updated is not None:
+                    broadcast(
+                        "assistant_message_updated",
+                        persona_id=persona_id,
+                        message=updated,
+                    )
+            except Exception:
+                logger.exception(
+                    "后台缓存外链图片失败 persona=%s url=%s",
+                    persona_id,
+                    url,
+                )
+            finally:
+                self._image_cache_queue.task_done()
 
     @staticmethod
     def _normalize_message(message: dict) -> dict:

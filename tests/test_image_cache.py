@@ -66,6 +66,46 @@ class ExternalImageCacheTests(unittest.TestCase):
             self.assertEqual(len(images), 2)
             self.assertEqual(images[0]["path"], images[1]["path"])
 
+    def test_prepare_external_images_returns_remote_url_without_downloading(self):
+        with (
+            patch.object(image_cache, "_cached_remote_image", return_value=None),
+            patch.object(image_cache, "_download_image") as download,
+            patch.object(image_cache.secrets, "token_hex", return_value="0123456789abcdef"),
+        ):
+            content, jobs = image_cache.prepare_external_images(
+                "persona-a",
+                [{"type": "text", "text": "前文 ![示例](https://cdn.example/a.png) 后文"}],
+            )
+
+        download.assert_not_called()
+        self.assertEqual(content[0], {"type": "text", "text": "前文 "})
+        self.assertEqual(content[1], {
+            "type": "image",
+            "url": "https://cdn.example/a.png",
+            "original_url": "https://cdn.example/a.png",
+            "task_id": "0123456789abcdef",
+        })
+        self.assertEqual(content[2], {"type": "text", "text": " 后文"})
+        self.assertEqual(jobs, [("0123456789abcdef", "https://cdn.example/a.png")])
+
+    def test_url_keyed_file_skips_repeated_download(self):
+        url = "https://cdn.example/a.png"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            digest = image_cache.hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
+            cached_path = directory / f"remote_url_{digest}.png"
+            cached_path.write_bytes(self._png_bytes())
+            with (
+                patch.object(image_cache, "_images_dir", return_value=directory),
+                patch.object(image_cache, "_download_image") as download,
+            ):
+                result = image_cache.cache_external_image("persona-a", url)
+
+        download.assert_not_called()
+        self.assertEqual(result["path"], str(cached_path))
+        self.assertEqual(result["mime"], "image/png")
+        self.assertEqual(result["original_url"], url)
+
     def test_failed_download_preserves_original_text(self):
         original = [{
             "type": "text",
