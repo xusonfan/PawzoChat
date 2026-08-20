@@ -21,6 +21,8 @@ let toastTimer = null;
 let overlayCloseTimer = null;
 let overlayHistoryToken = "";
 let overlayHistorySequence = 0;
+let overlayHistoryClosePromise = null;
+let overlayHistoryCloseResolve = null;
 const OVERLAY_HISTORY_KEY = "pawzoOverlay";
 
 export function toast(msg, type = "info") {
@@ -84,6 +86,7 @@ export function showSheet(html, onClose) {
 }
 
 export function closeOverlay({ fromHistory = false } = {}) {
+  if (!fromHistory && overlayHistoryClosePromise) return overlayHistoryClosePromise;
   const ownsHistoryEntry = !!overlayHistoryToken
     && history.state?.[OVERLAY_HISTORY_KEY]?.token === overlayHistoryToken;
   overlayHistoryToken = "";
@@ -97,14 +100,23 @@ export function closeOverlay({ fromHistory = false } = {}) {
   const cb = _onOverlayClose;
   _onOverlayClose = null;
   if (cb) cb();
-  if (!fromHistory && ownsHistoryEntry) history.back();
+  if (!fromHistory && ownsHistoryEntry) {
+    overlayHistoryClosePromise = new Promise(resolve => { overlayHistoryCloseResolve = resolve; });
+    history.back();
+    return overlayHistoryClosePromise;
+  }
+  return Promise.resolve();
 }
 
 globalThis.window?.addEventListener?.("popstate", event => {
-  if (!overlayHistoryToken) return;
-  const currentToken = event.state?.[OVERLAY_HISTORY_KEY]?.token;
-  if (currentToken === overlayHistoryToken) return;
-  closeOverlay({ fromHistory: true });
+  if (overlayHistoryToken) {
+    const currentToken = event.state?.[OVERLAY_HISTORY_KEY]?.token;
+    if (currentToken !== overlayHistoryToken) closeOverlay({ fromHistory: true });
+  }
+  const resolve = overlayHistoryCloseResolve;
+  overlayHistoryClosePromise = null;
+  overlayHistoryCloseResolve = null;
+  if (resolve) setTimeout(resolve, 0);
 });
 
 let loadingTimer = null;

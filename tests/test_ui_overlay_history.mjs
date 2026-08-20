@@ -58,10 +58,18 @@ assert.equal(elements.get("overlay").classList.contains("show"), false);
 assert.equal(closes, 1);
 assert.equal(backs, 0);
 
-// 点击取消关闭时应消费弹层自己的历史项。
+// 点击取消关闭时应消费弹层自己的历史项，并在 popstate 完成后才允许后续导航。
 ui.showSheet("<div>再次打开</div>");
 assert.equal(pushes, 2);
-ui.closeOverlay();
+let historyClosed = false;
+const closeResult = ui.closeOverlay().then(() => { historyClosed = true; });
 assert.equal(backs, 1);
+await Promise.resolve();
+assert.equal(historyClosed, false, "history.back 尚未生效时不能开始后续导航");
+windowListeners.get("popstate")?.({ state: baseState });
+await Promise.resolve();
+assert.equal(historyClosed, false, "后续导航必须等当前 popstate 分发完成");
+await closeResult;
+assert.equal(historyClosed, true, "popstate 后应解除后续导航等待");
 
 console.log("overlay history tests passed");

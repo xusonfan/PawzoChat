@@ -592,9 +592,9 @@ async function renderSettingsProviders() {
 export function openProviderTypeSheet() {
   const ids = Object.keys(_providerPresets);
   const items = ids.map(id =>
-    `<div class="sheet-item" onclick="PawzoChat.closeOverlay();PawzoChat.pushPage('providerEdit',{isNew:true,preset:'${esc(id)}'})">${esc(_presetLabel(id))}</div>`
+    `<div class="sheet-item" onclick="PawzoChat.closeOverlay().then(()=>PawzoChat.pushPage('providerEdit',{isNew:true,preset:'${esc(id)}'}))">${esc(_presetLabel(id))}</div>`
   ).join("");
-  const customItem = `<div class="sheet-item" onclick="PawzoChat.closeOverlay();PawzoChat.pushPage('providerEdit',{isNew:true,preset:'custom'})">${esc(_PRESET_LABELS.custom)}</div>`;
+  const customItem = `<div class="sheet-item" onclick="PawzoChat.closeOverlay().then(()=>PawzoChat.pushPage('providerEdit',{isNew:true,preset:'custom'}))">${esc(_PRESET_LABELS.custom)}</div>`;
   showSheet(`<div class="sheet-title">选择对话服务商类型</div>${items}${customItem}<div class="sheet-cancel" onclick="PawzoChat.closeOverlay()">取消</div>`);
 }
 
@@ -1133,9 +1133,9 @@ async function renderSettingsImageProviders() {
 export function openImageProviderTypeSheet() {
   const ids = Object.keys(_imageProviderPresets);
   const items = ids.map(id =>
-    `<div class="sheet-item" onclick="PawzoChat.closeOverlay();PawzoChat.pushPage('imageProviderEdit',{isNew:true,preset:'${esc(id)}'})">${esc(_imagePresetLabel(id))}</div>`
+    `<div class="sheet-item" onclick="PawzoChat.closeOverlay().then(()=>PawzoChat.pushPage('imageProviderEdit',{isNew:true,preset:'${esc(id)}'}))">${esc(_imagePresetLabel(id))}</div>`
   ).join("");
-  const customItem = `<div class="sheet-item" onclick="PawzoChat.closeOverlay();PawzoChat.pushPage('imageProviderEdit',{isNew:true,preset:'custom'})">${esc(_IMAGE_PRESET_LABELS.custom)}</div>`;
+  const customItem = `<div class="sheet-item" onclick="PawzoChat.closeOverlay().then(()=>PawzoChat.pushPage('imageProviderEdit',{isNew:true,preset:'custom'}))">${esc(_IMAGE_PRESET_LABELS.custom)}</div>`;
   showSheet(`<div class="sheet-title">选择生图服务商类型</div>${items}${customItem}<div class="sheet-cancel" onclick="PawzoChat.closeOverlay()">取消</div>`);
 }
 
@@ -1708,9 +1708,9 @@ async function renderSettingsVoiceProviders() {
 export function openVoiceProviderTypeSheet() {
   const ids = Object.keys(_voiceProviderPresets);
   const items = ids.map(id =>
-    `<div class="sheet-item" onclick="PawzoChat.closeOverlay();PawzoChat.pushPage('voiceProviderEdit',{isNew:true,preset:'${esc(id)}'})">${esc(_voicePresetLabel(id))}</div>`
+    `<div class="sheet-item" onclick="PawzoChat.closeOverlay().then(()=>PawzoChat.pushPage('voiceProviderEdit',{isNew:true,preset:'${esc(id)}'}))">${esc(_voicePresetLabel(id))}</div>`
   ).join("");
-  const customItem = `<div class="sheet-item" onclick="PawzoChat.closeOverlay();PawzoChat.pushPage('voiceProviderEdit',{isNew:true,preset:'custom'})">自定义 (OpenAI 兼容)</div>`;
+  const customItem = `<div class="sheet-item" onclick="PawzoChat.closeOverlay().then(()=>PawzoChat.pushPage('voiceProviderEdit',{isNew:true,preset:'custom'}))">自定义 (OpenAI 兼容)</div>`;
   showSheet(`<div class="sheet-title">选择语音服务商类型</div>${items}${customItem}<div class="sheet-cancel" onclick="PawzoChat.closeOverlay()">取消</div>`);
 }
 
