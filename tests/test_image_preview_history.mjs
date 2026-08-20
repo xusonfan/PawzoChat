@@ -57,10 +57,12 @@ const modal = {
 };
 
 const documentListeners = new Map();
+const pageImages = [];
 globalThis.document = {
   body: { appendChild() {} },
   createElement() { return modal; },
   getElementById() { return null; },
+  querySelectorAll(selector) { return selector === "img" ? pageImages : []; },
   addEventListener(type, handler) { documentListeners.set(type, handler); },
   removeEventListener(type, handler) {
     if (documentListeners.get(type) === handler) documentListeners.delete(type);
@@ -168,5 +170,29 @@ history.forward();
 assert.equal(image.src, "https://cdn.example.com/two.png");
 assert.equal(modalChildren.get(".ipv-caption").textContent, "第二张图片的提示词");
 history.back();
+
+// 自动收集聊天页照片时应跳过表情，只在普通图片之间切换。
+pageImages.push(
+  {
+    hidden: false,
+    src: "https://cdn.example.com/chat-one.png",
+    closest(selector) { return selector.includes(".msg-image") ? {} : null; },
+  },
+  {
+    hidden: false,
+    src: "https://cdn.example.com/sticker.png",
+    closest(selector) { return selector.includes(".msg-emoji") ? {} : null; },
+  },
+  {
+    hidden: false,
+    src: "https://cdn.example.com/chat-two.png",
+    closest(selector) { return selector.includes(".msg-image") ? {} : null; },
+  },
+);
+openImagePreview("https://cdn.example.com/chat-one.png");
+assert.equal(modalChildren.get(".ipv-counter").textContent, "1 / 2");
+documentListeners.get("keydown")?.({ key: "ArrowRight" });
+assert.equal(image.src, "https://cdn.example.com/chat-two.png");
+closeImagePreview();
 
 console.log("image preview history tests passed");

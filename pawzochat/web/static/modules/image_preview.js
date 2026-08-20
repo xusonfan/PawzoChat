@@ -191,7 +191,7 @@ function _switchImage(delta) {
 function _collectPageSources(src) {
   const candidates = [...(document.querySelectorAll?.("img") || [])]
     .filter(image => !image.hidden && image.src && image !== _imgEl)
-    .filter(image => image.closest?.(".msg-image, .msg-emoji, .he-media, .moments-img, .image-gallery-item, .persona-moments-thumbs"))
+    .filter(image => image.closest?.(".msg-image, .he-media, .moments-img, .image-gallery-item, .persona-moments-thumbs"))
     .map(image => image.src);
   return previewSequence(src, candidates);
 }

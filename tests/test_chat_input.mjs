@@ -39,6 +39,21 @@ assert.match(inputBar, /id="plus-menu-btn"[^>]+aria-label="打开附件面板"/)
 assert.match(inputBar, /id="chat-input"[^>]+enterkeyhint="send"/);
 assert.match(chatSource, /id="emoji-picker-panel"/);
 assert.match(chatSource, /id="plus-menu-panel"/);
+const emojiMessageMarkup = chatSource.match(/return `<div class="msg-emoji">[\s\S]*?<\/div>`;/);
+assert.ok(emojiMessageMarkup, "聊天消息应保留独立的表情渲染结构");
+assert.doesNotMatch(
+  emojiMessageMarkup[0],
+  /openImagePreview|onclick=/,
+  "表情消息不应绑定图片查看或放大行为",
+);
+assert.match(emojiMessageMarkup[0], /draggable="false"/, "表情图片不应允许拖拽");
+assert.match(css, /\.msg-emoji\s*\{[^}]*user-select:\s*none;[^}]*-webkit-tap-highlight-color:\s*transparent;/s);
+assert.match(css, /\.msg-emoji img\s*\{[^}]*pointer-events:\s*none;[^}]*-webkit-user-drag:\s*none;/s);
+assert.match(
+  chatSource,
+  /class="msg-image linked-image"[\s\S]*?onclick="PawzoChat\.openImagePreview\(this\.src\)"/,
+  "普通图片仍应支持点击预览",
+);
 assert.match(
   chatSource,
   /id="chat-new-message-btn" hidden onclick="PawzoChat\.scrollToLatestMessage\(\)"/,

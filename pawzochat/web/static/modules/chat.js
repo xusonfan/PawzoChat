@@ -459,7 +459,7 @@ function renderContentBlocks(content, renderLinkedImages = false) {
       .map(b => {
         const src = base + b.url;
         const layout = imageLayoutAttributes(src, { maxWidth: 160, maxHeight: 160 });
-        return `<div class="msg-emoji"><img src="${escAttr(src)}" alt="emoji" data-message-media${layout} onload="PawzoChat.rememberImageLayout(this)" onclick="PawzoChat.openImagePreview(this.src)"></div>`;
+        return `<div class="msg-emoji"><img src="${escAttr(src)}" alt="emoji" draggable="false" data-message-media${layout} onload="PawzoChat.rememberImageLayout(this)"></div>`;
       })
       .join("");
   }
