@@ -3537,6 +3537,24 @@ select.qs-field-input {
 }
 
 /* ============ History Edit ============ */
+.he-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+#he-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 20px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
 .he-date-bar {
   position: sticky;
   top: 0;

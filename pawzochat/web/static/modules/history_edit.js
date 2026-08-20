@@ -254,21 +254,11 @@ function _renderList() {
 }
 
 function _scrollPage(toBottom) {
-  const ct = content();
-  if (!ct) return;
-  const doScroll = () => { ct.scrollTop = toBottom ? ct.scrollHeight : 0; };
-  requestAnimationFrame(doScroll);
-  if (toBottom) {
-    const list = $("he-list");
-    if (list) {
-      for (const img of list.querySelectorAll("img")) {
-        if (!img.complete) {
-          img.addEventListener("load", doScroll, { once: true });
-        }
-      }
-    }
-    setTimeout(doScroll, 200);
-  }
+  const list = $("he-list");
+  if (!list) return;
+  requestAnimationFrame(() => {
+    list.scrollTop = toBottom ? list.scrollHeight : 0;
+  });
 }
 
 async function _loadDates() {
