@@ -1058,6 +1058,7 @@ body {
 .msg-row.assistant .avatar { margin-right: 8px; }
 .msg-row.user .avatar { margin-left: 8px; }
 .msg-row > div:not(.avatar) { max-width: 70%; }
+.msg-row.user > div:not(.avatar) { position: relative; }
 .msg-bubble {
   padding: 9px 12px;
   font-size: 15px;
@@ -1086,6 +1087,37 @@ body {
   padding: 0 4px;
 }
 .msg-row.user .msg-source { text-align: right; }
+.msg-retry-status {
+  position: absolute;
+  left: -34px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+}
+.msg-retry-status button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+}
+.msg-retry-status button:hover { background: var(--bg-hover); }
+.msg-retry-status button:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+.msg-retry-status button:disabled { cursor: wait; }
+.msg-retry-status .ui-icon { width: 18px; height: 18px; }
+.msg-retry-status.retrying .ui-icon {
+  animation: msg-retry-spin 0.75s linear infinite;
+}
+@keyframes msg-retry-spin { to { transform: rotate(360deg); } }
 /* WeChat-style quoted-message box, shown below a message that quotes another */
 .msg-quote {
   margin-top: 4px;

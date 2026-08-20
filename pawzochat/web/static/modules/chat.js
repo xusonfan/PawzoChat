@@ -85,6 +85,7 @@ let _chatHistory = {
   loadingOlder: false,
   generation: 0,
 };
+const _failedReplies = new Set();
 
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
@@ -1107,6 +1108,21 @@ function _lastRenderedMessageTimestamp(messagesEl) {
   return rows.length ? rows[rows.length - 1].dataset.messageTimestamp : null;
 }
 
+function _failedReplyKey(personaId, messageSeq) {
+  return `${personaId}:${messageSeq}`;
+}
+
+function _retryStatusHtml(personaId, messageSeq) {
+  if (!_failedReplies.has(_failedReplyKey(personaId, messageSeq))) return "";
+  return `
+    <div class="msg-retry-status">
+      <button type="button" data-message-seq="${messageSeq}" onclick="PawzoChat.retryChatReply(this)" title="重试回复" aria-label="重试回复">
+        ${iconHtml("ri-refresh-line")}
+      </button>
+    </div>
+  `;
+}
+
 function renderMessages(messages, { preservePrepend = false } = {}) {
   const el = $("chat-msgs");
   if (!el) return;
@@ -1152,6 +1168,9 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
     const sequenceAttr = sequence
       ? ` data-message-seq="${escAttr(sequence)}"`
       : "";
+    const retryStatus = role === "user" && sequence
+      ? _retryStatusHtml(chatPersonaId, sequence)
+      : "";
 
     html += `<div class="msg-row ${role}"${sequenceAttr} data-message-timestamp="${escAttr(m.timestamp || "")}">
       ${av}
@@ -1159,6 +1178,7 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
         ${bubbleHtml}
         ${renderQuoteBox(m.quote)}
         ${source}
+        ${retryStatus}
       </div>
     </div>`;
   }
@@ -1701,6 +1721,53 @@ function hideTypingIndicator() {
   const pname = state.personas.find(p => p.id === chatPersonaId)?.name || chatPersonaId;
   const el = $("top-bar-title");
   if (el) el.textContent = pname;
+}
+
+export function handleChatOperationError(event) {
+  const personaId = event?.persona_id;
+  const messageSeq = Number(event?.retry_message_seq);
+  if (!personaId || personaId !== chatPersonaId) return;
+
+  hideTypingIndicator();
+  toast(event.message || "消息回复失败", "error");
+  if (!Number.isInteger(messageSeq) || messageSeq <= 0) return;
+  _failedReplies.add(_failedReplyKey(personaId, messageSeq));
+
+  const row = $("chat-msgs")?.querySelector(
+    `.msg-row.user[data-message-seq="${messageSeq}"]`,
+  );
+  const body = row?.querySelector(":scope > div:not(.avatar)");
+  if (!body) return;
+
+  body.querySelector(".msg-retry-status")?.remove();
+  body.insertAdjacentHTML("beforeend", _retryStatusHtml(personaId, messageSeq));
+}
+
+export async function retryChatReply(button) {
+  const personaId = chatPersonaId;
+  const messageSeq = Number(button?.dataset?.messageSeq);
+  const status = button?.closest?.(".msg-retry-status");
+  if (!personaId || !Number.isInteger(messageSeq) || messageSeq <= 0 || !status) return;
+
+  button.disabled = true;
+  status.classList.add("retrying");
+  toast("正在重试…");
+  try {
+    const res = await api.post(
+      `/api/conversations/${encodeURIComponent(personaId)}/messages/${messageSeq}/retry`,
+      {},
+    );
+    if (res.status >= 400) throw new Error(res.data?.error || "重试失败");
+    _failedReplies.delete(_failedReplyKey(personaId, messageSeq));
+    status.remove();
+    state.processingPersonas.add(personaId);
+    showTypingIndicator();
+    toast("已重新发起回复", "success");
+  } catch (e) {
+    status.classList.remove("retrying");
+    button.disabled = false;
+    toast(e.message || "重试失败", "error");
+  }
 }
 
 export function appendAssistantMessage(message, isLast) {

@@ -22,6 +22,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pawzochat.core.extensions.hooks import (
@@ -389,6 +390,120 @@ class MessageQueue:
 
         return message
 
+    def retry_reply(self, persona_id: str, message_seq: int) -> str:
+        """Retry the unanswered latest user turn without storing it again."""
+        conversation = self._app.conversation_store.get_conversation(persona_id)
+        if conversation is None:
+            return "not_found"
+        messages = conversation.get("messages", [])
+        latest = messages[-1] if messages else None
+        if (
+            not latest
+            or latest.get("role") != "user"
+            or latest.get("_seq") != message_seq
+        ):
+            return "not_retryable"
+
+        with self._lock:
+            queue = self._queues.get(persona_id)
+            if queue is None:
+                queue = _PersonaQueue()
+                self._queues[persona_id] = queue
+            if queue.processing or queue.pending_messages:
+                return "busy"
+            queue.processing = True
+
+        threading.Thread(
+            target=self._retry_reply,
+            args=(persona_id, message_seq),
+            daemon=True,
+        ).start()
+        return "ok"
+
+    def _retry_reply(self, persona_id: str, message_seq: int) -> None:
+        try:
+            conversation = self._app.conversation_store.get_conversation(persona_id)
+            messages = conversation.get("messages", []) if conversation else []
+            latest = messages[-1] if messages else None
+            if (
+                not latest
+                or latest.get("role") != "user"
+                or latest.get("_seq") != message_seq
+            ):
+                return
+
+            images: list[dict] = []
+            files: list[dict] = []
+            for block in latest.get("content", []):
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "image" and block.get("path"):
+                    path = Path(block["path"])
+                    if path.is_file():
+                        images.append({
+                            "data": path.read_bytes(),
+                            "path": str(path),
+                            "mime": block.get("mime", "image/jpeg"),
+                        })
+                elif block.get("type") == "file" and block.get("path"):
+                    files.append({
+                        "path": block.get("path", ""),
+                        "name": block.get("name", ""),
+                        "mime": block.get("mime", "application/octet-stream"),
+                    })
+
+            broadcast("processing", persona_id=persona_id)
+            try:
+                drafts = self._app.chat_service.process_round(
+                    persona_id,
+                    images=images or None,
+                    files=files or None,
+                    async_image_generation=True,
+                )
+            except Exception as exc:
+                logger.exception("重试 LLM 调用失败 persona=%s", persona_id)
+                broadcast(
+                    "operation_error",
+                    persona_id=persona_id,
+                    title="消息回复失败",
+                    message=_public_error_message(exc),
+                    retry_message_seq=message_seq,
+                )
+                return
+
+            if self._app.emoji_service:
+                try:
+                    drafts = self._app.emoji_service.compose(persona_id, drafts)
+                except Exception:
+                    logger.exception("表情包生成失败 persona=%s", persona_id)
+
+            compose_event = ReplyComposeEvent(
+                channel="web",
+                persona_id=persona_id,
+                messages=list(drafts),
+                reply_ctx={"channel": "web"},
+            )
+            self._app.extension_manager.dispatch_reply_compose(compose_event)
+            self._app.reply_dispatcher.deliver_messages(
+                persona_id,
+                compose_event.messages,
+                reply_ctx={"channel": "web"},
+            )
+        except Exception as exc:
+            logger.exception("重试消息回复失败 persona=%s", persona_id)
+            broadcast(
+                "operation_error",
+                persona_id=persona_id,
+                title="消息回复失败",
+                message=_public_error_message(exc),
+                retry_message_seq=message_seq,
+            )
+        finally:
+            with self._lock:
+                queue = self._queues.get(persona_id)
+                if queue:
+                    queue.processing = False
+
     def _checker_loop(self) -> None:
         wait_seconds = self._app.config.get(
             "chat", "queue_wait_seconds", default=7,
@@ -429,6 +544,7 @@ class MessageQueue:
             texts, images, files, has_voice = _extract_from_pending(pending)
 
             stored_count = 0
+            last_stored_message = None
             for msg_data in pending:
                 try:
                     stored = self._app.conversation_store.add_message(
@@ -440,6 +556,7 @@ class MessageQueue:
                         quote=msg_data.get("quote", ""),
                     )
                     self._dispatch_message_stored(persona_id, stored, msg_data)
+                    last_stored_message = stored
                     stored_count += 1
                 except Exception:
                     logger.exception(
@@ -481,12 +598,9 @@ class MessageQueue:
                         persona_id=persona_id,
                         title="消息回复失败",
                         message=_public_error_message(exc),
+                        retry_message_seq=(last_stored_message or {}).get("_seq"),
                     )
-                drafts = [{
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "抱歉，我遇到了一些问题，请稍后再试。"}],
-                    "source": "llm",
-                }]
+                return
 
             if self._app.emoji_service:
                 try:

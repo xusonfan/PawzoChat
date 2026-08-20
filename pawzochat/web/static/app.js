@@ -58,10 +58,11 @@ import {
   pickImage, onImageSelected, removePendingImage,
   pickFile, onFileSelected, removePendingFile,
   showTypingIndicator, appendAssistantMessage,
+  handleChatOperationError,
   toggleEmojiPicker, switchEmojiTab, insertEmoji, sendSticker,
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
-  playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage,
+  playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage, retryChatReply,
   scrollToLatestMessage,
 } from "./modules/chat.js";
 
@@ -290,7 +291,10 @@ function initSSE() {
     try {
       const data = JSON.parse(e.data);
       const errorNotice = errorNoticeFromEvent(data);
-      if (
+      if (data.type === "operation_error") {
+        state.processingPersonas.delete(data.persona_id);
+        if (isViewingChat(data.persona_id)) handleChatOperationError(data);
+      } else if (
         errorNotice
         && (!data.persona_id || isViewingChat(data.persona_id))
       ) {
@@ -387,7 +391,7 @@ window.PawzoChat = {
   toggleEmojiPicker, switchEmojiTab, insertEmoji, sendSticker,
   togglePlusMenu,
   quoteMessage, clearPendingQuote,
-  playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage,
+  playVoiceMessage, toggleVoiceTranscript, retryGeneratedImage, retryChatReply,
   scrollToLatestMessage,
   filterPersonas, contactsIndexStart, contactsIndexMove, contactsIndexEnd, jumpToContactInitial,
   chatWithPersona, deletePersona,

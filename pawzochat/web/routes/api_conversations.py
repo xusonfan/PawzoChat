@@ -322,6 +322,24 @@ def retry_generated_image(persona_id: str, task_id: str):
     return jsonify({"ok": True, "task_id": task_id}), 202
 
 
+@api_conversations_bp.route(
+    "/<persona_id>/messages/<int:message_seq>/retry",
+    methods=["POST"],
+)
+def retry_message_reply(persona_id: str, message_seq: int):
+    if message_seq <= 0:
+        return jsonify({"error": "Invalid message sequence"}), 400
+
+    status = get_app().message_queue.retry_reply(persona_id, message_seq)
+    if status == "not_found":
+        return jsonify({"error": "Conversation not found"}), 404
+    if status == "not_retryable":
+        return jsonify({"error": "该消息已收到回复或不是最新消息"}), 409
+    if status == "busy":
+        return jsonify({"error": "正在处理其他消息，请稍后重试"}), 409
+    return jsonify({"ok": True}), 202
+
+
 @api_conversations_bp.route("/<persona_id>/messages", methods=["POST"])
 def send_message(persona_id: str):
     app = get_app()
