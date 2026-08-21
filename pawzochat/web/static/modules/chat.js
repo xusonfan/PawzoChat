@@ -86,6 +86,7 @@ let _chatHistory = {
   generation: 0,
 };
 const _failedReplies = new Set();
+const _assistantMessageUpdateTokens = new Map();
 
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
@@ -1870,6 +1871,68 @@ export function appendAssistantMessage(message, isLast) {
   } else {
     _setNewMessageButtonVisible(true);
   }
+}
+
+function _preloadMessageImages(root) {
+  const sources = Array.from(root.querySelectorAll("img[src]"), image => image.src);
+  return Promise.all(sources.map(source => new Promise(resolve => {
+    const image = new Image();
+    let timeout = 0;
+    const done = () => {
+      image.onload = null;
+      image.onerror = null;
+      if (timeout) clearTimeout(timeout);
+      resolve();
+    };
+    image.onload = done;
+    image.onerror = done;
+    timeout = window.setTimeout(done, 10_000);
+    image.src = source;
+    if (image.complete) done();
+  })));
+}
+
+export async function updateAssistantMessage(message) {
+  const sequence = messageSequence(message);
+  const personaId = chatPersonaId;
+  const msgsEl = $("chat-msgs");
+  if (!sequence || !personaId || !msgsEl) {
+    await refreshChatMessages(personaId);
+    return;
+  }
+
+  if (_chatHistory.personaId === personaId) {
+    _chatHistory.messages = mergeMessagesBySequence(_chatHistory.messages, [message]);
+  }
+
+  const currentRow = msgsEl.querySelector(
+    `.msg-row.assistant[data-message-seq="${sequence}"]`,
+  );
+  if (!currentRow) {
+    await refreshChatMessages(personaId);
+    return;
+  }
+
+  const token = Symbol(sequence);
+  const updateKey = `${personaId}:${sequence}`;
+  _assistantMessageUpdateTokens.set(updateKey, token);
+
+  const replacementBody = document.createElement("div");
+  replacementBody.innerHTML = `${renderContentBlocks(message.content, true)}
+    ${renderQuoteBox(message.quote)}
+    ${sourceBadge(message.source)}`;
+  await _preloadMessageImages(replacementBody);
+
+  if (_assistantMessageUpdateTokens.get(updateKey) !== token) return;
+  _assistantMessageUpdateTokens.delete(updateKey);
+  if (!_isActiveChatWindow(personaId)) return;
+
+  const latestRow = $("chat-msgs")?.querySelector(
+    `.msg-row.assistant[data-message-seq="${sequence}"]`,
+  );
+  const currentBody = latestRow?.querySelector(":scope > div:not(.avatar)");
+  if (!currentBody) return;
+  currentBody.replaceWith(replacementBody);
 }
 
 /* ---- Emoji Picker ---- */

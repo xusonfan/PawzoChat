@@ -95,6 +95,21 @@ assert.match(
   /const res = await api\.get\(messagesUrl, \{ bypassCache: true \}\)/,
   "聊天窗口展示缓存后必须再请求一次权威消息快照",
 );
+assert.match(
+  appSource,
+  /data\.type === "assistant_message_updated"[\s\S]*?void updateAssistantMessage\(data\.message\)/,
+  "角色消息更新应直接更新对应消息，不能重绘整个聊天列表",
+);
+assert.match(
+  chatSource,
+  /export async function updateAssistantMessage\(message\)[\s\S]*?await _preloadMessageImages\(replacementBody\)[\s\S]*?currentBody\.replaceWith\(replacementBody\)/,
+  "更新后的图片应预加载完成再替换原消息，避免图片闪烁",
+);
+assert.doesNotMatch(
+  appSource,
+  /data\.type === "assistant_message_updated"[\s\S]{0,300}?refreshChatMessages\(\)/,
+  "角色消息更新事件不应触发整页消息刷新",
+);
 assert.doesNotMatch(
   chatSource,
   /api\.get\(messagesUrl, \{[\s\S]*?onUpdate:/,
