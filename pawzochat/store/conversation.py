@@ -293,6 +293,7 @@ class ConversationStore:
                 "created_at": data.get("created_at", ""),
                 "updated_at": data.get("updated_at", ""),
                 "unread_count": unread_count,
+                "latest_message_seq": data.get("next_message_seq", 1) - 1,
                 "pinned": data.get("pinned", False),
                 "hidden_at": hidden_at,
                 # Kept for chat.js back-compat; true for any bound channel.

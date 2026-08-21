@@ -105,6 +105,7 @@ def create_conversation():
         "pinned": False,
         "hidden_at": None,
         "unread_count": 0,
+        "latest_message_seq": 0,
         "last_message": None,
     }), 201
 

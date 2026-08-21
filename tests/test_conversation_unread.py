@@ -25,7 +25,9 @@ class ConversationUnreadTests(unittest.TestCase):
         store.add_message("cat", "assistant", _text("one"), "llm")
         store.add_message("cat", "assistant", _text("two"), "llm")
 
-        self.assertEqual(store.list_conversations()[0]["unread_count"], 2)
+        summaries = store.list_conversations()
+        self.assertEqual(summaries[0]["unread_count"], 2)
+        self.assertEqual(summaries[0]["latest_message_seq"], 3)
         self.assertEqual(store.unread_count("cat"), 2)
         self.assertTrue(store.mark_read("cat"))
         self.assertEqual(store.list_conversations()[0]["unread_count"], 0)

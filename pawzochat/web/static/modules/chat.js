@@ -19,7 +19,7 @@ import { avatarHtml, personaAvatarUrl, profileAvatarUrl, formatTime, formatMsgTi
 import { renderTextMedia, summarizeConversationMessage } from "./message_content.js";
 import { imageLayoutAttributes } from "./image_layout_cache.js";
 import {
-  isConversationReadContext, markConversationReadLocal,
+  conversationLatestMessageSequence, isConversationReadContext, markConversationReadLocal,
   mergeConversationsPreserveUnread, setConversationUnreadCount,
   unreadBadgeHtml, updateChatTabUnread, updateConversationUnread,
 } from "./unread.js";
@@ -442,9 +442,17 @@ export async function openChat(personaId, { restored = false } = {}) {
     }
   }
   _expandedVoiceTranscripts.clear();
+
+  // Clear the still-mounted list before pushPage caches its DOM. Persist using
+  // the list snapshot as well, so a quick back action cannot outrun message loading.
+  const throughSeq = conversationLatestMessageSequence(state.conversations, personaId);
+  markConversationReadLocal(state.conversations, personaId);
+  updateConversationUnread(state.conversations);
+  updateChatTabUnread(state.conversations);
+
   state.pageStack = [];
   pushPage("chatWindow", { personaId });
-  markConversationRead(personaId);
+  void markConversationRead(personaId, throughSeq);
 
   if (isDesktop()) {
     document.querySelectorAll("#sidebar-body .conv-item").forEach(el => {

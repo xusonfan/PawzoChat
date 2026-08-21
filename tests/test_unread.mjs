@@ -145,6 +145,11 @@ const conversations = [
 assert.equal(mod.totalUnread(conversations), 7);
 assert.equal(mod.markConversationReadLocal(conversations, "cat"), true);
 assert.equal(conversations[0].unread_count, 0);
+assert.equal(mod.conversationLatestMessageSequence([
+  { persona_id: "cat", latest_message_seq: 7 },
+], "cat"), 7);
+assert.equal(mod.conversationLatestMessageSequence(conversations, "cat"), null);
+assert.equal(mod.conversationLatestMessageSequence(conversations, "missing"), null);
 assert.equal(mod.setConversationUnreadCount(conversations, "cat", 3), true);
 assert.equal(conversations[0].unread_count, 3);
 assert.equal(mod.setConversationUnreadCount(conversations, "missing", 8), false);

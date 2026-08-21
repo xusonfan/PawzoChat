@@ -59,6 +59,12 @@ export function markConversationReadLocal(conversations, personaId) {
   return setConversationUnreadCount(conversations, personaId, 0);
 }
 
+export function conversationLatestMessageSequence(conversations, personaId) {
+  const conversation = (conversations || []).find(item => item.persona_id === personaId);
+  const sequence = Number(conversation?.latest_message_seq);
+  return Number.isInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
 export function setConversationUnreadCount(conversations, personaId, count) {
   const conversation = (conversations || []).find(item => item.persona_id === personaId);
   if (!conversation) return false;
