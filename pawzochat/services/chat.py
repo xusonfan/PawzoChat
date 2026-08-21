@@ -68,6 +68,20 @@ from pawzochat.core.extensions.hooks import ContextBuildEvent
 
 logger = logging.getLogger(__name__)
 
+_EMPTY_REPLY_MAX_RETRIES = 5
+
+
+def _has_deliverable_reply_text(text: str | None) -> bool:
+    """Return whether model text can produce at least one outbound segment."""
+    cleaned = clean_assistant_reply_text(text or "")
+    return any(
+        segment.tts_text if segment.kind == "voice" else split_reply(
+            segment.raw,
+            split_newline=False,
+        )
+        for segment in parse_voice_reply(cleaned, split_newline=False)
+    )
+
 
 class ChatService:
     """Call the LLM and return normalized assistant message drafts.
@@ -252,11 +266,7 @@ class ChatService:
                 append_image_message(image)
 
         if not assistant_messages:
-            assistant_messages.append({
-                "role": "assistant",
-                "content": [{"type": "text", "text": "……"}],
-                "source": "llm",
-            })
+            raise RuntimeError("回复失败")
 
         return assistant_messages
 
@@ -451,17 +461,40 @@ class ChatService:
         response: LLMResponse | None = None
         loop_completed = False
         for _ in range(max_iter):
-            try:
-                response = provider.chat(
-                    llm_messages,
-                    tools=tools,
-                    model=persona.llm_model or None,
-                    temperature=persona.temperature,
-                    max_tokens=persona.max_tokens,
+            for empty_attempt in range(_EMPTY_REPLY_MAX_RETRIES + 1):
+                try:
+                    response = provider.chat(
+                        llm_messages,
+                        tools=tools,
+                        model=persona.llm_model or None,
+                        temperature=persona.temperature,
+                        max_tokens=persona.max_tokens,
+                    )
+                except Exception:
+                    logger.exception("LLM call failed for persona=%s", persona_id)
+                    raise
+
+                requests_tool = bool(
+                    response
+                    and response.finish_reason == "tool_use"
+                    and response.tool_calls
                 )
-            except Exception:
-                logger.exception("LLM call failed for persona=%s", persona_id)
-                raise
+                has_reply = bool(
+                    generated_images
+                    or reply_events
+                    or (response and _has_deliverable_reply_text(response.text))
+                )
+                if requests_tool or has_reply:
+                    break
+                if empty_attempt < _EMPTY_REPLY_MAX_RETRIES:
+                    logger.warning(
+                        "LLM 返回空回复，自动重试 (%d/%d) persona=%s",
+                        empty_attempt + 1,
+                        _EMPTY_REPLY_MAX_RETRIES,
+                        persona_id,
+                    )
+                    continue
+                raise RuntimeError("回复失败")
 
             if response.finish_reason != "tool_use" or not response.tool_calls:
                 loop_completed = True
