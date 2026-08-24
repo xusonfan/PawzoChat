@@ -19,11 +19,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import secrets
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from pawzochat.paths import CHATS_DIR, EMOJI_DIR
 from pawzochat.web.message_serialization import messages_for_api
@@ -33,6 +35,14 @@ from pawzochat.web.sse import broadcast
 api_conversations_bp = Blueprint("api_conversations", __name__)
 logger = logging.getLogger(__name__)
 _IMAGE_TASK_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+_BACKGROUND_FILENAME = "background.webp"
+_BACKGROUND_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+_BACKGROUND_MAX_PIXELS = 40_000_000
+_BACKGROUND_MAX_SIDE = 1920
+
+
+def _background_path(persona_id: str) -> Path:
+    return CHATS_DIR / persona_id / _BACKGROUND_FILENAME
 
 
 def _images_dir(persona_id: str) -> Path:
@@ -104,6 +114,7 @@ def create_conversation():
         "wechat_linked": False,
         "pinned": False,
         "hidden_at": None,
+        "background_version": "",
         "unread_count": 0,
         "latest_message_seq": 0,
         "last_message": None,
@@ -138,6 +149,81 @@ def set_conversation_visibility(persona_id: str):
         return jsonify({"error": "Conversation not found"}), 404
     broadcast("conversation_updated", persona_id=persona_id)
     return jsonify({"ok": True, "hidden": hidden})
+
+
+@api_conversations_bp.route("/<persona_id>/background", methods=["GET"])
+def get_conversation_background(persona_id: str):
+    app = get_app()
+    conversation = app.conversation_store.get_conversation(persona_id)
+    background = _background_path(persona_id)
+    if conversation is None or not background.is_file():
+        return jsonify({"error": "Background not found"}), 404
+    response = send_file(background, mimetype="image/webp", conditional=True)
+    if request.args.get("v"):
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
+@api_conversations_bp.route("/<persona_id>/background", methods=["POST"])
+def upload_conversation_background(persona_id: str):
+    app = get_app()
+    if app.conversation_store.get_conversation(persona_id) is None:
+        return jsonify({"error": "Conversation not found"}), 404
+    uploaded = request.files.get("background")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"error": "请选择背景图片"}), 400
+    if request.content_length and request.content_length > _BACKGROUND_MAX_UPLOAD_BYTES:
+        return jsonify({"error": "背景图片不能超过 20 MB"}), 413
+
+    try:
+        image = Image.open(uploaded.stream)
+        if image.width <= 0 or image.height <= 0:
+            return jsonify({"error": "图片尺寸无效"}), 400
+        if image.width * image.height > _BACKGROUND_MAX_PIXELS:
+            return jsonify({"error": "图片像素尺寸过大"}), 413
+        image.load()
+        image = ImageOps.exif_transpose(image)
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        return jsonify({"error": "无法识别该图片"}), 400
+
+    image.thumbnail((_BACKGROUND_MAX_SIDE, _BACKGROUND_MAX_SIDE), Image.Resampling.LANCZOS)
+    if image.mode not in {"RGB", "RGBA"}:
+        image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+
+    background = _background_path(persona_id)
+    background.parent.mkdir(parents=True, exist_ok=True)
+    temporary = background.with_name(f".background-{secrets.token_hex(8)}.tmp")
+    try:
+        image.save(temporary, format="WEBP", quality=88, method=6)
+        os.replace(temporary, background)
+    except OSError:
+        logger.exception("保存聊天背景失败: persona=%s", persona_id)
+        temporary.unlink(missing_ok=True)
+        return jsonify({"error": "保存背景图片失败"}), 500
+
+    version = secrets.token_hex(8)
+    if not app.conversation_store.set_background_version(persona_id, version):
+        background.unlink(missing_ok=True)
+        return jsonify({"error": "Conversation not found"}), 404
+    broadcast("conversation_updated", persona_id=persona_id)
+    return jsonify({"ok": True, "background_version": version})
+
+
+@api_conversations_bp.route("/<persona_id>/background", methods=["DELETE"])
+def delete_conversation_background(persona_id: str):
+    app = get_app()
+    if app.conversation_store.get_conversation(persona_id) is None:
+        return jsonify({"error": "Conversation not found"}), 404
+    try:
+        _background_path(persona_id).unlink(missing_ok=True)
+    except OSError:
+        logger.exception("删除聊天背景失败: persona=%s", persona_id)
+        return jsonify({"error": "删除背景图片失败"}), 500
+    app.conversation_store.set_background_version(persona_id, "")
+    broadcast("conversation_updated", persona_id=persona_id)
+    return jsonify({"ok": True, "background_version": ""})
 
 
 @api_conversations_bp.route("/<persona_id>/read", methods=["POST"])
@@ -235,6 +321,7 @@ def get_messages(persona_id: str):
 
     return jsonify({
         "persona_id": persona_id,
+        "background_version": conv.get("background_version", ""),
         # Key kept as wechat_link for frontend back-compat; carries the channel.
         "wechat_link": link_info,
         "messages": messages_for_api(messages),

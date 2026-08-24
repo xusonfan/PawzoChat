@@ -1045,6 +1045,24 @@ body {
   gap: 2px;
   touch-action: pan-y;
 }
+.chat-messages.has-chat-background {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.16)),
+    var(--chat-background-image);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+[data-theme="dark"] .chat-messages.has-chat-background {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.16)),
+    var(--chat-background-image);
+}
+.chat-messages.has-chat-background .msg-time {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+}
 .msg-time {
   text-align: center;
   font-size: 11px;

@@ -34,9 +34,24 @@ class ConversationListStateTests(unittest.TestCase):
         summary = store.list_conversations()[0]
         self.assertFalse(summary["pinned"])
         self.assertIsNone(summary["hidden_at"])
+        self.assertEqual(summary["background_version"], "")
         persisted = json.loads(path.read_text(encoding="utf-8"))
         self.assertFalse(persisted["pinned"])
         self.assertIsNone(persisted["hidden_at"])
+        self.assertEqual(persisted["background_version"], "")
+
+    def test_background_version_is_persisted_without_changing_recency(self):
+        conversation = self.store.create_conversation("cat")
+        updated_at = conversation["updated_at"]
+
+        self.assertTrue(self.store.set_background_version("cat", "version-1"))
+        summary = self.store.list_conversations()[0]
+        self.assertEqual(summary["background_version"], "version-1")
+        self.assertEqual(summary["updated_at"], updated_at)
+        self.assertEqual(
+            ConversationStore(self.root).get_conversation("cat")["background_version"],
+            "version-1",
+        )
 
     def test_pinned_group_precedes_normal_and_each_group_uses_recency(self):
         for persona_id in ("old-pin", "new-pin", "new-normal", "old-normal"):

@@ -1006,6 +1006,29 @@ export function clearPendingQuote() {
   _renderQuotePreview();
 }
 
+function _conversationBackgroundVersion(personaId) {
+  return state.conversations.find(item => item.persona_id === personaId)?.background_version || "";
+}
+
+function _setConversationBackgroundVersion(personaId, version) {
+  const conversation = state.conversations.find(item => item.persona_id === personaId);
+  if (conversation) conversation.background_version = version || "";
+}
+
+function _applyConversationBackground(personaId, version = _conversationBackgroundVersion(personaId)) {
+  const messages = $("chat-msgs");
+  if (!messages || chatPersonaId !== personaId) return;
+  if (!version) {
+    messages.classList.remove("has-chat-background");
+    messages.style.removeProperty("--chat-background-image");
+    return;
+  }
+  const base = window.PAWZOCHAT_BASE || "";
+  const url = `${base}/api/conversations/${encodeURIComponent(personaId)}/background?v=${encodeURIComponent(version)}`;
+  messages.style.setProperty("--chat-background-image", `url("${url}")`);
+  messages.classList.add("has-chat-background");
+}
+
 /* ---- Chat Window ---- */
 
 async function renderChatWindow(data) {
@@ -1065,9 +1088,11 @@ async function renderChatWindow(data) {
     </div>
     <input type="file" id="img-file-input" accept="image/*" multiple style="display:none" onchange="PawzoChat.onImageSelected(this)">
     <input type="file" id="file-file-input" multiple style="display:none" onchange="PawzoChat.onFileSelected(this)">
+    <input type="file" id="chat-background-input" accept="image/*" style="display:none" onchange="PawzoChat.onChatBackgroundSelected(this)">
   </div>`;
 
   content().style.overflow = "hidden";
+  _applyConversationBackground(renderedPersonaId);
 
   const messagesEl = $("chat-msgs");
   if (messagesEl) _bindChatScroll(messagesEl);
@@ -1120,6 +1145,8 @@ async function renderChatWindow(data) {
 
   if (cachedMessages) {
     const cached = cachedMessages.messages || [];
+    _setConversationBackgroundVersion(renderedPersonaId, cachedMessages.background_version);
+    _applyConversationBackground(renderedPersonaId, cachedMessages.background_version);
     _chatHistory.messages = cached;
     _chatHistory.hasMore = cachedMessages.has_more === true;
     renderMessages(cached);
@@ -1133,6 +1160,8 @@ async function renderChatWindow(data) {
       && _chatHistory.generation === historyGeneration
     ) {
       const messages = res.messages || [];
+      _setConversationBackgroundVersion(renderedPersonaId, res.background_version);
+      _applyConversationBackground(renderedPersonaId, res.background_version);
       const currentFirst = Number(messageSequence(_chatHistory.messages[0]));
       const freshFirst = Number(messageSequence(messages[0]));
       const alreadyLoadedOlder = currentFirst > 0 && freshFirst > 0 && currentFirst < freshFirst;
@@ -2152,6 +2181,8 @@ export function chatMore() {
     <div class="sheet-item" onclick="PawzoChat.viewPersonaFromChat()">${iconHtml("ri-id-card-line")}<span>查看角色资料</span></div>
     <div class="sheet-item" onclick="PawzoChat.viewMemoryFromChat()">${iconHtml("ri-brain-line")}<span>查看记忆</span></div>
     <div class="sheet-item" onclick="PawzoChat.openHistoryEdit()">${iconHtml("ri-edit-line")}<span>编辑历史消息</span></div>
+    <div class="sheet-item" onclick="PawzoChat.pickChatBackground()">${iconHtml("ri-image-line")}<span>${conv?.background_version ? "更换聊天背景" : "设置聊天背景"}</span></div>
+    ${conv?.background_version ? `<div class="sheet-item" onclick="PawzoChat.removeChatBackground()">${iconHtml("ri-image-off-line")}<span>恢复默认背景</span></div>` : ""}
     <div class="sheet-item" onclick="PawzoChat.clearChat()">${iconHtml("ri-delete-bin-line")}<span>清空聊天记录</span></div>
     <div class="sheet-item danger" onclick="PawzoChat.deleteChat()">${iconHtml("ri-close-line")}<span>删除对话</span></div>
     <div class="sheet-divider"></div>`;
@@ -2163,6 +2194,67 @@ export function chatMore() {
   }
 
   showSheet(`<div class="sheet-title">更多操作</div>${items}<div class="sheet-cancel" onclick="PawzoChat.closeOverlay()">取消</div>`);
+}
+
+export function pickChatBackground() {
+  const input = $("chat-background-input");
+  if (!input) return;
+  closeOverlay();
+  input.click();
+}
+
+export async function onChatBackgroundSelected(input) {
+  const file = input?.files?.[0];
+  const personaId = chatPersonaId;
+  if (input) input.value = "";
+  if (!file || !personaId) return;
+  if (!file.type.startsWith("image/")) {
+    toast("请选择图片文件", "error");
+    return;
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    toast("背景图片不能超过 20 MB", "error");
+    return;
+  }
+
+  const body = new FormData();
+  body.append("background", file);
+  showLoading("正在设置背景…");
+  try {
+    const response = await fetch(
+      `${window.PAWZOCHAT_BASE || ""}/api/conversations/${encodeURIComponent(personaId)}/background`,
+      { method: "POST", body },
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "设置背景失败");
+    _setConversationBackgroundVersion(personaId, result.background_version);
+    _applyConversationBackground(personaId, result.background_version);
+    toast("聊天背景已更新", "success");
+  } catch (error) {
+    toast(error.message || "设置背景失败", "error");
+  } finally {
+    hideLoading();
+  }
+}
+
+export async function removeChatBackground() {
+  const personaId = chatPersonaId;
+  closeOverlay();
+  if (!personaId || !await confirm("恢复默认背景", "将移除这个对话的自定义背景图", false)) return;
+  showLoading("正在恢复…");
+  try {
+    const response = await api.del(
+      `/api/conversations/${encodeURIComponent(personaId)}/background`,
+    );
+    if (response.status >= 400) throw new Error(response.data?.error || "恢复默认背景失败");
+    _setConversationBackgroundVersion(personaId, "");
+    _applyConversationBackground(personaId, "");
+    toast("已恢复默认背景", "success");
+  } catch (error) {
+    toast(error.message || "恢复默认背景失败", "error");
+  } finally {
+    hideLoading();
+  }
 }
 
 export async function clearChat() {
@@ -2291,6 +2383,8 @@ export async function refreshChatMessages(personaId = chatPersonaId) {
     );
     if (!isViewingChat(personaId) || _chatHistory.personaId !== personaId) return;
     const messages = res.messages || [];
+    _setConversationBackgroundVersion(personaId, res.background_version);
+    _applyConversationBackground(personaId, res.background_version);
     const hasNewMessages = _latestMessageSequence(messages) > previousLatestSequence;
     const wasAtBottom = _chatBottomAnchor.followsBottom($("chat-msgs"));
     _chatHistory.messages = _mergeLatestHistory(_chatHistory.messages, messages);

@@ -117,6 +117,9 @@ class ConversationStore:
         ):
             data["hidden_at"] = None
             changed = True
+        if not isinstance(data.get("background_version"), str):
+            data["background_version"] = ""
+            changed = True
         next_seq = 1
         for message in data.get("messages", []):
             seq = message.get("_seq")
@@ -296,6 +299,7 @@ class ConversationStore:
                 "latest_message_seq": data.get("next_message_seq", 1) - 1,
                 "pinned": data.get("pinned", False),
                 "hidden_at": hidden_at,
+                "background_version": data.get("background_version", ""),
                 # Kept for chat.js back-compat; true for any bound channel.
                 "wechat_linked": bool(link),
                 "linked_channel": link.get("channel", "") if link else "",
@@ -327,6 +331,7 @@ class ConversationStore:
                 "wechat_link": None,
                 "pinned": False,
                 "hidden_at": None,
+                "background_version": "",
                 "next_message_seq": 1,
                 "last_read_message_seq": 0,
                 "messages": [],
@@ -350,6 +355,7 @@ class ConversationStore:
                 "wechat_link": None,
                 "pinned": False,
                 "hidden_at": None,
+                "background_version": "",
                 "next_message_seq": 1,
                 "last_read_message_seq": 0,
                 "messages": [],
@@ -366,6 +372,18 @@ class ConversationStore:
                 return False
             if data.get("pinned", False) != pinned:
                 data["pinned"] = pinned
+                self._write_file(persona_id, data)
+            return True
+
+    def set_background_version(self, persona_id: str, version: str) -> bool:
+        """Persist the cache-busting version for a conversation background."""
+        lock = self._get_lock(persona_id)
+        with lock:
+            data = self._read_file(persona_id)
+            if data is None:
+                return False
+            if data.get("background_version", "") != version:
+                data["background_version"] = version
                 self._write_file(persona_id, data)
             return True
 
