@@ -704,6 +704,7 @@ function _syncMobileViewport() {
     _viewportSyncFrame = 0;
     if (isDesktop()) {
       document.documentElement.style.removeProperty("--app-viewport-height");
+      _lockConversationBackgroundSize();
       return;
     }
 
@@ -712,6 +713,7 @@ function _syncMobileViewport() {
       "--app-viewport-height",
       `${Math.round(viewportHeight)}px`,
     );
+    _lockConversationBackgroundSize();
 
     if (_pinBottomForKeyboard && document.activeElement === $("chat-input")) {
       const msgsEl = $("chat-msgs");
@@ -1015,18 +1017,37 @@ function _setConversationBackgroundVersion(personaId, version) {
   if (conversation) conversation.background_version = version || "";
 }
 
-function _applyConversationBackground(personaId, version = _conversationBackgroundVersion(personaId)) {
+function _lockConversationBackgroundSize() {
+  const layer = $("chat-background-layer");
   const messages = $("chat-msgs");
-  if (!messages || chatPersonaId !== personaId) return;
+  if (!layer || !messages) return;
+  if (!isDesktop() && layer.dataset.viewportLocked === "true") return;
+  const width = Math.round(messages.clientWidth);
+  const height = Math.round(messages.clientHeight);
+  if (width <= 0 || height <= 0) return;
+  layer.style.width = `${width}px`;
+  layer.style.height = `${height}px`;
+  if (!isDesktop()) layer.dataset.viewportLocked = "true";
+}
+
+function _applyConversationBackground(personaId, version = _conversationBackgroundVersion(personaId)) {
+  const layer = $("chat-background-layer");
+  const container = layer?.closest?.(".chat-container");
+  if (!layer || !container || chatPersonaId !== personaId) return;
   if (!version) {
-    messages.classList.remove("has-chat-background");
-    messages.style.removeProperty("--chat-background-image");
+    container.classList.remove("has-chat-background");
+    layer.hidden = true;
+    layer.style.removeProperty("--chat-background-image");
+    layer.style.removeProperty("width");
+    layer.style.removeProperty("height");
     return;
   }
   const base = window.PAWZOCHAT_BASE || "";
   const url = `${base}/api/conversations/${encodeURIComponent(personaId)}/background?v=${encodeURIComponent(version)}`;
-  messages.style.setProperty("--chat-background-image", `url("${url}")`);
-  messages.classList.add("has-chat-background");
+  layer.style.setProperty("--chat-background-image", `url("${url}")`);
+  layer.hidden = false;
+  container.classList.add("has-chat-background");
+  _lockConversationBackgroundSize();
 }
 
 /* ---- Chat Window ---- */
@@ -1060,6 +1081,7 @@ async function renderChatWindow(data) {
   _pendingQuote = "";
   _closeQuotePop(); // never let a popup (in document.body) outlive the chat that spawned it
   content().innerHTML = `<div class="chat-container">
+    <div class="chat-background-layer" id="chat-background-layer" aria-hidden="true" hidden></div>
     <div class="chat-messages" id="chat-msgs">${cachedMessages ? "" : `<div class="loading-center"><div class="spinner"></div></div>`}</div>
     <div class="chat-new-message-anchor">
       <button type="button" class="chat-new-message-btn" id="chat-new-message-btn" hidden onclick="PawzoChat.scrollToLatestMessage()" aria-label="查看新消息">
@@ -1092,6 +1114,7 @@ async function renderChatWindow(data) {
   </div>`;
 
   content().style.overflow = "hidden";
+  _lockConversationBackgroundSize();
   _applyConversationBackground(renderedPersonaId);
 
   const messagesEl = $("chat-msgs");

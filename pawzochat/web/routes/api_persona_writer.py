@@ -72,7 +72,9 @@ DEFAULT_PERSONA_WRITER_PROMPT = (
     '  "avatar_prompt": "用于 AI 生图的角色头像提示词：完整描述固定外貌、发型、服饰、表情、'
     '胸像构图、纯净背景与画面风格；不要出现文字、签名或水印",\n'
     '  "background_prompt": "用于 AI 生图的横向朋友圈封面提示词：设计贴合角色经历与审美的场景、'
-    '环境、色彩、光线与氛围；以景物为主，不出现文字、签名或水印"\n'
+    '环境、色彩、光线与氛围；以景物为主，不出现文字、签名或水印",\n'
+    '  "chat_background_prompt": "用于 AI 生图的竖向聊天背景提示词：设计贴合角色气质的沉浸式场景、'
+    '环境和柔和光影；画面主体避开中央消息区域，不出现文字、签名或水印"\n'
     "}\n\n"
     "其中 output_examples 的硬性要求：必须是字符串数组，至少包含 5 条；"
     "每一条都用反斜线（\\）分隔其中的短句或短语；"
@@ -224,8 +226,8 @@ def _extract_json_object(text: str):
     return None
 
 
-def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str]:
-    """Parse model output into the six editable persona draft fields."""
+def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str, str]:
+    """Parse model output into the seven editable persona draft fields."""
     obj = _extract_json_object(raw)
     if isinstance(obj, dict):
         def text_field(key: str, max_length: int | None = None) -> str:
@@ -238,6 +240,7 @@ def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str]:
         character_prompt = text_field("character_prompt")
         avatar_prompt = text_field("avatar_prompt")
         background_prompt = text_field("background_prompt")
+        chat_background_prompt = text_field("chat_background_prompt")
         examples = obj.get("output_examples")
         if isinstance(examples, list):
             lines = []
@@ -260,6 +263,7 @@ def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str]:
             output_examples,
             avatar_prompt,
             background_prompt,
+            chat_background_prompt,
         )
 
     # JSON parsing failed entirely → legacy ``[人设设定]`` / ``[输出示例]`` split.
@@ -270,7 +274,7 @@ def _parse_persona_draft(raw: str) -> tuple[str, str, str, str, str, str]:
         (raw or "")[:120],
     )
     character_prompt, output_examples = _split_sections(raw)
-    return "", "", character_prompt, output_examples, "", ""
+    return "", "", character_prompt, output_examples, "", "", ""
 
 
 def _parse_radar_recommendations(raw: str) -> list[dict]:
@@ -421,6 +425,7 @@ def generate_persona_draft(app, data: dict) -> dict:
         output_examples,
         avatar_prompt,
         background_prompt,
+        chat_background_prompt,
     ) = _parse_persona_draft(raw)
     return {
         "ok": True,
@@ -430,6 +435,7 @@ def generate_persona_draft(app, data: dict) -> dict:
         "output_examples": output_examples,
         "avatar_prompt": avatar_prompt,
         "background_prompt": background_prompt,
+        "chat_background_prompt": chat_background_prompt,
     }
 
 

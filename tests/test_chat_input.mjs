@@ -37,6 +37,22 @@ assert.match(inputBar, /id="voice-hold-btn"[\s\S]+onpointerdown="PawzoChat\.star
 assert.match(inputBar, /id="emoji-picker-btn"[^>]+aria-label="打开表情面板"/);
 assert.match(inputBar, /id="plus-menu-btn"[^>]+aria-label="打开附件面板"/);
 assert.match(inputBar, /id="chat-input"[^>]+enterkeyhint="send"/);
+assert.match(
+  chatSource,
+  /id="chat-background-layer"[\s\S]*?id="chat-msgs"/,
+  "聊天背景应使用独立于消息区的固定图层",
+);
+assert.match(
+  chatSource,
+  /function _lockConversationBackgroundSize\(\)[\s\S]*?dataset\.viewportLocked === "true"[\s\S]*?return;[\s\S]*?messages\.clientHeight[\s\S]*?layer\.style\.height[\s\S]*?dataset\.viewportLocked = "true"/,
+  "移动端背景尺寸应在进入聊天时锁定，不能随输入法或附件面板重新计算",
+);
+assert.match(
+  css,
+  /\.chat-background-layer\s*\{[^}]*position:\s*absolute;[^}]*background-size:\s*cover;/s,
+  "聊天背景层应固定定位并独立缩放",
+);
+assert.doesNotMatch(css, /\.chat-messages\.has-chat-background/, "背景不应继续绑定到可变高度的消息区");
 assert.match(chatSource, /id="emoji-picker-panel"/);
 assert.match(chatSource, /id="plus-menu-panel"/);
 const emojiMessageMarkup = chatSource.match(/return `<div class="msg-emoji">[\s\S]*?<\/div>`;/);

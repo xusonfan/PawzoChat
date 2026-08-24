@@ -330,7 +330,7 @@ def generate_image_payload(app, name: str, data: dict) -> dict:
     prompt = str(data.get("prompt") or "").strip()
     persona_id = str(data.get("persona_id") or "").strip()
     purpose = str(data.get("purpose") or "square").strip()
-    if purpose not in {"square", "avatar", "moments_cover"}:
+    if purpose not in {"square", "avatar", "moments_cover", "chat_background"}:
         raise ImageGenerationRequestError("不支持的图片用途")
     if not model:
         raise ImageGenerationRequestError("请选择模型")

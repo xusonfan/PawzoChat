@@ -33,7 +33,7 @@ def generate_configured_image(
     reference_images: list[tuple[bytes, str]] | None = None,
 ) -> ImageResponse:
     """Generate through a configured provider with consistent sizing and refs."""
-    if purpose not in {"square", "avatar", "moments_cover"}:
+    if purpose not in {"square", "avatar", "moments_cover", "chat_background"}:
         raise ImageConfigurationError("不支持的图片用途")
     if provider_name not in app.config._data.get("image_providers", {}):
         raise ImageConfigurationError("生图服务商未找到", status_code=404)
@@ -55,7 +55,11 @@ def generate_configured_image(
             persona_cfg.get("image_generation") or {},
         )
 
-    width, height = (1536, 1024) if purpose == "moments_cover" else (1024, 1024)
+    dimensions = {
+        "moments_cover": (1536, 1024),
+        "chat_background": (1024, 1536),
+    }
+    width, height = dimensions.get(purpose, (1024, 1024))
     return provider.generate(
         prompt=prompt,
         model=model,

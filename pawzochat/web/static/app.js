@@ -204,7 +204,7 @@ import {
 } from "./modules/moments.js";
 
 import {
-  pwOnProviderChange, pwOnImageProviderChange,
+  pwOnProviderChange, pwOnImageProviderChange, pwSwitchTab,
   pwGenerate, pwGenerateImage, pwCreatePersona,
 } from "./modules/persona_writer.js";
 
@@ -490,7 +490,7 @@ window.PawzoChat = {
   momentsSubmitPublish,
   momentsResetPrompt, momentsSaveSettings,
   openPersonaMoments, momentsOpenDetail,
-  pwOnProviderChange, pwOnImageProviderChange,
+  pwOnProviderChange, pwOnImageProviderChange, pwSwitchTab,
   pwGenerate, pwGenerateImage, pwCreatePersona,
   imageGalleryProviderChange, imageGalleryModelChange,
   imageGalleryPickReference, imageGalleryReferenceSelected, imageGalleryClearReference,

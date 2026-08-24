@@ -1,5 +1,8 @@
 import unittest
+from types import SimpleNamespace
 
+from pawzochat.image.base import ImageResponse
+from pawzochat.image.generation import generate_configured_image
 from pawzochat.image.manager import (
     ImageManager,
     ensure_image_models_list,
@@ -114,6 +117,33 @@ class ImageModelCapabilityTests(unittest.TestCase):
         self.assertFalse(manager.model_supports_reference_images("mixed", "disabled"))
         self.assertTrue(manager.model_supports_reference_images("mixed", "reference"))
         self.assertFalse(manager.model_supports_reference_images("mixed", "missing"))
+    def test_chat_background_requests_portrait_dimensions(self):
+        calls = []
+
+        class Provider:
+            @staticmethod
+            def generate(**kwargs):
+                calls.append(kwargs)
+                return ImageResponse(image_data=b"image", mime_type="image/png")
+
+        app = SimpleNamespace(
+            config=SimpleNamespace(_data={"image_providers": {"images": {}}}),
+            image_manager=SimpleNamespace(
+                get_provider_for_model=lambda _provider, _model: Provider(),
+                model_supports_reference_images=lambda _provider, _model: False,
+            ),
+        )
+
+        generate_configured_image(
+            app,
+            provider_name="images",
+            model="portrait-model",
+            prompt="竖向聊天背景",
+            purpose="chat_background",
+        )
+
+        self.assertEqual(calls[0]["width"], 1024)
+        self.assertEqual(calls[0]["height"], 1536)
 
 
 if __name__ == "__main__":

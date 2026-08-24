@@ -39,6 +39,7 @@ const _pw = {
   images: {
     avatar: null,         // {dataUrl, mimeType}
     background: null,
+    chatBackground: null,
   },
 };
 
@@ -90,37 +91,69 @@ function pwOnImageProviderChange() {
   if (modelSelect) modelSelect.innerHTML = _imageModelOptions(providerName, "");
 }
 
+function _imageKindConfig(kind) {
+  return {
+    avatar: {
+      previewId: "pw-avatar-preview",
+      promptId: "pw-avatar-prompt",
+      buttonId: "pw-avatar-generate",
+      purpose: "avatar",
+      label: "头像",
+      alt: "角色头像预览",
+      fit: "aspect-ratio:1/1;max-width:256px",
+    },
+    background: {
+      previewId: "pw-background-preview",
+      promptId: "pw-background-prompt",
+      buttonId: "pw-background-generate",
+      purpose: "moments_cover",
+      label: "朋友圈封面",
+      alt: "朋友圈封面预览",
+      fit: "aspect-ratio:3/2;width:100%",
+    },
+    chatBackground: {
+      previewId: "pw-chat-background-preview",
+      promptId: "pw-chat-background-prompt",
+      buttonId: "pw-chat-background-generate",
+      purpose: "chat_background",
+      label: "聊天背景",
+      alt: "聊天背景预览",
+      fit: "aspect-ratio:2/3;max-width:320px",
+    },
+  }[kind] || null;
+}
+
 function _renderGeneratedImage(kind) {
-  const target = $(kind === "avatar" ? "pw-avatar-preview" : "pw-background-preview");
+  const config = _imageKindConfig(kind);
+  const target = config ? $(config.previewId) : null;
   if (!target) return;
   const image = _pw.images[kind];
   if (!image) {
     target.innerHTML = `<div class="form-hint" style="text-align:center">尚未生成</div>`;
     return;
   }
-  const fit = kind === "avatar" ? "aspect-ratio:1/1;max-width:256px" : "aspect-ratio:3/2;width:100%";
-  target.innerHTML = `<img src="${escAttr(image.dataUrl)}" alt="${kind === "avatar" ? "角色头像预览" : "朋友圈封面预览"}" style="${fit};object-fit:cover;border-radius:12px;display:block;margin:auto">`;
+  target.innerHTML = `<img src="${escAttr(image.dataUrl)}" alt="${config.alt}" style="${config.fit};object-fit:cover;border-radius:12px;display:block;margin:auto">`;
 }
 
 async function pwGenerateImage(kind) {
-  const isAvatar = kind === "avatar";
-  if (!isAvatar && kind !== "background") return;
+  const config = _imageKindConfig(kind);
+  if (!config) return;
   const provider = $("pw-image-provider")?.value || "";
   const model = $("pw-image-model")?.value || "";
-  const prompt = ($(isAvatar ? "pw-avatar-prompt" : "pw-background-prompt")?.value || "").trim();
+  const prompt = ($(config.promptId)?.value || "").trim();
   if (!provider || !model) { toast("请先选择生图服务商与模型", "error"); return; }
   if (!prompt) { toast("请先生成或填写图片提示词", "error"); return; }
   localStorage.setItem("pw_last_image_provider", provider);
   localStorage.setItem("pw_last_image_model", model);
 
-  const button = $(isAvatar ? "pw-avatar-generate" : "pw-background-generate");
+  const button = $(config.buttonId);
   const original = button?.textContent || "生成图片";
   if (button) { button.disabled = true; button.textContent = "生成中…"; }
   try {
     const response = await api.post(`/api/image-providers/${encodeURIComponent(provider)}/generate`, {
       model,
       prompt,
-      purpose: isAvatar ? "avatar" : "moments_cover",
+      purpose: config.purpose,
     });
     if (response.status < 200 || response.status >= 300 || !response.data?.image_b64) {
       toast(response.data?.error || "图片生成失败", "error");
@@ -132,7 +165,7 @@ async function pwGenerateImage(kind) {
       mimeType,
     };
     _renderGeneratedImage(kind);
-    toast(`${isAvatar ? "头像" : "朋友圈封面"}生成完成`, "success");
+    toast(`${config.label}生成完成`, "success");
   } catch (error) {
     toast("图片生成失败，请检查生图服务配置", "error");
   } finally {
@@ -143,8 +176,10 @@ async function pwGenerateImage(kind) {
 function _clearGeneratedImages() {
   _pw.images.avatar = null;
   _pw.images.background = null;
+  _pw.images.chatBackground = null;
   _renderGeneratedImage("avatar");
   _renderGeneratedImage("background");
+  _renderGeneratedImage("chatBackground");
 }
 
 async function pwGenerate() {
@@ -168,6 +203,7 @@ async function pwGenerate() {
       if ($("pw-signature")) $("pw-signature").value = r.data.signature || "";
       if ($("pw-avatar-prompt")) $("pw-avatar-prompt").value = r.data.avatar_prompt || "";
       if ($("pw-background-prompt")) $("pw-background-prompt").value = r.data.background_prompt || "";
+      if ($("pw-chat-background-prompt")) $("pw-chat-background-prompt").value = r.data.chat_background_prompt || "";
       const nameEl = $("pw-name");
       if (nameEl && r.data.name) nameEl.value = r.data.name;
       _clearGeneratedImages();
@@ -193,15 +229,28 @@ function _dataUrlBlob(dataUrl) {
 
 async function _uploadGeneratedAsset(personaId, kind, image) {
   if (!image) return;
-  const isAvatar = kind === "avatar";
+  const destinations = {
+    avatar: { field: "avatar", path: `/api/personas/${encodeURIComponent(personaId)}/avatar` },
+    background: { field: "cover", path: `/api/personas/${encodeURIComponent(personaId)}/moments-cover` },
+    chatBackground: { field: "background", path: `/api/conversations/${encodeURIComponent(personaId)}/background` },
+  };
+  const destination = destinations[kind];
+  if (!destination) return;
+
+  if (kind === "chatBackground") {
+    const conversation = await api.post("/api/conversations", { persona_id: personaId });
+    if (conversation.status >= 400 && conversation.status !== 409) {
+      throw new Error(conversation.data?.error || "创建背景对应的对话失败");
+    }
+  }
+
   const form = new FormData();
-  const field = isAvatar ? "avatar" : "cover";
   const extension = image.mimeType === "image/jpeg" ? "jpg" : (image.mimeType.split("/")[1] || "png");
-  form.append(field, _dataUrlBlob(image.dataUrl), `${kind}.${extension}`);
-  const path = isAvatar
-    ? `/api/personas/${encodeURIComponent(personaId)}/avatar`
-    : `/api/personas/${encodeURIComponent(personaId)}/moments-cover`;
-  const response = await fetch(`${window.PAWZOCHAT_BASE || ""}${path}`, { method: "POST", body: form });
+  form.append(destination.field, _dataUrlBlob(image.dataUrl), `${kind}.${extension}`);
+  const response = await fetch(
+    `${window.PAWZOCHAT_BASE || ""}${destination.path}`,
+    { method: "POST", body: form },
+  );
   if (!response.ok) {
     let message = "图片保存失败";
     try { message = (await response.json())?.error || message; } catch (error) { /* ignore */ }
@@ -236,6 +285,7 @@ async function pwCreatePersona() {
       const uploads = [
         ["avatar", _pw.images.avatar],
         ["background", _pw.images.background],
+        ["chatBackground", _pw.images.chatBackground],
       ].filter(([, image]) => !!image);
       const results = await Promise.allSettled(
         uploads.map(([kind, image]) => _uploadGeneratedAsset(r.data.id, kind, image)),
@@ -258,6 +308,18 @@ async function pwCreatePersona() {
   } finally {
     hideLoading();
   }
+}
+
+function pwSwitchTab(tab) {
+  if (tab !== "text" && tab !== "images") return;
+  document.querySelectorAll(".pw-tab-button").forEach(button => {
+    const active = button.dataset.pwTab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll(".pw-tab-panel").forEach(panel => {
+    panel.hidden = panel.dataset.pwPanel !== tab;
+  });
 }
 
 async function renderPersonaWriter(data = {}) {
@@ -293,6 +355,7 @@ async function renderPersonaWriter(data = {}) {
     : (_pw.imageProviders[0]?.name || "");
   _pw.images.avatar = null;
   _pw.images.background = null;
+  _pw.images.chatBackground = null;
 
   if (!_pw.providers.length) {
     content().innerHTML = `<div class="page"><div class="empty-state">
@@ -302,7 +365,13 @@ async function renderPersonaWriter(data = {}) {
     return;
   }
 
-  content().innerHTML = `<div class="page">
+  content().innerHTML = `<div class="page persona-writer-page">
+    <div class="pw-tabs" role="tablist" aria-label="人设编写助手内容">
+      <button type="button" class="pw-tab-button active" data-pw-tab="text" role="tab" aria-selected="true" aria-controls="pw-tab-text" onclick="PawzoChat.pwSwitchTab('text')">文字设定</button>
+      <button type="button" class="pw-tab-button" data-pw-tab="images" role="tab" aria-selected="false" aria-controls="pw-tab-images" onclick="PawzoChat.pwSwitchTab('images')">角色图片</button>
+    </div>
+
+    <div class="pw-tab-panel" id="pw-tab-text" data-pw-panel="text" role="tabpanel">
     <div class="card">
       <div class="card-header">生成模型</div>
       <div class="form-group"><div class="form-row"><label>服务商</label>
@@ -346,7 +415,9 @@ async function renderPersonaWriter(data = {}) {
       <textarea class="form-textarea prompt-part" id="pw-sysinstr">${esc(_pw.defaultSysInstr)}</textarea>
       <div class="form-hint">角色的 [系统指令] 段，已预填默认值，可修改</div>
     </div>
+    </div>
 
+    <div class="pw-tab-panel" id="pw-tab-images" data-pw-panel="images" role="tabpanel" hidden>
     <div class="card">
       <div class="card-header">角色图片</div>
       ${_pw.imageProviders.length ? `
@@ -378,7 +449,18 @@ async function renderPersonaWriter(data = {}) {
       </div>
     </div>
 
-    <div>
+    <div class="card">
+      <div class="card-header">专属聊天背景（可选）</div>
+      <textarea class="form-textarea" id="pw-chat-background-prompt" style="min-height:110px" placeholder="点击上方「生成」获取聊天背景提示词，可手动编辑"></textarea>
+      <div class="form-hint">默认不生成；只有点击下方按钮生成图片后，创建角色时才会设置聊天背景</div>
+      <div id="pw-chat-background-preview" style="padding:12px 16px"><div class="form-hint" style="text-align:center">尚未生成</div></div>
+      <div style="padding:0 16px 16px">
+        <button class="btn-primary" id="pw-chat-background-generate" ${_pw.imageProviders.length ? "" : "disabled"} onclick="PawzoChat.pwGenerateImage('chatBackground')">生成聊天背景</button>
+      </div>
+    </div>
+    </div>
+
+    <div class="pw-create-actions">
       <button class="btn-primary" id="pw-create-btn" onclick="PawzoChat.pwCreatePersona()">通过该人设创建角色</button>
     </div>
   </div>`;
@@ -389,6 +471,7 @@ registerPageRenderer("personaWriter", renderPersonaWriter);
 export {
   pwOnProviderChange,
   pwOnImageProviderChange,
+  pwSwitchTab,
   pwGenerate,
   pwGenerateImage,
   pwCreatePersona,

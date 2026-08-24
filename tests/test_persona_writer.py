@@ -30,6 +30,7 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
                 ],
                 "avatar_prompt": "紫色长发，和服胸像，纯净背景",
                 "background_prompt": "横向构图，稻妻城与雷光，以景物为主",
+                "chat_background_prompt": "竖向构图，远景雷光，中央区域留白",
             },
             ensure_ascii=False,
         )
@@ -43,6 +44,7 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
                 "你已觉悟\\无需多言\n此刻\\便是永恒",
                 "紫色长发，和服胸像，纯净背景",
                 "横向构图，稻妻城与雷光，以景物为主",
+                "竖向构图，远景雷光，中央区域留白",
             ),
         )
 
@@ -54,7 +56,7 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
 
     def test_legacy_markers_leave_new_fields_empty(self):
         result = _parse_persona_draft("[人设设定]\n角色设定\n[输出示例]\n你好\\再见")
-        self.assertEqual(result, ("", "", "角色设定", "你好\\再见", "", ""))
+        self.assertEqual(result, ("", "", "角色设定", "你好\\再见", "", "", ""))
 
     def test_shared_generation_service_returns_editable_draft(self):
         config = ConfigManager()
@@ -80,6 +82,7 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
                     "output_examples": ["今晚\\雾很大"],
                     "avatar_prompt": "银发守灯人",
                     "background_prompt": "雾港灯塔",
+                    "chat_background_prompt": "竖向雾港夜景，中央留白",
                 }, ensure_ascii=False)
 
         app = SimpleNamespace(
@@ -96,6 +99,7 @@ class TestPersonaWriterDraftParser(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["name"], "雾港守灯人")
         self.assertEqual(result["avatar_prompt"], "银发守灯人")
+        self.assertEqual(result["chat_background_prompt"], "竖向雾港夜景，中央留白")
 
     def test_shared_generation_service_validates_model(self):
         config = ConfigManager()
