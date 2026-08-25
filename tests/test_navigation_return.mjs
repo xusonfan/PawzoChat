@@ -91,6 +91,11 @@ assert.match(
   "角色设置保存完成后应清理旧页面栈并打开新角色名片",
 );
 assert.match(
+  contactsSource,
+  /export async function deletePersona[\s\S]*?toast\("已删除", "success"\);[\s\S]*?switchTab\("contacts"\);/,
+  "删除角色后应清空角色页面栈并返回通讯录根页",
+);
+assert.match(
   navigationSource,
   /const steps = Math\.max\(0, _historyIndex - targetIndex\)/,
   "同一页面索引的覆盖层返回不能额外弹出当前页面",

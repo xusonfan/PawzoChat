@@ -574,8 +574,7 @@ export async function deletePersona(personaId) {
   try {
     await api.del(`/api/personas/${personaId}?delete_conversation=true`);
     toast("已删除", "success");
-    goBack();
-    refreshSidebar();
+    switchTab("contacts");
   } catch (e) { toast("操作失败", "error"); }
   finally { hideLoading(); }
 }
