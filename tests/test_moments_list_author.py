@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -110,6 +111,26 @@ class TestMomentsListAuthorFilter(unittest.TestCase):
                 "mom_dddddddddddd",
             ],
         )
+    def test_latest_timestamp_by_authors_ignores_other_authors(self):
+        latest = self.store.latest_timestamp_by_authors({"persona_b", "missing"})
+        self.assertEqual(latest, "2024-03-14T12:00:00+00:00")
+
+    def test_latest_timestamp_by_authors_handles_empty_selection(self):
+        self.assertIsNone(self.store.latest_timestamp_by_authors(set()))
+
+    def test_count_by_authors_since_counts_generated_posts_only(self):
+        count = self.store.count_by_authors_since(
+            {"persona_a", "persona_b"},
+            datetime(2024, 3, 14, tzinfo=timezone.utc),
+        )
+        self.assertEqual(count, 2)
+
+    def test_count_by_authors_since_ignores_user_posts(self):
+        count = self.store.count_by_authors_since(
+            {"persona_a"},
+            datetime(2024, 3, 15, tzinfo=timezone.utc),
+        )
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

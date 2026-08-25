@@ -34,6 +34,7 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Collection
 
 from pawzochat.paths import MOMENTS_DIR, MOMENTS_IMAGES_DIR, MOMENTS_STORE_PATH
 
@@ -154,6 +155,52 @@ class MomentsStore:
             has_more = len(ordered) > limit
             # Return shallow copies so callers can serialize without races.
             return [dict(m, replies=list(m.get("replies", []))) for m in page], has_more
+
+    def latest_timestamp_by_authors(self, authors: Collection[str]) -> str | None:
+        """Return the newest stored timestamp for any selected author."""
+        author_ids = {author for author in authors if author}
+        if not author_ids:
+            return None
+        with self._lock:
+            timestamps = [
+                str(moment.get("timestamp") or "")
+                for moment in self._read().get("moments", [])
+                if moment.get("author") in author_ids and moment.get("timestamp")
+            ]
+        return max(timestamps, default=None)
+
+    def count_by_authors_since(
+        self,
+        authors: Collection[str],
+        since: datetime,
+    ) -> int:
+        """Count selected authors' moments at or after an aware timestamp."""
+        author_ids = {author for author in authors if author}
+        if not author_ids:
+            return 0
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        threshold = since.astimezone(timezone.utc)
+        count = 0
+        with self._lock:
+            moments = list(self._read().get("moments", []))
+        for moment in moments:
+            if moment.get("author") not in author_ids:
+                continue
+            raw_timestamp = moment.get("timestamp")
+            if not raw_timestamp:
+                continue
+            try:
+                timestamp = datetime.fromisoformat(
+                    str(raw_timestamp).replace("Z", "+00:00"),
+                )
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                if timestamp.astimezone(timezone.utc) >= threshold:
+                    count += 1
+            except (TypeError, ValueError):
+                continue
+        return count
 
     def get_moment(self, moment_id: str) -> dict | None:
         with self._lock:

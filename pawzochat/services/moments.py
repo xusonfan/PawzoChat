@@ -36,6 +36,7 @@ import queue
 import random
 import re
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -52,6 +53,13 @@ logger = logging.getLogger(__name__)
 
 
 MAX_PUBLISH_IMAGES = 9
+
+# 正常运行时每天约自动发布 2-4 条；手动刷新计入每日额度但不受额度限制。
+_AUTO_PUBLISH_DAILY_LIMIT = 4
+_AUTO_PUBLISH_MIN_INTERVAL_SECONDS = 6 * 60 * 60
+_AUTO_PUBLISH_MAX_INTERVAL_SECONDS = 12 * 60 * 60
+_AUTO_PUBLISH_INITIAL_DELAY_SECONDS = (60, 5 * 60)
+_AUTO_PUBLISH_RETRY_SECONDS = 5 * 60
 
 
 DEFAULT_POST_PROMPT = (
@@ -148,14 +156,12 @@ class MomentsService:
         # never in parallel.
         self._counter_reply_queue: "queue.Queue[tuple[str, str, str]]" = queue.Queue()
         self._counter_worker: threading.Thread | None = None
+        self._auto_publish_worker: threading.Thread | None = None
 
     # ---- Lifecycle ----
 
     def start(self) -> None:
-        """Launch the counter-reply worker. publish/refresh still spawn
-        their own ad-hoc threads — only counter-replies need a persistent
-        single-consumer thread because they're triggered by the user at
-        arbitrary times."""
+        """Launch persistent workers for replies and automatic publishing."""
         if self._counter_worker is None or not self._counter_worker.is_alive():
             self._counter_worker = threading.Thread(
                 target=self._counter_reply_worker_loop,
@@ -163,6 +169,13 @@ class MomentsService:
                 daemon=True,
             )
             self._counter_worker.start()
+        if self._auto_publish_worker is None or not self._auto_publish_worker.is_alive():
+            self._auto_publish_worker = threading.Thread(
+                target=self._auto_publish_worker_loop,
+                name="moments-auto-publish",
+                daemon=True,
+            )
+            self._auto_publish_worker.start()
 
     def stop(self) -> None:
         """Signal background workers to exit. Does not block — daemon
@@ -637,6 +650,96 @@ class MomentsService:
         with self._gen_lock:
             self._generating = False
         broadcast("moments_generating", is_generating=False)
+
+    # ---- Automatic publishing worker ----
+
+    def _daily_generated_count(
+        self,
+        publishers: list[str],
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        local_now = (now or datetime.now().astimezone()).astimezone()
+        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return self._store.count_by_authors_since(publishers, day_start)
+
+    @staticmethod
+    def _seconds_until_next_local_day(*, now: datetime | None = None) -> float:
+        local_now = (now or datetime.now().astimezone()).astimezone()
+        next_day = (local_now + timedelta(days=1)).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        return max(1.0, (next_day - local_now).total_seconds())
+
+    def _next_auto_publish_delay(
+        self,
+        publishers: list[str],
+    ) -> tuple[float, str | None]:
+        """Return delay and the timestamp used to make the schedule."""
+        latest = self._store.latest_timestamp_by_authors(publishers)
+        if not latest:
+            return float(random.randint(*_AUTO_PUBLISH_INITIAL_DELAY_SECONDS)), None
+        try:
+            normalized = latest.replace("Z", "+00:00")
+            published_at = datetime.fromisoformat(normalized)
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            age = max(
+                0.0,
+                (datetime.now(timezone.utc) - published_at.astimezone(timezone.utc)).total_seconds(),
+            )
+        except (TypeError, ValueError):
+            logger.warning("朋友圈存在无效时间戳，自动发布将按首次任务处理: %s", latest)
+            return float(random.randint(*_AUTO_PUBLISH_INITIAL_DELAY_SECONDS)), latest
+
+        target_interval = random.randint(
+            _AUTO_PUBLISH_MIN_INTERVAL_SECONDS,
+            _AUTO_PUBLISH_MAX_INTERVAL_SECONDS,
+        )
+        if age >= _AUTO_PUBLISH_MAX_INTERVAL_SECONDS:
+            return float(random.randint(*_AUTO_PUBLISH_INITIAL_DELAY_SECONDS)), latest
+        return max(1.0, float(target_interval) - age), latest
+
+    def _auto_publish_worker_loop(self) -> None:
+        """Publish independently of page visits while respecting manual work."""
+        while not self._stop_event.is_set():
+            publishers = self._publishers()
+            if not publishers:
+                self._stop_event.wait(_AUTO_PUBLISH_RETRY_SECONDS)
+                continue
+            if self._daily_generated_count(publishers) >= _AUTO_PUBLISH_DAILY_LIMIT:
+                delay = self._seconds_until_next_local_day()
+                delay += random.randint(*_AUTO_PUBLISH_INITIAL_DELAY_SECONDS)
+                self._stop_event.wait(delay)
+                continue
+
+            delay, scheduled_from = self._next_auto_publish_delay(publishers)
+            if self._stop_event.wait(delay):
+                return
+
+            publishers = self._publishers()
+            if not publishers:
+                continue
+            if self._daily_generated_count(publishers) >= _AUTO_PUBLISH_DAILY_LIMIT:
+                continue
+            latest = self._store.latest_timestamp_by_authors(publishers)
+            if latest != scheduled_from:
+                continue
+            if not self._begin_task():
+                self._stop_event.wait(_AUTO_PUBLISH_RETRY_SECONDS)
+                continue
+
+            persona_id = random.choice(publishers)
+            try:
+                self._do_refresh(persona_id)
+            except Exception:
+                logger.exception("自动生成朋友圈失败 persona=%s", persona_id)
+                self._stop_event.wait(_AUTO_PUBLISH_RETRY_SECONDS)
+            finally:
+                self._end_task()
 
     # ---- Counter-reply worker ----
 
