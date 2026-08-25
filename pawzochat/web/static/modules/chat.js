@@ -41,6 +41,9 @@ import {
   removePendingUserMessage,
 } from "./chat_pending.js";
 import { shouldShowMessageTime } from "./chat_message_time.js";
+import {
+  clearDraft, getDraftSummary, loadDraft, saveDraft, saveDraftMetadata,
+} from "./drafts.js";
 import { hasRenderedMessage, mergeMessagesBySequence, messageSequence } from "./chat_message_identity.js";
 import {
   setTopBar, pushPage, goBack, switchTab,
@@ -52,6 +55,10 @@ export let chatPersonaId = null;
 let _pendingImages = [];
 let _pendingFiles = [];
 let _pendingQuote = "";
+const _draftRevisions = new Map();
+const _detachedDrafts = new Map();
+let _draftRestoreGeneration = 0;
+const _CHAT_DRAFT_NAMESPACE = "chat";
 // Monotonic token for conversation-list / unread fetches: only the latest
 // response may write state + DOM, so concurrent SSE refreshes cannot flash
 // badges by applying an older payload after a newer one.
@@ -178,6 +185,91 @@ const _STANDARD_EMOJIS = [
   "\u{2615}","\u{1F375}","\u{1F37A}","\u{1F37B}","\u{1F942}","\u{1F377}","\u{1F378}","\u{1F379}","\u{1F354}","\u{1F355}",
 ];
 
+/* ---- Chat Drafts ---- */
+
+function _chatDraftAttachments() {
+  return [
+    ..._pendingImages.map(item => ({ kind: "image", file: item.file })),
+    ..._pendingFiles.map(item => ({ kind: "file", file: item.file })),
+  ];
+}
+
+function _draftPreview(summary) {
+  const text = summary?.text?.trim() || summary?.quote?.trim() || "";
+  if (text) return text;
+  if (summary?.attachmentCount > 0) return summary.attachmentNames?.[0] || "附件";
+  return "";
+}
+
+function _paintConversationDraftPreview(personaId) {
+  const summary = getDraftSummary(_CHAT_DRAFT_NAMESPACE, personaId);
+  document.querySelectorAll(".conv-item").forEach(item => {
+    if (item.dataset.personaId !== String(personaId)) return;
+    const preview = item.querySelector(".conv-preview");
+    if (!preview) return;
+    const fallback = preview.dataset.messagePreview || "";
+    preview.innerHTML = summary
+      ? `<span class="conv-draft-label">草稿</span><span>${esc(_draftPreview(summary))}</span>`
+      : esc(fallback);
+  });
+}
+
+function _draftRevision(personaId) {
+  return _draftRevisions.get(personaId) || 0;
+}
+
+function _saveChatDraft({ attachments = false } = {}) {
+  const personaId = chatPersonaId;
+  if (!personaId) return;
+  _draftRevisions.set(personaId, _draftRevision(personaId) + 1);
+  const draft = {
+    text: $("chat-input")?.value || "",
+    quote: _pendingQuote,
+  };
+  if (attachments || _detachedDrafts.has(personaId)) {
+    _detachedDrafts.delete(personaId);
+    void saveDraft(_CHAT_DRAFT_NAMESPACE, personaId, {
+      ...draft,
+      attachments: _chatDraftAttachments(),
+    }).catch(() => undefined);
+  } else {
+    saveDraftMetadata(_CHAT_DRAFT_NAMESPACE, personaId, draft);
+  }
+  _paintConversationDraftPreview(personaId);
+}
+
+function _releasePendingImageUrls() {
+  _pendingImages.forEach(item => URL.revokeObjectURL(item.url));
+}
+
+async function _restoreChatDraft(personaId, generation, revision) {
+  const draft = await loadDraft(_CHAT_DRAFT_NAMESPACE, personaId);
+  if (
+    !draft
+    || generation !== _draftRestoreGeneration
+    || personaId !== chatPersonaId
+    || revision !== _draftRevision(personaId)
+    || !$("chat-input")
+  ) return;
+
+  _releasePendingImageUrls();
+  _pendingImages = [];
+  _pendingFiles = [];
+  for (const attachment of draft.attachments) {
+    if (attachment.kind === "image") {
+      _pendingImages.push({ file: attachment.file, url: URL.createObjectURL(attachment.file) });
+    } else {
+      _pendingFiles.push({ file: attachment.file, name: attachment.file.name });
+    }
+  }
+  _pendingQuote = draft.quote || "";
+  $("chat-input").value = draft.text || "";
+  _renderImagePreviews();
+  _renderFilePreviews();
+  _renderQuotePreview();
+  _resizeChatInput();
+}
+
 /* ---- Chat List (Tab) ---- */
 
 function _mergeConversationState(incoming) {
@@ -210,6 +302,10 @@ function _paintChatList(target, desktop) {
     const persona = state.personas.find(pp => pp.id === c.persona_id);
     const avUrl = personaAvatarUrl(persona);
     const preview = summarizeConversationMessage(c.last_message);
+    const draft = getDraftSummary(_CHAT_DRAFT_NAMESPACE, c.persona_id);
+    const previewHtml = draft
+      ? `<span class="conv-draft-label">草稿</span><span>${esc(_draftPreview(draft))}</span>`
+      : esc(preview);
     const time = c.last_message ? formatTime(c.last_message.timestamp) : "";
     const active = (desktop && chatPersonaId === c.persona_id) ? " active" : "";
     const unreadBadge = unreadBadgeHtml(c.unread_count, "conv-unread-badge");
@@ -219,7 +315,7 @@ function _paintChatList(target, desktop) {
       <div class="conv-avatar-wrap">${avatarHtml(pname, "", avUrl)}${unreadBadge}</div>
       <div class="conv-info">
         <div class="conv-name">${esc(pname)}</div>
-        <div class="conv-preview">${esc(preview)}</div>
+        <div class="conv-preview" data-message-preview="${escAttr(preview)}">${previewHtml}</div>
       </div>
       <div class="conv-meta"><div class="conv-time">${time}</div>${pinnedBadge}</div>
     </div>`;
@@ -951,6 +1047,7 @@ export function quoteMessage() {
   if (!q) return;
   _pendingQuote = q;
   _renderQuotePreview();
+  _saveChatDraft();
   const inp = $("chat-input");
   if (inp) inp.focus();
 }
@@ -1006,6 +1103,7 @@ export function toggleVoiceTranscript(trigger = null) {
 export function clearPendingQuote() {
   _pendingQuote = "";
   _renderQuotePreview();
+  _saveChatDraft();
 }
 
 function _conversationBackgroundVersion(personaId) {
@@ -1076,9 +1174,11 @@ async function renderChatWindow(data) {
 
   _disposeVoiceRecorder();
   _voiceInput.mode = false;
+  _releasePendingImageUrls();
   _pendingImages = [];
   _pendingFiles = [];
   _pendingQuote = "";
+  const draftRestoreGeneration = ++_draftRestoreGeneration;
   _closeQuotePop(); // never let a popup (in document.body) outlive the chat that spawned it
   content().innerHTML = `<div class="chat-container">
     <div class="chat-background-layer" id="chat-background-layer" aria-hidden="true" hidden></div>
@@ -1165,6 +1265,11 @@ async function renderChatWindow(data) {
   _emojiActiveTab = 0;
   _plusMenuOpen = false;
   _chatInputComposing = false;
+  void _restoreChatDraft(
+    renderedPersonaId,
+    draftRestoreGeneration,
+    _draftRevision(renderedPersonaId),
+  );
 
   if (cachedMessages) {
     const cached = cachedMessages.messages || [];
@@ -1311,14 +1416,20 @@ function markRenderedMessagesRead(personaId, messages) {
   if (latestSequence > 0) void markConversationRead(personaId, latestSequence);
 }
 
-export function onChatInput() {
+function _resizeChatInput() {
   const inp = $("chat-input");
+  if (!inp) return;
   inp.style.height = "auto";
   inp.style.height = Math.min(inp.scrollHeight, 100) + "px";
   if (_pinBottomForKeyboard && document.activeElement === inp) {
     const msgsEl = $("chat-msgs");
     if (msgsEl) requestAnimationFrame(() => _scrollAfterInsert(msgsEl));
   }
+}
+
+export function onChatInput() {
+  _resizeChatInput();
+  _saveChatDraft();
 }
 
 export function onChatCompositionStart() {
@@ -1635,14 +1746,16 @@ function _addPendingImage(file) {
   const url = URL.createObjectURL(file);
   _pendingImages.push({ file, url });
   _renderImagePreviews();
-  onChatInput();
+  _resizeChatInput();
+  _saveChatDraft({ attachments: true });
 }
 
 export function removePendingImage(idx) {
   const removed = _pendingImages.splice(idx, 1);
   if (removed[0]) URL.revokeObjectURL(removed[0].url);
   _renderImagePreviews();
-  onChatInput();
+  _resizeChatInput();
+  _saveChatDraft({ attachments: true });
 }
 
 function _renderImagePreviews() {
@@ -1675,13 +1788,15 @@ export function onFileSelected(input) {
 function _addPendingFile(file) {
   _pendingFiles.push({ file, name: file.name });
   _renderFilePreviews();
-  onChatInput();
+  _resizeChatInput();
+  _saveChatDraft({ attachments: true });
 }
 
 export function removePendingFile(idx) {
   _pendingFiles.splice(idx, 1);
   _renderFilePreviews();
-  onChatInput();
+  _resizeChatInput();
+  _saveChatDraft({ attachments: true });
 }
 
 function _renderFilePreviews() {
@@ -1706,8 +1821,10 @@ export async function sendChat() {
   if (!text && !hasImages && !hasFiles) return;
 
   const personaId = chatPersonaId;
+  const sentDraftRevision = _draftRevision(personaId);
+  _detachedDrafts.set(personaId, sentDraftRevision);
   inp.value = "";
-  onChatInput();
+  _resizeChatInput();
 
   const msgsEl = $("chat-msgs");
   const emptyState = msgsEl.querySelector(".empty-state");
@@ -1806,15 +1923,50 @@ export async function sendChat() {
     toast("网络错误", "error");
   }
 
+  let restoredFailedDraft = false;
+  if (_detachedDrafts.get(personaId) === sentDraftRevision) {
+    _detachedDrafts.delete(personaId);
+  }
   if (sendFailed) {
     removePendingUserMessage(personaId, pendingId);
     document.querySelector(`.msg-row[data-pending-id="${pendingId}"]`)?.remove();
     document.querySelector(`.msg-time[data-pending-time-id="${pendingId}"]`)?.remove();
+    if (_isActiveChatWindow(personaId)) {
+      const unchanged = _draftRevision(personaId) === sentDraftRevision;
+      const currentText = $("chat-input")?.value || "";
+      $("chat-input").value = unchanged
+        ? text
+        : [text, currentText].filter(Boolean).join("\n");
+      _pendingImages = [...imagesToSend, ..._pendingImages];
+      _pendingFiles = [...filesToSend, ..._pendingFiles];
+      _pendingQuote = unchanged ? quoteToSend : (_pendingQuote || quoteToSend);
+      _renderImagePreviews();
+      _renderFilePreviews();
+      _renderQuotePreview();
+      _resizeChatInput();
+      _saveChatDraft({ attachments: true });
+      restoredFailedDraft = true;
+    } else if (_draftRevision(personaId) === sentDraftRevision) {
+      void saveDraft(_CHAT_DRAFT_NAMESPACE, personaId, {
+        text,
+        quote: quoteToSend,
+        attachments: [
+          ...imagesToSend.map(item => ({ kind: "image", file: item.file })),
+          ...filesToSend.map(item => ({ kind: "file", file: item.file })),
+        ],
+      }).then(() => _paintConversationDraftPreview(personaId)).catch(() => undefined);
+    }
   } else {
     confirmPendingUserMessage(personaId, pendingId, acceptedMessage);
+    if (_draftRevision(personaId) === sentDraftRevision) {
+      await clearDraft(_CHAT_DRAFT_NAMESPACE, personaId).catch(() => undefined);
+      _paintConversationDraftPreview(personaId);
+    }
   }
 
-  for (const img of imagesToSend) URL.revokeObjectURL(img.url);
+  if (!restoredFailedDraft) {
+    for (const img of imagesToSend) URL.revokeObjectURL(img.url);
+  }
 }
 
 function _isActiveChatWindow(personaId = chatPersonaId) {
