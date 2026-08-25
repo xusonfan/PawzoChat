@@ -339,6 +339,60 @@ def create_app(app_instance: App) -> Flask:
             "display": "standalone",
             "background_color": "#FFFDF8",
             "theme_color": "#FFFDF8",
+            "shortcuts": [
+                {
+                    "name": "雷达",
+                    "short_name": "雷达",
+                    "description": "发现推荐角色",
+                    "url": f"{base}/?shortcut=radar",
+                    "icons": [
+                        {
+                            "src": f"{base}/static/pwa/shortcut-radar.png",
+                            "sizes": "192x192",
+                            "type": "image/png",
+                        }
+                    ],
+                },
+                {
+                    "name": "人设编写助手",
+                    "short_name": "人设助手",
+                    "description": "创建和完善角色人设",
+                    "url": f"{base}/?shortcut=persona-writer",
+                    "icons": [
+                        {
+                            "src": f"{base}/static/pwa/shortcut-persona-writer.png",
+                            "sizes": "192x192",
+                            "type": "image/png",
+                        }
+                    ],
+                },
+                {
+                    "name": "朋友圈",
+                    "short_name": "朋友圈",
+                    "description": "查看朋友圈动态",
+                    "url": f"{base}/?shortcut=moments",
+                    "icons": [
+                        {
+                            "src": f"{base}/static/pwa/shortcut-moments.png",
+                            "sizes": "192x192",
+                            "type": "image/png",
+                        }
+                    ],
+                },
+                {
+                    "name": "AI 图库",
+                    "short_name": "图库",
+                    "description": "查看 AI 图片库",
+                    "url": f"{base}/?shortcut=gallery",
+                    "icons": [
+                        {
+                            "src": f"{base}/static/pwa/shortcut-gallery.png",
+                            "sizes": "192x192",
+                            "type": "image/png",
+                        }
+                    ],
+                },
+            ],
             "share_target": {
                 "action": f"{base}/share-target",
                 "method": "POST",

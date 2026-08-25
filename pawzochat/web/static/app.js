@@ -29,7 +29,7 @@ import { openImagePreview, closeImagePreview } from "./modules/image_preview.js"
 import { rememberImageLayout } from "./modules/image_layout_cache.js";
 import { errorNoticeFromEvent } from "./modules/error_feedback.js";
 import {
-  setTopBar, switchTab, goBack, pushPage,
+  setTopBar, switchTab, goBack, pushPage, navigateToPage,
   registerTabRenderer, registerPageRenderer,
   isDesktop, setSidebarBar, initMobileTabSwipe,
 } from "./modules/navigation.js";
@@ -789,12 +789,21 @@ async function handleShareTarget(id) {
 
 document.addEventListener("DOMContentLoaded", () => {
   const launchUrl = new URL(window.location.href);
+  const shortcutTargets = {
+    radar: { tab: "discover", page: "radar" },
+    "persona-writer": { tab: "discover", page: "personaWriter" },
+    moments: { tab: "discover", page: "momentsList" },
+    gallery: { tab: "discover", page: "imageGallery" },
+  };
+  const shortcutName = launchUrl.searchParams.get("shortcut");
+  const shortcutTarget = shortcutTargets[shortcutName];
   const notificationPersonaId = launchUrl.searchParams.get("openChat");
   const shareTargetId = launchUrl.searchParams.get("shareTarget");
   const shareTargetError = launchUrl.searchParams.get("shareError") === "1";
   const handledMessageKeys = launchUrl.searchParams.getAll("handledMessageKey");
   rememberHandledMessageKeys(handledMessageKeys);
-  if (notificationPersonaId || handledMessageKeys.length > 0 || shareTargetId || shareTargetError) {
+  if (shortcutTarget || notificationPersonaId || handledMessageKeys.length > 0 || shareTargetId || shareTargetError) {
+    launchUrl.searchParams.delete("shortcut");
     launchUrl.searchParams.delete("openChat");
     launchUrl.searchParams.delete("handledMessageKey");
     launchUrl.searchParams.delete("shareTarget");
@@ -814,6 +823,8 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => { void handleShareTarget(shareTargetId); }, 0);
   } else if (shareTargetError) {
     setTimeout(() => toast("系统分享内容接收失败，请重新分享", "error"), 0);
+  } else if (shortcutTarget?.page) {
+    setTimeout(() => navigateToPage(shortcutTarget.tab, shortcutTarget.page, {}), 0);
   }
   initSSE();
   checkAndShowSetup();

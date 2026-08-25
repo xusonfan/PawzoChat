@@ -37,6 +37,35 @@ class ShareTargetManifestTests(unittest.TestCase):
         self.assertIn("image/*", target["params"]["files"][0]["accept"])
         self.assertEqual(response.headers["Cache-Control"], "no-cache")
 
+    def test_manifest_declares_prefixed_app_shortcuts(self):
+        response = self.make_client().get(
+            "/manifest.webmanifest",
+            environ_overrides={"SCRIPT_NAME": "/secret"},
+        )
+
+        manifest = json.loads(response.get_data(as_text=True))
+        shortcuts = manifest["shortcuts"]
+        self.assertEqual(
+            [(item["name"], item["url"]) for item in shortcuts],
+            [
+                ("雷达", "/secret/?shortcut=radar"),
+                ("人设编写助手", "/secret/?shortcut=persona-writer"),
+                ("朋友圈", "/secret/?shortcut=moments"),
+                ("AI 图库", "/secret/?shortcut=gallery"),
+            ],
+        )
+        self.assertEqual(
+            [item["icons"][0]["src"] for item in shortcuts],
+            [
+                "/secret/static/pwa/shortcut-radar.png",
+                "/secret/static/pwa/shortcut-persona-writer.png",
+                "/secret/static/pwa/shortcut-moments.png",
+                "/secret/static/pwa/shortcut-gallery.png",
+            ],
+        )
+        for shortcut in shortcuts:
+            self.assertEqual(shortcut["icons"][0]["sizes"], "192x192")
+
 
 if __name__ == "__main__":
     unittest.main()

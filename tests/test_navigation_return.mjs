@@ -265,4 +265,14 @@ await Promise.resolve();
 await Promise.resolve();
 assert.equal(elements.get("content-area").scrollTop, 640, "返回后应恢复朋友圈原位置");
 
+// PWA 快捷入口从聊天根页跨标签进入功能页，返回应落到聊天列表。
+state.currentTab = "chat";
+state.pageStack = [];
+navigateToPage("discover", "momentsList", {});
+assert.equal(state.currentTab, "discover");
+assert.equal(state.pageStack[0].returnState.tab, "chat");
+goBack();
+assert.equal(state.currentTab, "chat");
+assert.deepEqual(state.pageStack, []);
+
 console.log("navigation return-state tests passed");
