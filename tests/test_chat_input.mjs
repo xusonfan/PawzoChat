@@ -91,10 +91,24 @@ assert.match(css, /\.chat-new-message-btn\s*\{[^}]*position:\s*absolute;[^}]*rig
 assert.doesNotMatch(chatSource, /id="camera-file-input"/, "拍照不应再依赖可能打开相册的文件输入");
 assert.match(
   chatSource,
-  /navigator\.mediaDevices\.getUserMedia\(\{[\s\S]*?facingMode: \{ ideal: "environment" \}[\s\S]*?audio: false/,
-  "拍照应通过浏览器摄像头 API 请求后置镜头",
+  /navigator\.mediaDevices\.getUserMedia\(\{[\s\S]*?facingMode: \{ ideal: facingMode \}[\s\S]*?audio: false/,
+  "拍照应通过浏览器摄像头 API 请求指定镜头",
 );
-assert.match(chatSource, /export function capturePhoto\(\)[\s\S]*?drawImage\(video[\s\S]*?canvas\.toBlob/);
+assert.match(chatSource, /export async function switchCameraFacing\(\)[\s\S]*?"environment" \? "user" : "environment"/);
+assert.match(chatSource, /export async function toggleCameraTorch\(\)[\s\S]*?applyConstraints\(\{ advanced: \[\{ torch: enabled \}\] \}\)/);
+assert.match(chatSource, /async function _applyPendingCameraZoom\(\)[\s\S]*?applyConstraints\(\{ advanced: \[\{ zoom: nextValue \}\] \}\)/);
+assert.match(chatSource, /export function startCameraGesture\(event\)[\s\S]*?pinchStartDistance = _cameraPointerDistance\(\)/);
+assert.match(chatSource, /export function moveCameraGesture\(event\)[\s\S]*?setCameraZoom\(_cameraSession\.pinchStartZoom \* ratio\)/);
+assert.doesNotMatch(chatSource, /id="camera-zoom-input"/, "全屏相机缩放不应继续依赖滑块");
+assert.match(
+  chatSource,
+  /function _compressCapturedPhoto\(video\)[\s\S]*?drawImage\(video[\s\S]*?toBlob\(resolve, "image\/jpeg", _CAMERA_JPEG_QUALITY\)/,
+  "拍照后应限制尺寸并压缩为 JPEG",
+);
+assert.match(chatSource, /export async function capturePhoto\(\)[\s\S]*?_compressCapturedPhoto\(video\)/);
+assert.match(chatSource, /showSheet\(_cameraSheetHtml\(\)[\s\S]*?\{ className: "camera-fullscreen" \}/, "拍照界面应启用全屏面板");
+assert.match(css, /#action-sheet\.camera-fullscreen\s*\{[^}]*inset:\s*0;[^}]*height:\s*100dvh;[^}]*max-height:\s*none;/s);
+assert.match(css, /\.camera-fullscreen \.camera-preview\s*\{[^}]*height:\s*100%;[^}]*object-fit:\s*cover;/s);
 assert.match(chatSource, /_cameraStream\.getTracks\(\)\.forEach\(track => track\.stop\(\)\)/);
 assert.ok(
   chatSource.indexOf("PawzoChat.takePhoto()") < chatSource.indexOf("PawzoChat.pickImage()"),

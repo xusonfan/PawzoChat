@@ -55,6 +55,7 @@ export function closeConfirm(result) {
 }
 
 let _onOverlayClose = null;
+let _sheetClassName = "";
 
 function _pushOverlayHistory() {
   if (overlayHistoryToken
@@ -72,16 +73,20 @@ function _pushOverlayHistory() {
   }
 }
 
-export function showSheet(html, onClose) {
+export function showSheet(html, onClose, { className = "" } = {}) {
   _onOverlayClose = onClose || null;
   clearTimeout(overlayCloseTimer);
+  const actionSheet = $("action-sheet");
+  if (_sheetClassName) actionSheet.classList.remove(_sheetClassName);
+  _sheetClassName = className;
+  if (_sheetClassName) actionSheet.classList.add(_sheetClassName);
   $("sheet-content").innerHTML = html;
   $("overlay").classList.remove("hide");
-  $("action-sheet").classList.remove("hide");
+  actionSheet.classList.remove("hide");
   _pushOverlayHistory();
   requestAnimationFrame(() => {
     $("overlay").classList.add("show");
-    $("action-sheet").classList.add("show");
+    actionSheet.classList.add("show");
   });
 }
 
@@ -95,7 +100,10 @@ export function closeOverlay({ fromHistory = false } = {}) {
   clearTimeout(overlayCloseTimer);
   overlayCloseTimer = setTimeout(() => {
     $("overlay").classList.add("hide");
-    $("action-sheet").classList.add("hide");
+    const actionSheet = $("action-sheet");
+    actionSheet.classList.add("hide");
+    if (_sheetClassName) actionSheet.classList.remove(_sheetClassName);
+    _sheetClassName = "";
   }, 300);
   const cb = _onOverlayClose;
   _onOverlayClose = null;

@@ -139,6 +139,20 @@ let _emojiActiveTab = 0;
 
 let _plusMenuOpen = false;
 let _cameraStream = null;
+const _cameraSession = {
+  facingMode: "environment",
+  torchEnabled: false,
+  requestGeneration: 0,
+  zoomValue: 1,
+  pendingZoom: null,
+  applyingZoom: false,
+  zoomWorkerGeneration: 0,
+  pointers: new Map(),
+  pinchStartDistance: 0,
+  pinchStartZoom: 1,
+};
+const _CAMERA_MAX_IMAGE_SIDE = 1600;
+const _CAMERA_JPEG_QUALITY = 0.82;
 
 const _voiceInput = {
   mode: false,
@@ -1669,9 +1683,105 @@ export function cancelVoiceRecording(event) {
 }
 
 function _stopCameraStream() {
-  if (!_cameraStream) return;
-  _cameraStream.getTracks().forEach(track => track.stop());
-  _cameraStream = null;
+  if (_cameraStream) {
+    _cameraStream.getTracks().forEach(track => track.stop());
+    _cameraStream = null;
+  }
+  _cameraSession.torchEnabled = false;
+  _cameraSession.pendingZoom = null;
+  _cameraSession.applyingZoom = false;
+  _cameraSession.zoomWorkerGeneration += 1;
+  _cameraSession.pointers.clear();
+  _cameraSession.pinchStartDistance = 0;
+}
+
+function _cameraVideoTrack() {
+  return _cameraStream?.getVideoTracks?.()[0] || null;
+}
+
+function _cameraCapabilities(track = _cameraVideoTrack()) {
+  try {
+    return track?.getCapabilities?.() || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function _syncCameraControls() {
+  const track = _cameraVideoTrack();
+  const capabilities = _cameraCapabilities(track);
+  const settings = track?.getSettings?.() || {};
+  const torchButton = $("camera-torch-btn");
+  const zoomIndicator = $("camera-zoom-indicator");
+  const zoomValue = $("camera-zoom-value");
+
+  if (torchButton) {
+    torchButton.hidden = capabilities.torch !== true;
+    torchButton.classList.toggle("active", _cameraSession.torchEnabled);
+    torchButton.setAttribute("aria-pressed", String(_cameraSession.torchEnabled));
+    torchButton.title = _cameraSession.torchEnabled ? "关闭手电筒" : "打开手电筒";
+  }
+
+  const zoom = capabilities.zoom;
+  const supportsZoom = Number.isFinite(zoom?.min) && Number.isFinite(zoom?.max) && zoom.max > zoom.min;
+  if (zoomIndicator) zoomIndicator.hidden = !supportsZoom;
+  if (!supportsZoom) return;
+
+  _cameraSession.zoomValue = Math.min(zoom.max, Math.max(zoom.min, Number(settings.zoom) || zoom.min));
+  if (zoomValue) zoomValue.textContent = `${_cameraSession.zoomValue.toFixed(1)}×`;
+}
+
+async function _requestCameraStream(facingMode) {
+  return navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facingMode } },
+    audio: false,
+  });
+}
+
+async function _replaceCameraStream(facingMode) {
+  const generation = ++_cameraSession.requestGeneration;
+  _stopCameraStream();
+  const stream = await _requestCameraStream(facingMode);
+  if (generation !== _cameraSession.requestGeneration) {
+    stream.getTracks().forEach(track => track.stop());
+    return false;
+  }
+
+  _cameraStream = stream;
+  _cameraSession.facingMode = facingMode;
+  const video = $("camera-preview");
+  if (video) {
+    video.srcObject = stream;
+    video.classList.toggle("is-front-facing", facingMode === "user");
+  }
+  _syncCameraControls();
+  return true;
+}
+
+function _cameraSheetHtml() {
+  return `
+    <div class="camera-sheet">
+      <div class="camera-sheet-header">
+        <button id="camera-torch-btn" class="camera-tool-btn" hidden onclick="PawzoChat.toggleCameraTorch()" aria-label="切换手电筒" aria-pressed="false">手电筒</button>
+        <div class="camera-sheet-title">拍照</div>
+        <button class="camera-tool-btn" onclick="PawzoChat.switchCameraFacing()" aria-label="切换前后摄像头">切换镜头</button>
+      </div>
+      <div class="camera-viewport"
+        onpointerdown="PawzoChat.startCameraGesture(event)"
+        onpointermove="PawzoChat.moveCameraGesture(event)"
+        onpointerup="PawzoChat.endCameraGesture(event)"
+        onpointercancel="PawzoChat.endCameraGesture(event)">
+        <video id="camera-preview" class="camera-preview" autoplay muted playsinline></video>
+        <div id="camera-zoom-indicator" class="camera-zoom-indicator" hidden>
+          <span>双指缩放</span>
+          <output id="camera-zoom-value">1.0×</output>
+        </div>
+      </div>
+      <div class="camera-sheet-actions">
+        <button class="camera-cancel-btn" onclick="PawzoChat.closeOverlay()">取消</button>
+        <button class="camera-capture-btn" onclick="PawzoChat.capturePhoto()" aria-label="拍摄照片"></button>
+      </div>
+    </div>`;
 }
 
 export async function takePhoto() {
@@ -1681,22 +1791,18 @@ export async function takePhoto() {
   }
 
   try {
-    _stopCameraStream();
-    _cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
-      audio: false,
-    });
-    showSheet(`
-      <div class="camera-sheet">
-        <div class="camera-sheet-title">拍照</div>
-        <video id="camera-preview" class="camera-preview" autoplay muted playsinline></video>
-        <div class="camera-sheet-actions">
-          <button class="camera-cancel-btn" onclick="PawzoChat.closeOverlay()">取消</button>
-          <button class="camera-capture-btn" onclick="PawzoChat.capturePhoto()" aria-label="拍摄照片"></button>
-        </div>
-      </div>`, _stopCameraStream);
+    _cameraSession.facingMode = "environment";
+    await _replaceCameraStream(_cameraSession.facingMode);
+    showSheet(_cameraSheetHtml(), () => {
+      _cameraSession.requestGeneration += 1;
+      _stopCameraStream();
+    }, { className: "camera-fullscreen" });
     const video = $("camera-preview");
-    if (video) video.srcObject = _cameraStream;
+    if (video) {
+      video.srcObject = _cameraStream;
+      video.classList.toggle("is-front-facing", _cameraSession.facingMode === "user");
+    }
+    _syncCameraControls();
   } catch (e) {
     _stopCameraStream();
     const message = e?.name === "NotAllowedError"
@@ -1706,27 +1812,122 @@ export async function takePhoto() {
   }
 }
 
-export function capturePhoto() {
+export async function switchCameraFacing() {
+  const previousMode = _cameraSession.facingMode;
+  const nextMode = previousMode === "environment" ? "user" : "environment";
+  try {
+    await _replaceCameraStream(nextMode);
+  } catch (_) {
+    try {
+      await _replaceCameraStream(previousMode);
+    } catch (_) {
+      _stopCameraStream();
+    }
+    toast("无法切换摄像头", "error");
+  }
+}
+
+export async function toggleCameraTorch() {
+  const track = _cameraVideoTrack();
+  if (!track || _cameraCapabilities(track).torch !== true) return;
+
+  const enabled = !_cameraSession.torchEnabled;
+  try {
+    await track.applyConstraints({ advanced: [{ torch: enabled }] });
+    _cameraSession.torchEnabled = enabled;
+    _syncCameraControls();
+  } catch (_) {
+    toast("当前摄像头无法切换手电筒", "error");
+  }
+}
+
+function _cameraPointerDistance() {
+  const points = [..._cameraSession.pointers.values()];
+  if (points.length < 2) return 0;
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+}
+
+async function _applyPendingCameraZoom() {
+  if (_cameraSession.applyingZoom) return;
+  _cameraSession.applyingZoom = true;
+  const generation = _cameraSession.zoomWorkerGeneration;
+  try {
+    while (_cameraSession.pendingZoom != null && generation === _cameraSession.zoomWorkerGeneration) {
+      const nextValue = _cameraSession.pendingZoom;
+      _cameraSession.pendingZoom = null;
+      const track = _cameraVideoTrack();
+      if (!track || track.readyState === "ended") return;
+      try {
+        await track.applyConstraints({ advanced: [{ zoom: nextValue }] });
+        if (generation !== _cameraSession.zoomWorkerGeneration) return;
+        _cameraSession.zoomValue = nextValue;
+        const output = $("camera-zoom-value");
+        if (output) output.textContent = `${nextValue.toFixed(1)}×`;
+      } catch (_) {
+        if (generation === _cameraSession.zoomWorkerGeneration) _syncCameraControls();
+      }
+    }
+  } finally {
+    if (generation === _cameraSession.zoomWorkerGeneration) _cameraSession.applyingZoom = false;
+  }
+}
+
+export function setCameraZoom(value) {
+  const zoom = _cameraCapabilities().zoom;
+  if (!zoom) return;
+  const nextValue = Math.min(zoom.max, Math.max(zoom.min, Number(value)));
+  if (!Number.isFinite(nextValue)) return;
+  _cameraSession.pendingZoom = nextValue;
+  void _applyPendingCameraZoom();
+}
+
+export function startCameraGesture(event) {
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  _cameraSession.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (_cameraSession.pointers.size !== 2) return;
+  event.preventDefault();
+  _cameraSession.pinchStartDistance = _cameraPointerDistance();
+  _cameraSession.pinchStartZoom = _cameraSession.zoomValue;
+}
+
+export function moveCameraGesture(event) {
+  if (!_cameraSession.pointers.has(event.pointerId)) return;
+  _cameraSession.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (_cameraSession.pointers.size !== 2 || !_cameraSession.pinchStartDistance) return;
+  event.preventDefault();
+  const ratio = _cameraPointerDistance() / _cameraSession.pinchStartDistance;
+  setCameraZoom(_cameraSession.pinchStartZoom * ratio);
+}
+
+export function endCameraGesture(event) {
+  _cameraSession.pointers.delete(event.pointerId);
+  if (_cameraSession.pointers.size < 2) _cameraSession.pinchStartDistance = 0;
+}
+
+function _compressCapturedPhoto(video) {
+  const scale = Math.min(1, _CAMERA_MAX_IMAGE_SIDE / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", _CAMERA_JPEG_QUALITY));
+}
+
+export async function capturePhoto() {
   const video = $("camera-preview");
   if (!video?.videoWidth || !video.videoHeight) {
     toast("摄像头正在准备，请稍后再拍", "error");
     return;
   }
 
-  const maxSide = 1920;
-  const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
-  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  const blobPromise = _compressCapturedPhoto(video);
   closeOverlay();
-  canvas.toBlob(blob => {
-    if (!blob) {
-      toast("照片生成失败，请重试", "error");
-      return;
-    }
-    _addPendingImage(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
-  }, "image/jpeg", 0.9);
+  const blob = await blobPromise;
+  if (!blob) {
+    toast("照片生成失败，请重试", "error");
+    return;
+  }
+  _addPendingImage(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
 }
 
 export function pickImage() {
