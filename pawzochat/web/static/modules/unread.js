@@ -21,6 +21,19 @@ export function totalUnread(conversations) {
   );
 }
 
+export function syncAppBadge(count, badgeTarget = globalThis.navigator) {
+  const value = normalizeUnreadCount(count);
+  try {
+    if (value > 0 && typeof badgeTarget?.setAppBadge === "function") {
+      void Promise.resolve(badgeTarget.setAppBadge(value)).catch(() => {});
+    } else if (value === 0 && typeof badgeTarget?.clearAppBadge === "function") {
+      void Promise.resolve(badgeTarget.clearAppBadge()).catch(() => {});
+    }
+  } catch (_) {
+    // Badging is optional and may still be rejected by browser policy.
+  }
+}
+
 export function unreadBadgeHtml(count, className = "unread-badge") {
   const value = normalizeUnreadCount(count);
   if (!value) return "";
@@ -119,6 +132,7 @@ export function updateConversationUnread(conversations) {
 
 export function updateChatTabUnread(conversations) {
   const count = totalUnread(conversations);
+  syncAppBadge(count);
   let changed = false;
   document.querySelectorAll(".tab[data-tab='chat']").forEach(tab => {
     const existing = tab.querySelector(".tab-unread-badge");

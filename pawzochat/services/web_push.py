@@ -235,6 +235,7 @@ class WebPushService:
         persona_id: str,
         persona_name: str,
         message: dict,
+        total_unread: int,
     ) -> None:
         if self._closed:
             return
@@ -247,6 +248,7 @@ class WebPushService:
             "personaId": persona_id,
             "avatarVersion": _avatar_version(persona_id),
             "messageKey": message_key,
+            "totalUnread": max(0, int(total_unread)),
         }
         with self._lock:
             subscriptions = [dict(item, keys=dict(item["keys"])) for item in self._subscriptions]

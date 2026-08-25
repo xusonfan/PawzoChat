@@ -143,6 +143,15 @@ const conversations = [
   { persona_id: "fox", unread_count: 0 },
 ];
 assert.equal(mod.totalUnread(conversations), 7);
+const badgeCalls = [];
+const badgeTarget = {
+  setAppBadge(count) { badgeCalls.push(["set", count]); },
+  clearAppBadge() { badgeCalls.push(["clear"]); },
+};
+mod.syncAppBadge(7, badgeTarget);
+mod.syncAppBadge(0, badgeTarget);
+mod.syncAppBadge(3, {});
+assert.deepEqual(badgeCalls, [["set", 7], ["clear"]]);
 assert.equal(mod.markConversationReadLocal(conversations, "cat"), true);
 assert.equal(conversations[0].unread_count, 0);
 assert.equal(mod.conversationLatestMessageSequence([

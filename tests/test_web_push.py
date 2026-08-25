@@ -90,6 +90,7 @@ def test_assistant_message_is_delivered_as_compact_payload(push_paths):
                 "_seq": 7,
                 "content": [{"type": "text", "text": "在吗"}],
             },
+            total_unread=12,
         )
         assert delivered.wait(2)
         payload = json.loads(sent[0]["data"])
@@ -100,6 +101,7 @@ def test_assistant_message_is_delivered_as_compact_payload(push_paths):
             "personaId": "cat",
             "avatarVersion": avatar_version,
             "messageKey": "cat:7",
+            "totalUnread": 12,
         }
         assert sent[0]["ttl"] == 86400
         assert sent[0]["timeout"] == 10

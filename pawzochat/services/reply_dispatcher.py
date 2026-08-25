@@ -145,6 +145,10 @@ class ReplyDispatcher:
                         "personas", persona_id, "name", default="PawzoChat",
                     ),
                     message=stored,
+                    total_unread=sum(
+                        conversation["unread_count"]
+                        for conversation in self._app.conversation_store.list_conversations()
+                    ),
                 )
             # Only count as delivered when the channel actually accepted
             # it — lets callers (e.g. ProactiveService) detect wechat send

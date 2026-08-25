@@ -57,6 +57,20 @@ async function closePersonaNotifications(personaId) {
   return handledMessageKeys;
 }
 
+async function syncAppBadge(count) {
+  if (count == null) return;
+  const value = Math.max(0, Number(count) || 0);
+  try {
+    if (value > 0 && typeof self.navigator?.setAppBadge === "function") {
+      await self.navigator.setAppBadge(value);
+    } else if (value === 0 && typeof self.navigator?.clearAppBadge === "function") {
+      await self.navigator.clearAppBadge();
+    }
+  } catch (_) {
+    // Badging is optional and may still be rejected by browser policy.
+  }
+}
+
 self.addEventListener("push", event => {
   event.waitUntil((async () => {
     let payload = {};
@@ -66,6 +80,7 @@ self.addEventListener("push", event => {
       payload = { body: event.data?.text() || "收到一条新消息" };
     }
 
+    await syncAppBadge(payload.totalUnread);
     if (await hasVisibleWindow()) return;
 
     const fallbackIcon = `${basePath || ""}/static/logo.png`;

@@ -69,6 +69,7 @@ let availableNotifications = [];
 let clientWindows = [];
 const openedWindows = [];
 const shownNotifications = [];
+const badgeCalls = [];
 const context = vm.createContext({
   URL,
   Request,
@@ -85,6 +86,10 @@ const context = vm.createContext({
     return new FakeResponse(`network:${request.url}`);
   },
   self: {
+    navigator: {
+      async setAppBadge(count) { badgeCalls.push(["set", count]); },
+      async clearAppBadge() { badgeCalls.push(["clear"]); },
+    },
     location: { origin: "https://pawzochat.local" },
     registration: {
       scope: "https://pawzochat.local/",
@@ -153,7 +158,9 @@ await dispatchPush({
   personaId: "cat",
   avatarVersion: "7",
   messageKey: "cat:7",
+  totalUnread: 4,
 });
+assert.deepEqual(badgeCalls, [["set", 4]]);
 assert.equal(shownNotifications.length, 1);
 assert.equal(shownNotifications[0].title, "小猫");
 assert.match(shownNotifications[0].payload.icon, /^data:image\/png;base64,/);
@@ -258,7 +265,9 @@ await dispatchPush({
   personaId: "cat",
   avatarVersion: "7",
   messageKey: "cat:11",
+  totalUnread: 0,
 });
+assert.deepEqual(badgeCalls.at(-1), ["clear"]);
 assert.equal(visibilityChecks, 2);
 assert.equal(shownNotifications.length, notificationsBeforeVisibleRace);
 
