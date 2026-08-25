@@ -43,6 +43,7 @@ import {
   clearLocalCache, getLocalStorageSummary, initOfflineMode,
   initPwa, requestPwaInstall,
 } from "./modules/pwa.js";
+import { deleteSharedPayload, readSharedPayload } from "./modules/share_target_store.js";
 import {
   syncWebPushSubscription,
   systemNotificationsEnabled,
@@ -52,6 +53,7 @@ import {
   chatPersonaId, renderChatList, refreshChatMessages, refreshUnreadCounts,
   applyAssistantUnread, isViewingChat, markConversationRead,
   filterConvs, newConversation, startChat, openChat,
+  chooseSharedContent, startSharedChat,
   chatMore, pickChatBackground, onChatBackgroundSelected, removeChatBackground,
   clearChat, deleteChat,
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
@@ -382,7 +384,7 @@ window.PawzoChat = {
   closeOverlay, closeConfirm, choicePickerSelect,
   closeErrorBanner, toggleErrorBanner,
   openImagePreview, closeImagePreview, rememberImageLayout,
-  newConversation, startChat, openChat,
+  newConversation, startChat, openChat, startSharedChat,
   filterConvs, chatMore, pickChatBackground, onChatBackgroundSelected, removeChatBackground,
   clearChat, deleteChat,
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
@@ -673,14 +675,33 @@ window.addEventListener("online", () => {
   if (!state.sseSource || state.sseSource.readyState === EventSource.CLOSED) initSSE();
 });
 
+async function handleShareTarget(id) {
+  try {
+    const payload = await readSharedPayload(id);
+    if (!payload) {
+      toast("分享内容已失效，请重新分享", "error");
+      return;
+    }
+    await chooseSharedContent(payload);
+    await deleteSharedPayload(id);
+  } catch (error) {
+    console.warn("读取系统分享内容失败", error);
+    toast("无法读取分享内容，请重新分享", "error");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const launchUrl = new URL(window.location.href);
   const notificationPersonaId = launchUrl.searchParams.get("openChat");
+  const shareTargetId = launchUrl.searchParams.get("shareTarget");
+  const shareTargetError = launchUrl.searchParams.get("shareError") === "1";
   const handledMessageKeys = launchUrl.searchParams.getAll("handledMessageKey");
   rememberHandledMessageKeys(handledMessageKeys);
-  if (notificationPersonaId || handledMessageKeys.length > 0) {
+  if (notificationPersonaId || handledMessageKeys.length > 0 || shareTargetId || shareTargetError) {
     launchUrl.searchParams.delete("openChat");
     launchUrl.searchParams.delete("handledMessageKey");
+    launchUrl.searchParams.delete("shareTarget");
+    launchUrl.searchParams.delete("shareError");
     history.replaceState(history.state, "", launchUrl.pathname + launchUrl.search + launchUrl.hash);
   }
 
@@ -692,6 +713,10 @@ document.addEventListener("DOMContentLoaded", () => {
   switchTab("chat");
   if (notificationPersonaId) {
     setTimeout(() => openConversationFromNotification(notificationPersonaId), 0);
+  } else if (shareTargetId) {
+    setTimeout(() => { void handleShareTarget(shareTargetId); }, 0);
+  } else if (shareTargetError) {
+    setTimeout(() => toast("系统分享内容接收失败，请重新分享", "error"), 0);
   }
   initSSE();
   checkAndShowSetup();

@@ -339,6 +339,31 @@ def create_app(app_instance: App) -> Flask:
             "display": "standalone",
             "background_color": "#FFFDF8",
             "theme_color": "#FFFDF8",
+            "share_target": {
+                "action": f"{base}/share-target",
+                "method": "POST",
+                "enctype": "multipart/form-data",
+                "params": {
+                    "title": "title",
+                    "text": "text",
+                    "url": "url",
+                    "files": [
+                        {
+                            "name": "files",
+                            "accept": [
+                                "*/*",
+                                "image/*",
+                                "audio/*",
+                                "video/*",
+                                "text/*",
+                                "application/pdf",
+                                "application/zip",
+                                "application/octet-stream",
+                            ],
+                        }
+                    ],
+                },
+            },
             "icons": [
                 {
                     "src": f"{base}/static/pwa-icon-192.png?v=2",

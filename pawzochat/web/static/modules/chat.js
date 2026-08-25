@@ -51,6 +51,9 @@ import {
 } from "./offline_store.js";
 import { hasRenderedMessage, mergeMessagesBySequence, messageSequence } from "./chat_message_identity.js";
 import {
+  recentForwardPersonas, recentSharedPersonas, rememberForwardPersona,
+} from "./share_target_store.js";
+import {
   setTopBar, pushPage, goBack, switchTab,
   registerTabRenderer, registerPageRenderer,
   isDesktop, setSidebarBar, refreshSidebar,
@@ -60,6 +63,7 @@ export let chatPersonaId = null;
 let _pendingImages = [];
 let _pendingFiles = [];
 let _pendingQuote = "";
+let _sharedContentSelection = null;
 const _draftRevisions = new Map();
 const _detachedDrafts = new Map();
 let _draftRestoreGeneration = 0;
@@ -489,6 +493,127 @@ async function _restoreOrCreateConversation(personaId) {
     return false;
   }
   return true;
+}
+
+export async function chooseSharedContent(payload) {
+  if (!payload || (!payload.text?.trim() && !payload.files?.length)) {
+    toast("分享内容为空", "error");
+    return false;
+  }
+  try {
+    const [pres, cres] = await Promise.all([
+      api.get("/api/personas"),
+      api.get("/api/conversations"),
+    ]);
+    state.personas = pres.personas || [];
+    state.conversations = _mergeConversationState(cres.conversations);
+    void prepareNotificationIcons(state.personas);
+  } catch (e) {
+    toast("加载角色失败，请稍后重试", "error");
+    return false;
+  }
+  if (state.personas.length === 0) {
+    toast("请先创建一个聊天角色", "error");
+    return false;
+  }
+
+  return new Promise(resolve => {
+    _sharedContentSelection = { payload, resolve };
+    const convSet = new Set(state.conversations.map(c => c.persona_id));
+    const conversationById = new Map(state.conversations.map(conversation => [conversation.persona_id, conversation]));
+    const forwardedPersonas = recentForwardPersonas(state.personas);
+    const chatPersonas = recentSharedPersonas(state.personas, state.conversations, state.conversations.length);
+    const otherPersonas = state.personas.filter(persona => !convSet.has(persona.id));
+    const forwardedHtml = `<section class="share-recent-section" aria-labelledby="share-forward-title">
+      <div class="share-section-title" id="share-forward-title">最近转发</div>
+      ${forwardedPersonas.length > 0
+        ? `<div class="share-recent-list" role="list">
+            ${forwardedPersonas.map(persona => `
+              <button type="button" class="share-recent-person" role="listitem"
+                onclick="PawzoChat.startSharedChat(${jsArg(persona.id)}, ${convSet.has(persona.id)})"
+                aria-label="发送给${escAttr(persona.name)}">
+                ${avatarHtml(persona.name, "sm", personaAvatarUrl(persona))}
+                <span>${esc(persona.name)}</span>
+              </button>`).join("")}
+          </div>`
+        : `<div class="share-recent-empty">转发过的人物会显示在这里</div>`}
+    </section>`;
+    const renderPersonaRows = (personas, subtitle) => personas.map(persona => `
+      <div class="sheet-item" onclick="PawzoChat.startSharedChat(${jsArg(persona.id)}, ${convSet.has(persona.id)})">
+        ${avatarHtml(persona.name, "sm", personaAvatarUrl(persona))}
+        <div style="flex:1"><div style="font-weight:500">${esc(persona.name)}</div><div style="font-size:12px;color:var(--text-3)">${esc(subtitle(persona))}</div></div>
+      </div>`).join("");
+    const chatRows = renderPersonaRows(chatPersonas, persona => {
+      const preview = summarizeConversationMessage(conversationById.get(persona.id)?.last_message);
+      return preview || "最近聊天";
+    });
+    const otherRows = renderPersonaRows(otherPersonas, () => "开始新对话");
+    const otherHtml = otherPersonas.length > 0
+      ? `<div class="share-section-title share-other-title">其他人物</div>
+         <div class="share-persona-list">${otherRows}</div>`
+      : "";
+    showSheet(
+      `<div class="sheet-title">选择接收分享的角色</div>
+       ${forwardedHtml}
+       <div class="share-section-title share-chat-title">最近聊天</div>
+       <div class="share-persona-list">${chatRows || `<div class="share-chat-empty">还没有最近聊天</div>`}</div>
+       ${otherHtml}
+       <div class="sheet-cancel" onclick="PawzoChat.closeOverlay()">取消</div>`,
+      () => {
+        if (_sharedContentSelection?.resolve !== resolve) return;
+        _sharedContentSelection = null;
+        resolve(false);
+      },
+      { className: "share-target-picker" },
+    );
+  });
+}
+
+async function _saveSharedContentAsDraft(personaId, payload) {
+  const draft = await loadDraft(_CHAT_DRAFT_NAMESPACE, personaId);
+  const sharedText = payload.text?.trim() || "";
+  const currentText = draft?.text?.trim() || "";
+  const sharedAttachments = (payload.files || [])
+    .filter(file => file instanceof Blob)
+    .map(file => ({ kind: file.type.startsWith("image/") ? "image" : "file", file }));
+  await saveDraft(_CHAT_DRAFT_NAMESPACE, personaId, {
+    text: [currentText, sharedText].filter(Boolean).join("\n"),
+    quote: draft?.quote || "",
+    attachments: [...(draft?.attachments || []), ...sharedAttachments],
+  });
+}
+
+export async function startSharedChat(personaId, hasConv) {
+  const selection = _sharedContentSelection;
+  if (!selection) return;
+  _sharedContentSelection = null;
+  await closeOverlay();
+
+  if (!hasConv) showLoading("打开中…");
+  try {
+    if (!hasConv && !await _restoreOrCreateConversation(personaId)) {
+      selection.resolve(false);
+      return;
+    }
+    if (hasConv && navigator.onLine) {
+      if (!await _restoreOrCreateConversation(personaId)) {
+        selection.resolve(false);
+        return;
+      }
+    }
+    await _saveSharedContentAsDraft(personaId, selection.payload);
+    rememberForwardPersona(personaId);
+    switchTab("chat");
+    await openChat(personaId, { restored: true });
+    $("chat-input")?.focus({ preventScroll: true });
+    toast("分享内容已填入，请确认后发送", "success");
+    selection.resolve(true);
+  } catch (e) {
+    toast("打开对话失败", "error");
+    selection.resolve(false);
+  } finally {
+    if (!hasConv) hideLoading();
+  }
 }
 
 export async function newConversation() {
@@ -2076,6 +2201,26 @@ function _renderFilePreviews() {
   ).join("");
 }
 
+async function _replacePendingImageMessage(personaId, pendingId, message) {
+  if (!_isActiveChatWindow(personaId) || !message) return;
+  const row = $("chat-msgs")?.querySelector(`.msg-row[data-pending-id="${pendingId}"]`);
+  const currentBody = row?.querySelector(":scope > div:not(.avatar)");
+  if (!row || !currentBody) return;
+
+  const replacementBody = document.createElement("div");
+  replacementBody.innerHTML = `${renderContentBlocks(message.content)}${renderQuoteBox(message.quote)}`;
+  await _preloadMessageImages(replacementBody);
+
+  if (!_isActiveChatWindow(personaId)) return;
+  const latestRow = $("chat-msgs")?.querySelector(`.msg-row[data-pending-id="${pendingId}"]`);
+  const latestBody = latestRow?.querySelector(":scope > div:not(.avatar)");
+  if (!latestRow || !latestBody) return;
+  latestBody.replaceWith(replacementBody);
+  latestRow.removeAttribute("data-pending-id");
+  const sequence = messageSequence(message);
+  if (sequence) latestRow.dataset.messageSeq = sequence;
+}
+
 export async function sendChat() {
   const inp = $("chat-input");
   const text = inp.value.trim();
@@ -2253,6 +2398,9 @@ export async function sendChat() {
     }
   } else {
     confirmPendingUserMessage(personaId, pendingId, acceptedMessage);
+    if (imagesToSend.length > 0) {
+      await _replacePendingImageMessage(personaId, pendingId, acceptedMessage);
+    }
     if (_draftRevision(personaId) === sentDraftRevision) {
       await clearDraft(_CHAT_DRAFT_NAMESPACE, personaId).catch(() => undefined);
       _paintConversationDraftPreview(personaId);

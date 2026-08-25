@@ -1,6 +1,6 @@
 /* PawzoChat PWA Service Worker */
 const STATIC_CACHE_PREFIX = "pawzochat-static";
-const STATIC_CACHE_VERSION = "v2";
+const STATIC_CACHE_VERSION = "v3";
 const STATIC_CACHE_NAME = `${STATIC_CACHE_PREFIX}-${STATIC_CACHE_VERSION}`;
 const IMAGE_CACHE_PREFIX = "pawzochat-images";
 const IMAGE_CACHE_VERSION = "v1";
@@ -29,7 +29,7 @@ const APP_SHELL_PATHS = [
     "image_preview_transform", "mcp", "memory", "message_content", "moments",
     "moments_item_chrome", "moments_timeline", "navigation", "notification_feedback",
     "offline_store", "persona_writer", "plugins", "push_notifications", "pwa", "qr_verify",
-    "quick_setup", "radar", "settings", "state", "sticker_maker",
+    "quick_setup", "radar", "settings", "share_target_store", "state", "sticker_maker",
     "sticker_maker_capabilities", "theme", "ui", "unread", "utils", "worldbook",
   ].map(name => `${basePath}/static/modules/${name}.js`),
 ];
@@ -273,8 +273,64 @@ async function notificationIcon(payload, fallbackIcon) {
   }
 }
 
+async function storeSharedPayload(formData) {
+  const id = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const files = formData.getAll("files").filter(value => value instanceof File && value.size > 0);
+  const payload = {
+    id,
+    title: String(formData.get("title") || ""),
+    text: String(formData.get("text") || ""),
+    url: String(formData.get("url") || ""),
+    files,
+    createdAt: Date.now(),
+  };
+
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.open("pawzo-share-targets", 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("payloads")) {
+        db.createObjectStore("payloads", { keyPath: "id" });
+      }
+    };
+    request.onerror = () => reject(request.error || new Error("无法打开分享暂存区"));
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction("payloads", "readwrite");
+      transaction.objectStore("payloads").put(payload);
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => { db.close(); reject(transaction.error || new Error("无法暂存分享内容")); };
+      transaction.onabort = transaction.onerror;
+    };
+  });
+  return id;
+}
+
+async function receiveShareTarget(request) {
+  const launchUrl = new URL(appPath, self.location.origin);
+  try {
+    const id = await storeSharedPayload(await request.formData());
+    launchUrl.searchParams.set("shareTarget", id);
+  } catch (_) {
+    launchUrl.searchParams.set("shareError", "1");
+  }
+  return Response.redirect(launchUrl.href, 303);
+}
+
 self.addEventListener("fetch", event => {
   const request = event.request;
+  const url = new URL(request.url);
+
+  if (
+    request.method === "POST"
+    && url.origin === self.location.origin
+    && url.pathname === `${basePath}/share-target`
+  ) {
+    event.respondWith(receiveShareTarget(request));
+    return;
+  }
+
   if (request.method !== "GET") return;
 
   if (request.destination === "image") {
@@ -282,7 +338,6 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {

@@ -135,6 +135,16 @@ assert.match(
   /export async function updateAssistantMessage\(message\)[\s\S]*?await _preloadMessageImages\(replacementBody\)[\s\S]*?currentBody\.replaceWith\(replacementBody\)/,
   "更新后的图片应预加载完成再替换原消息，避免图片闪烁",
 );
+assert.match(
+  chatSource,
+  /async function _replacePendingImageMessage[\s\S]*?await _preloadMessageImages\(replacementBody\)[\s\S]*?latestBody\.replaceWith\(replacementBody\)/,
+  "用户图片应在服务端资源预加载完成后原位替换",
+);
+assert.match(
+  chatSource,
+  /confirmPendingUserMessage\(personaId, pendingId, acceptedMessage\)[\s\S]*?await _replacePendingImageMessage\(personaId, pendingId, acceptedMessage\)[\s\S]*?URL\.revokeObjectURL\(img\.url\)/,
+  "本地图片 URL 只能在服务端图片接管后释放",
+);
 assert.doesNotMatch(
   appSource,
   /data\.type === "assistant_message_updated"[\s\S]{0,300}?refreshChatMessages\(\)/,
