@@ -33,6 +33,7 @@ from pawzochat.image.providers.novelai_image import is_novelai_v4_model
 from pawzochat.image.reference import resolve_reference_images
 from pawzochat.llm.base import ContentBlock, LLMResponse, ToolCall
 from pawzochat.services.mcp_image_extractor import extract_mcp_images
+from pawzochat.utils.location import format_location_for_llm
 from pawzochat.utils.message_text import (
     clean_assistant_reply_text,
     format_message_time,
@@ -708,6 +709,7 @@ class ChatService:
             )
             file_hints = self._file_hints_from_blocks(content_blocks)
             voice_hints = self._voice_hints_from_blocks(content_blocks)
+            location_hints = self._location_hints_from_blocks(content_blocks)
             text = "\n".join(text_parts)
             if not text and has_pending_image:
                 text = "[图片生成中]"
@@ -719,6 +721,8 @@ class ChatService:
                 text = f"{text}\n{file_hints}" if text else file_hints
             if voice_hints:
                 text = f"{text}\n{voice_hints}" if text else voice_hints
+            if location_hints:
+                text = f"{text}\n{location_hints}" if text else location_hints
             # Inject the quote marker after the media/file fallbacks so an
             # image-only quoted message keeps its [图片] placeholder for the LLM.
             text = inject_quote_prefix(text, msg.get("quote", ""))
@@ -800,6 +804,15 @@ class ChatService:
             else:
                 hints.append("[文件]")
         return "\n".join(hints)
+
+    @staticmethod
+    def _location_hints_from_blocks(content_blocks: list[dict]) -> str:
+        """Expose structured one-time locations to the model as explicit context."""
+        return "\n".join(
+            format_location_for_llm(block)
+            for block in content_blocks
+            if block.get("type") == "location"
+        )
 
     @staticmethod
     def _voice_hints_from_blocks(content_blocks: list[dict]) -> str:

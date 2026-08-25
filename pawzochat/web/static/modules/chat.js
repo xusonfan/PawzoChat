@@ -18,6 +18,7 @@
 import { avatarHtml, personaAvatarUrl, profileAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
 import { renderTextMedia, summarizeConversationMessage } from "./message_content.js";
 import { imageLayoutAttributes } from "./image_layout_cache.js";
+import { clampMapZoom, coordinateAtMapPoint, mapTiles } from "./location_map.js";
 import {
   conversationLatestMessageSequence, isConversationReadContext, markConversationReadLocal,
   mergeConversationsPreserveUnread, setConversationUnreadCount,
@@ -158,6 +159,7 @@ let _emojiActiveTab = 0;
 /* ---- Plus Menu State ---- */
 
 let _plusMenuOpen = false;
+let _locationPicker = null;
 let _cameraStream = null;
 const _cameraSession = {
   facingMode: "environment",
@@ -612,7 +614,25 @@ function renderContentBlocks(content, renderLinkedImages = false) {
   const base = window.PAWZOCHAT_BASE || "";
   let parts = "";
   for (const b of blocks) {
-    if (b.type === "image") {
+    if (b.type === "location") {
+      const cityLevel = b.precision === "city";
+      const latitude = Number(b.latitude);
+      const longitude = Number(b.longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+      const coordinates = cityLevel
+        ? `${latitude.toFixed(1)}, ${longitude.toFixed(1)}`
+        : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      const title = b.name || (cityLevel ? "城市级位置" : "所选位置");
+      const detail = b.address || coordinates;
+      parts += `<div class="msg-location" aria-label="${escAttr(title)}">
+        <span class="msg-location-icon">${iconHtml("ri-map-pin-2-fill")}</span>
+        <span class="msg-location-body">
+          <strong>${esc(title)}</strong>
+          <span>${esc(detail)}</span>
+        </span>
+        <span class="msg-location-once">位置</span>
+      </div>`;
+    } else if (b.type === "image") {
       if (b.status === "pending") {
         parts += `<div class="msg-image-placeholder" role="status" aria-live="polite">
           <span class="msg-image-placeholder-spinner" aria-hidden="true"></span>
@@ -904,6 +924,7 @@ function _quoteTextFromRow(row) {
   }
   if (row.querySelector(".msg-emoji")) return "[表情]";
   if (row.querySelector(".msg-image")) return "[图片]";
+  if (row.querySelector(".msg-location")) return "[位置]";
   if (row.querySelector(".msg-file, .msg-file-inline")) return "[文件]";
   const voice = row.querySelector(".msg-voice");
   if (voice) {
@@ -961,7 +982,7 @@ function _openQuotePop(row, armIgnore, voiceEl = null) {
     ? rawRegenerateSeq
     : null;
   const anchor = voiceEl || row.querySelector(
-    ".msg-bubble, .msg-image, .msg-emoji, .msg-file, .msg-file-inline, .msg-voice",
+    ".msg-bubble, .msg-image, .msg-location, .msg-emoji, .msg-file, .msg-file-inline, .msg-voice",
   ) || row;
   const rect = anchor.getBoundingClientRect();
 
@@ -2572,7 +2593,249 @@ function _renderStickerImages(el, images) {
   }</div>`;
 }
 
-/* ---- Plus Menu (拍照 / 图片 / 文件) ---- */
+/* ---- Plus Menu (拍照 / 图片 / 文件 / 位置) ---- */
+
+function _locationPickerHtml() {
+  return `
+    <div class="location-picker">
+      <div class="location-picker-header">
+        <button type="button" onclick="PawzoChat.closeOverlay()">取消</button>
+        <strong>发送位置</strong>
+        <button id="location-send-btn" type="button" onclick="PawzoChat.sendSelectedLocation()" disabled>发送</button>
+      </div>
+      <form class="location-search" onsubmit="event.preventDefault();PawzoChat.searchLocationPlaces()">
+        ${iconHtml("ri-search-line")}
+        <input id="location-search-input" type="search" placeholder="搜索地点" autocomplete="off" aria-label="搜索地点">
+        <button type="submit">搜索</button>
+      </form>
+      <div id="location-search-results" class="location-search-results" hidden></div>
+      <div id="location-map" class="location-map" onclick="PawzoChat.selectLocationOnMap(event)">
+        <div id="location-map-tiles" class="location-map-tiles"></div>
+        <div class="location-map-pin" aria-hidden="true">${iconHtml("ri-map-pin-2-fill")}</div>
+        <div class="location-map-zoom">
+          <button type="button" onclick="event.stopPropagation();PawzoChat.zoomLocationMap(1)" aria-label="放大地图">+</button>
+          <button type="button" onclick="event.stopPropagation();PawzoChat.zoomLocationMap(-1)" aria-label="缩小地图">−</button>
+        </div>
+        <div class="location-map-attribution">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">OpenStreetMap</a></div>
+      </div>
+      <div class="location-selected">
+        <span class="location-selected-icon">${iconHtml("ri-map-pin-2-fill")}</span>
+        <span class="location-selected-copy">
+          <strong id="location-selected-name">正在获取当前位置…</strong>
+          <small id="location-selected-address">你也可以搜索地名或点击地图选点</small>
+        </span>
+      </div>
+      <div class="location-privacy">仅在本次选择时获取位置，不会后台持续采集。</div>
+    </div>`;
+}
+
+function _renderLocationMap() {
+  const map = $("location-map");
+  const layer = $("location-map-tiles");
+  if (!map || !layer || !_locationPicker) return;
+  const size = { width: map.clientWidth, height: map.clientHeight };
+  if (!size.width || !size.height) return;
+  layer.innerHTML = mapTiles(_locationPicker, _locationPicker.zoom, size)
+    .map(tile => `<img src="${tile.url}" alt="" draggable="false" style="left:${tile.x}px;top:${tile.y}px">`)
+    .join("");
+}
+
+function _updateLocationSelection() {
+  const name = $("location-selected-name");
+  const address = $("location-selected-address");
+  const send = $("location-send-btn");
+  if (!_locationPicker || !name || !address || !send) return;
+  name.textContent = _locationPicker.name || "所选位置";
+  address.textContent = _locationPicker.address
+    || `${_locationPicker.latitude.toFixed(6)}, ${_locationPicker.longitude.toFixed(6)}`;
+  send.disabled = !_locationPicker.selected;
+}
+
+async function _reverseSelectedLocation(picker) {
+  const { latitude, longitude } = picker;
+  try {
+    const result = await api.get(
+      `/api/conversations/locations/reverse?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
+      { bypassCache: true },
+    );
+    if (_locationPicker !== picker || picker.latitude !== latitude || picker.longitude !== longitude) return;
+    if (result.place) {
+      picker.name = result.place.name || "所选位置";
+      picker.address = result.place.address || "";
+    }
+  } catch (_) { /* coordinates remain sendable when reverse geocoding is unavailable */ }
+  if (_locationPicker === picker) _updateLocationSelection();
+}
+
+export function openLocationShare() {
+  const picker = {
+    latitude: 35,
+    longitude: 105,
+    zoom: 4,
+    accuracy_m: null,
+    name: "正在获取当前位置…",
+    address: "你也可以搜索地名或点击地图选点",
+    selected: false,
+    places: [],
+  };
+  _locationPicker = picker;
+  showSheet(_locationPickerHtml(), () => {
+    if (_locationPicker === picker) _locationPicker = null;
+  }, { className: "location-picker-fullscreen" });
+  requestAnimationFrame(_renderLocationMap);
+
+  if (!navigator.geolocation) {
+    picker.name = "无法自动定位";
+    picker.address = "请搜索地名或点击地图选点";
+    _updateLocationSelection();
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(position => {
+    if (_locationPicker !== picker) return;
+    picker.latitude = position.coords.latitude;
+    picker.longitude = position.coords.longitude;
+    picker.accuracy_m = Number.isFinite(position.coords.accuracy)
+      ? Math.round(position.coords.accuracy)
+      : null;
+    picker.zoom = 16;
+    picker.name = "当前位置";
+    picker.address = "正在获取地名…";
+    picker.selected = true;
+    _renderLocationMap();
+    _updateLocationSelection();
+    void _reverseSelectedLocation(picker);
+  }, error => {
+    if (_locationPicker !== picker) return;
+    picker.name = "无法自动定位";
+    picker.address = "请搜索地名或点击地图选点";
+    _updateLocationSelection();
+    toast(_locationErrorMessage(error), "error");
+  }, {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 12_000,
+  });
+}
+
+function _locationErrorMessage(error) {
+  if (error?.code === 1) return "定位权限被拒绝，可搜索地名后选择";
+  if (error?.code === 2) return "暂时无法定位，可搜索地名后选择";
+  if (error?.code === 3) return "定位超时，可搜索地名后选择";
+  return "获取位置失败，可搜索地名后选择";
+}
+
+export function selectLocationOnMap(event) {
+  const map = $("location-map");
+  if (!map || !_locationPicker || event.target.closest(".location-map-zoom, .location-map-attribution")) return;
+  const rect = map.getBoundingClientRect();
+  const coordinate = coordinateAtMapPoint(
+    _locationPicker,
+    _locationPicker.zoom,
+    { x: event.clientX - rect.left, y: event.clientY - rect.top },
+    { width: rect.width, height: rect.height },
+  );
+  Object.assign(_locationPicker, coordinate, {
+    accuracy_m: null,
+    name: "所选位置",
+    address: "正在获取地名…",
+    selected: true,
+  });
+  _renderLocationMap();
+  _updateLocationSelection();
+  void _reverseSelectedLocation(_locationPicker);
+}
+
+export function zoomLocationMap(delta) {
+  if (!_locationPicker) return;
+  _locationPicker.zoom = clampMapZoom(_locationPicker.zoom + Number(delta));
+  _renderLocationMap();
+}
+
+export async function searchLocationPlaces() {
+  const input = $("location-search-input");
+  const results = $("location-search-results");
+  const query = input?.value.trim() || "";
+  if (!_locationPicker || !results || query.length < 2) {
+    toast("请输入至少两个字符的地名", "error");
+    return;
+  }
+  results.hidden = false;
+  results.innerHTML = `<div class="location-search-status">正在搜索…</div>`;
+  const picker = _locationPicker;
+  try {
+    const response = await api.get(
+      `/api/conversations/locations/search?q=${encodeURIComponent(query)}`,
+      { bypassCache: true },
+    );
+    if (_locationPicker !== picker) return;
+    picker.places = response.places || [];
+    results.innerHTML = picker.places.length
+      ? picker.places.map((place, index) => `
+          <button type="button" class="location-result" onclick="PawzoChat.chooseLocationPlace(${index})">
+            <strong>${esc(place.name || "所选位置")}</strong>
+            <small>${esc(place.address || "")}</small>
+          </button>`).join("")
+      : `<div class="location-search-status">没有找到相关地点</div>`;
+  } catch (_) {
+    results.innerHTML = `<div class="location-search-status">地图服务暂时不可用</div>`;
+  }
+}
+
+export function chooseLocationPlace(index) {
+  const place = _locationPicker?.places?.[index];
+  if (!place || !_locationPicker) return;
+  Object.assign(_locationPicker, {
+    latitude: Number(place.latitude),
+    longitude: Number(place.longitude),
+    accuracy_m: null,
+    name: place.name || "所选位置",
+    address: place.address || "",
+    zoom: 17,
+    selected: true,
+  });
+  const results = $("location-search-results");
+  if (results) results.hidden = true;
+  _renderLocationMap();
+  _updateLocationSelection();
+}
+
+export async function sendSelectedLocation() {
+  const picker = _locationPicker;
+  const personaId = chatPersonaId;
+  if (!picker?.selected || !personaId) return;
+  const button = $("location-send-btn");
+  if (button) button.disabled = true;
+  showLoading("正在发送位置…");
+  try {
+    const location = {
+      precision: "precise",
+      latitude: Number(picker.latitude.toFixed(6)),
+      longitude: Number(picker.longitude.toFixed(6)),
+      name: picker.name || "所选位置",
+      address: picker.address || "",
+    };
+    if (Number.isFinite(picker.accuracy_m)) location.accuracy_m = picker.accuracy_m;
+    const response = await api.post(
+      `/api/conversations/${encodeURIComponent(personaId)}/messages`,
+      { location },
+      { keepalive: true },
+    );
+    if (response.status >= 400 || !response.data?.message) {
+      throw new Error(response.data?.error || "位置发送失败");
+    }
+    await closeOverlay();
+    if (!_isActiveChatWindow(personaId)) return;
+    addPendingUserMessage(personaId, response.data.message);
+    renderMessages(_chatHistory.messages);
+    _scrollAfterInsert($("chat-msgs"));
+    toast("位置已发送", "success");
+  } catch (error) {
+    if (button) button.disabled = false;
+    toast(error?.message || "位置发送失败", "error");
+  } finally {
+    hideLoading();
+  }
+}
 
 function _closePlusMenu() {
   _plusMenuOpen = false;
@@ -2593,7 +2856,7 @@ export function togglePlusMenu() {
 
   const panel = $("plus-menu-panel");
   if (!panel) return;
-  panel.style.display = "flex";
+  panel.style.display = "grid";
   panel.innerHTML = `
     <button class="plus-menu-item" onclick="PawzoChat.takePhoto();PawzoChat.togglePlusMenu()">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4l1.5 2H20a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h4l1.5-2h5z"/><circle cx="12" cy="13" r="3"/></svg>
@@ -2606,6 +2869,10 @@ export function togglePlusMenu() {
     <button class="plus-menu-item" onclick="PawzoChat.pickFile();PawzoChat.togglePlusMenu()">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <span>文件</span>
+    </button>
+    <button class="plus-menu-item" onclick="PawzoChat.togglePlusMenu();PawzoChat.openLocationShare()">
+      ${iconHtml("ri-map-pin-2-line")}
+      <span>位置</span>
     </button>`;
 }
 

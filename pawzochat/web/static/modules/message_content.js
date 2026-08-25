@@ -149,6 +149,11 @@ export function summarizeConversationMessage(message, maxLength = 60) {
     summary = summary.trim();
     summary = summary ? `${summary} [图片]` : "[图片]";
   }
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (content.some(block => block?.type === "location") && !summary.includes("[位置]")) {
+    summary = summary.trim();
+    summary = summary ? `${summary} [位置]` : "[位置]";
+  }
   return summary.slice(0, maxLength);
 }
 

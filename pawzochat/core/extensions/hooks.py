@@ -57,6 +57,7 @@ class MessageReceivedEvent:
     raw_message: Any = None
     cancelled: bool = False
     voices: list[dict] = field(default_factory=list)
+    locations: list[dict] = field(default_factory=list)
 
     def cancel(self) -> None:
         self.cancelled = True

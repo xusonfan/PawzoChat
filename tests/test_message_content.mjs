@@ -43,7 +43,7 @@ globalThis.document = {
 const modUrl = pathToFileURL(
   join(__dirname, "../pawzochat/web/static/modules/message_content.js"),
 ).href;
-const { parseTextMedia, renderTextMedia } = await import(modUrl);
+const { parseTextMedia, renderTextMedia, summarizeConversationMessage } = await import(modUrl);
 const imageLayoutModUrl = pathToFileURL(
   join(__dirname, "../pawzochat/web/static/modules/image_layout_cache.js"),
 ).href;
@@ -55,6 +55,13 @@ function types(segments) {
 
 function imageUrls(segments) {
   return segments.filter((s) => s.type === "image").map((s) => s.url);
+}
+
+{
+  const summary = summarizeConversationMessage({
+    content: [{ type: "location", precision: "city", latitude: 31.2, longitude: 121.5 }],
+  });
+  assert.equal(summary, "[位置]");
 }
 
 // ---- parseTextMedia ----

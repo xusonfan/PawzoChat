@@ -23,11 +23,14 @@ import os
 import re
 import secrets
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 from flask import Blueprint, jsonify, request, send_file
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from pawzochat.paths import CHATS_DIR, EMOJI_DIR
+from pawzochat.utils.geocoding import reverse_place, search_places
+from pawzochat.utils.location import InvalidLocation, sanitize_location
 from pawzochat.web.message_serialization import messages_for_api
 from pawzochat.web.routes import get_app
 from pawzochat.web.sse import broadcast
@@ -78,6 +81,38 @@ def _extract_text_update(data: dict) -> str | None:
     if not has_text_block:
         return None
     return "\n".join(text_parts)
+
+
+def _geocoding_error(exc: Exception):
+    logger.warning("位置地理编码请求失败: %s", exc)
+    return jsonify({"error": "地图服务暂时不可用"}), 502
+
+
+@api_conversations_bp.route("/locations/search", methods=["GET"])
+def search_locations():
+    query = request.args.get("q", "").strip()
+    if len(query) < 2 or len(query) > 120:
+        return jsonify({"error": "请输入 2 到 120 个字符的地名"}), 400
+    try:
+        return jsonify({"places": search_places(query)})
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
+        return _geocoding_error(exc)
+
+
+@api_conversations_bp.route("/locations/reverse", methods=["GET"])
+def reverse_location():
+    try:
+        location = sanitize_location({
+            "precision": "precise",
+            "latitude": request.args.get("latitude", type=float),
+            "longitude": request.args.get("longitude", type=float),
+        })
+        place = reverse_place(location["latitude"], location["longitude"])
+    except InvalidLocation as exc:
+        return jsonify({"error": str(exc)}), 400
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
+        return _geocoding_error(exc)
+    return jsonify({"place": place})
 
 
 @api_conversations_bp.route("", methods=["GET"])
@@ -461,6 +496,7 @@ def send_message(persona_id: str):
 
     images: list[dict] | None = None
     files: list[dict] | None = None
+    locations: list[dict] | None = None
     quote = ""
 
     if request.content_type and "multipart/form-data" in request.content_type:
@@ -501,6 +537,12 @@ def send_message(persona_id: str):
         raw_quote = data.get("quote", "")
         quote = raw_quote.strip() if isinstance(raw_quote, str) else ""
 
+        if data.get("location") is not None:
+            try:
+                locations = [sanitize_location(data["location"])]
+            except InvalidLocation as exc:
+                return jsonify({"error": str(exc)}), 400
+
         sticker_url = data.get("sticker_url", "").strip()
         if sticker_url:
             sticker_path = _resolve_sticker_path(sticker_url)
@@ -520,8 +562,8 @@ def send_message(persona_id: str):
             save_path.write_bytes(sticker_data)
             images = [{"data": sticker_data, "mime": mime, "path": str(save_path)}]
 
-    if not text and not images and not files:
-        return jsonify({"error": "text, images or files required"}), 400
+    if not text and not images and not files and not locations:
+        return jsonify({"error": "text, images, files or location required"}), 400
 
     accepted = app.message_queue.accept_message(
         persona_id,
@@ -530,6 +572,7 @@ def send_message(persona_id: str):
         reply_ctx={"channel": "web"},
         images=images,
         files=files,
+        locations=locations,
         quote=quote,
     )
     if not accepted:

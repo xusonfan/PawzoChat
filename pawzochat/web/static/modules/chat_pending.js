@@ -64,6 +64,7 @@ function toConversationLastMessage(message) {
   else if (first?.type === "image") text = "[图片]";
   else if (first?.type === "file") text = "[文件]";
   else if (first?.type === "voice") text = "[语音]";
+  else if (first?.type === "location") text = "[位置]";
   else text = first?.text || "";
   return {
     role: message?.role || "user",

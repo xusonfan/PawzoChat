@@ -30,6 +30,7 @@ from pawzochat.core.extensions.hooks import (
     MessageStoredEvent,
     ReplyComposeEvent,
 )
+from pawzochat.utils.location import format_location_for_llm
 from pawzochat.web.sse import broadcast
 
 if TYPE_CHECKING:
@@ -82,6 +83,7 @@ def _build_pending_content_blocks(
     images: list[dict] | None,
     files: list[dict] | None,
     voices: list[dict] | None,
+    locations: list[dict] | None,
 ) -> list[dict]:
     """Build queue-internal content blocks, preserving in-memory image data."""
     content_blocks: list[dict] = []
@@ -114,6 +116,8 @@ def _build_pending_content_blocks(
                 "duration_ms": voice.get("duration_ms", 0),
                 "text": voice.get("text", ""),
             })
+    if locations:
+        content_blocks.extend(dict(location) for location in locations)
     if not content_blocks:
         content_blocks.append({"type": "text", "text": ""})
     return content_blocks
@@ -150,6 +154,8 @@ def _extract_from_pending(
                 })
             elif btype == "voice":
                 has_voice = True
+            elif btype == "location":
+                texts.append(format_location_for_llm(block))
     return texts, images or None, files or None, has_voice
 
 
@@ -281,6 +287,7 @@ class MessageQueue:
         images: list[dict] | None = None,
         files: list[dict] | None = None,
         voices: list[dict] | None = None,
+        locations: list[dict] | None = None,
         raw_message: Any = None,
         account_id: str = "",
         user_id: str = "",
@@ -297,6 +304,7 @@ class MessageQueue:
             text=text,
             images=list(images or []),
             files=list(files or []),
+            locations=list(locations or []),
             voices=list(voices or []),
             account_id=account_id,
             user_id=user_id,
@@ -310,6 +318,7 @@ class MessageQueue:
             and not event.images
             and not event.files
             and not event.voices
+            and not event.locations
         ):
             logger.info(
                 "消息已被插件取消: persona=%s source=%s",
@@ -331,6 +340,7 @@ class MessageQueue:
             images=event.images,
             files=event.files,
             voices=event.voices,
+            locations=event.locations,
             timestamp=timestamp,
             quote=quote,
             stored_event={
@@ -361,6 +371,7 @@ class MessageQueue:
         images: list[dict] | None = None,
         files: list[dict] | None = None,
         voices: list[dict] | None = None,
+        locations: list[dict] | None = None,
         timestamp: str | None = None,
         quote: str = "",
         stored_event: dict | None = None,
@@ -372,7 +383,9 @@ class MessageQueue:
         which guarantees that user messages always come after the previous
         round's assistant messages in the store.
         """
-        content_blocks = _build_pending_content_blocks(text, images, files, voices)
+        content_blocks = _build_pending_content_blocks(
+            text, images, files, voices, locations,
+        )
         pending_message: dict = {
             "role": "user",
             "content": content_blocks,
