@@ -44,6 +44,10 @@ import { shouldShowMessageTime } from "./chat_message_time.js";
 import {
   clearDraft, getDraftSummary, loadDraft, saveDraft, saveDraftMetadata,
 } from "./drafts.js";
+import {
+  addOutboxMessage, listOutboxMessages, outboxRecordToMessage,
+  sendOutboxMessage,
+} from "./offline_store.js";
 import { hasRenderedMessage, mergeMessagesBySequence, messageSequence } from "./chat_message_identity.js";
 import {
   setTopBar, pushPage, goBack, switchTab,
@@ -94,6 +98,22 @@ let _chatHistory = {
 };
 const _failedReplies = new Set();
 const _assistantMessageUpdateTokens = new Map();
+let _activeOutboxRecords = [];
+const _outboxObjectUrls = new Map();
+
+function _outboxObjectUrl(record, blob, index) {
+  const key = `${record.id}:${index}`;
+  if (!_outboxObjectUrls.has(key)) _outboxObjectUrls.set(key, URL.createObjectURL(blob));
+  return _outboxObjectUrls.get(key);
+}
+
+function _releaseOutboxObjectUrls(recordId = null) {
+  for (const [key, url] of _outboxObjectUrls) {
+    if (recordId && !key.startsWith(`${recordId}:`)) continue;
+    URL.revokeObjectURL(url);
+    _outboxObjectUrls.delete(key);
+  }
+}
 
 // "via <channel>" tag under a message that arrived from an external channel.
 // Web/LLM-sourced messages get no tag.
@@ -492,6 +512,10 @@ export async function newConversation() {
 
 export async function startChat(personaId, hasConv) {
   closeOverlay();
+  if (hasConv && !navigator.onLine) {
+    openChat(personaId, { restored: true });
+    return;
+  }
   if (!hasConv) showLoading("打开中…");
   try {
     if (!await _restoreOrCreateConversation(personaId)) return;
@@ -543,7 +567,8 @@ export function applyAssistantUnread(personaId, unreadCount) {
 
 export async function openChat(personaId, { restored = false } = {}) {
   closeConversationMenu();
-  if (!restored) {
+  const knownConversation = state.conversations.some(item => item.persona_id === personaId);
+  if (!restored && !knownConversation) {
     try {
       if (!await _restoreOrCreateConversation(personaId)) return;
     } catch (e) {
@@ -1176,6 +1201,8 @@ async function renderChatWindow(data) {
     generation: historyGeneration,
   };
   const messagesUrl = `/api/conversations/${encodeURIComponent(renderedPersonaId)}/messages?rounds=${_CHAT_PAGE_ROUNDS}`;
+  _releaseOutboxObjectUrls();
+  _activeOutboxRecords = await listOutboxMessages(renderedPersonaId).catch(() => []);
   const cachedMessages = api.peek(messagesUrl);
   const pname = state.personas.find(p => p.id === chatPersonaId)?.name || chatPersonaId;
   const asrEnabled = state.settings?.asr?.enabled !== false;
@@ -1350,6 +1377,13 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
   const el = $("chat-msgs");
   if (!el) return;
   messages = mergePendingUserMessages(chatPersonaId, messages);
+  const queued = _activeOutboxRecords.map(record => outboxRecordToMessage(
+    record,
+    (blob, _attachment, index) => _outboxObjectUrl(record, blob, index),
+  ));
+  messages = [...messages, ...queued].sort((left, right) =>
+    Date.parse(left.timestamp || "") - Date.parse(right.timestamp || "")
+  );
   _closeQuotePop();  // a full in-place re-render (e.g. SSE refresh) detaches the popup anchor
 
   const previousScrollHeight = el.scrollHeight;
@@ -1404,6 +1438,12 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
     const retryStatus = role === "user" && sequence
       ? _retryStatusHtml(chatPersonaId, sequence)
       : "";
+    const outboxStatus = m._outbox_id
+      ? `<div class="msg-outbox-status">
+          <span>等待联网后重试</span>
+          <button type="button" onclick="PawzoChat.retryOutboxMessages('${escAttr(m._outbox_id)}')">重试</button>
+        </div>`
+      : "";
 
     html += `<div class="msg-row ${role}"${sequenceAttr}${latestUserAttr} data-message-timestamp="${escAttr(m.timestamp || "")}">
       ${av}
@@ -1412,6 +1452,7 @@ function renderMessages(messages, { preservePrepend = false } = {}) {
         ${renderQuoteBox(m.quote)}
         ${source}
         ${retryStatus}
+        ${outboxStatus}
       </div>
     </div>`;
   }
@@ -2082,6 +2123,8 @@ export async function sendChat() {
 
   let acceptedMessage = null;
   let sendFailed = false;
+  let queuedSuccessfully = false;
+  let queueableFailure = !navigator.onLine;
   try {
     if (imagesToSend.length > 0 || filesToSend.length > 0) {
       const fd = new FormData();
@@ -2097,6 +2140,7 @@ export async function sendChat() {
       const res = await resp.json();
       if (resp.status >= 400) {
         sendFailed = true;
+        queueableFailure = resp.status >= 500;
         toast(res.error || "发送失败", "error");
       } else if (res.message) {
         acceptedMessage = res.message;
@@ -2112,6 +2156,7 @@ export async function sendChat() {
       );
       if (res.status >= 400) {
         sendFailed = true;
+        queueableFailure = res.status >= 500;
         toast(res.data.error || "发送失败", "error");
       } else if (res.data.message) {
         acceptedMessage = res.data.message;
@@ -2121,7 +2166,30 @@ export async function sendChat() {
     }
   } catch (e) {
     sendFailed = true;
-    toast("网络错误", "error");
+    queueableFailure = true;
+  }
+
+  if (sendFailed && queueableFailure) {
+    try {
+      const queued = await addOutboxMessage({
+        personaId,
+        text,
+        quote: quoteToSend,
+        timestamp: optimisticMessage.timestamp,
+        attachments: [
+          ...imagesToSend.map(item => ({ kind: "image", file: item.file })),
+          ...filesToSend.map(item => ({ kind: "file", file: item.file })),
+        ],
+      });
+      _activeOutboxRecords.push(queued);
+      queuedSuccessfully = true;
+      sendFailed = false;
+      toast("消息已保存到待发送箱，联网后请重试");
+      removePendingUserMessage(personaId, pendingId);
+      renderMessages(_chatHistory.messages);
+    } catch (_) {
+      toast("网络错误，消息已恢复为草稿", "error");
+    }
   }
 
   let restoredFailedDraft = false;
@@ -2157,6 +2225,11 @@ export async function sendChat() {
         ],
       }).then(() => _paintConversationDraftPreview(personaId)).catch(() => undefined);
     }
+  } else if (queuedSuccessfully) {
+    if (_draftRevision(personaId) === sentDraftRevision) {
+      await clearDraft(_CHAT_DRAFT_NAMESPACE, personaId).catch(() => undefined);
+      _paintConversationDraftPreview(personaId);
+    }
   } else {
     confirmPendingUserMessage(personaId, pendingId, acceptedMessage);
     if (_draftRevision(personaId) === sentDraftRevision) {
@@ -2167,6 +2240,37 @@ export async function sendChat() {
 
   if (!restoredFailedDraft) {
     for (const img of imagesToSend) URL.revokeObjectURL(img.url);
+  }
+}
+
+export async function retryOutboxMessages(messageId = null) {
+  if (!navigator.onLine) {
+    toast("当前仍处于离线状态", "error");
+    return;
+  }
+  const records = await listOutboxMessages().catch(() => []);
+  const selected = messageId ? records.filter(record => record.id === messageId) : records;
+  if (selected.length === 0) return;
+
+  showLoading(selected.length > 1 ? `正在重试 ${selected.length} 条消息…` : "正在重试发送…");
+  let sent = 0;
+  let firstError = null;
+  try {
+    for (const record of selected) {
+      try {
+        await sendOutboxMessage(record);
+        _releaseOutboxObjectUrls(record.id);
+        sent += 1;
+      } catch (error) {
+        firstError ||= error;
+      }
+    }
+    _activeOutboxRecords = await listOutboxMessages(chatPersonaId).catch(() => []);
+    if (_isActiveChatWindow()) await refreshChatMessages(chatPersonaId);
+    if (sent > 0) toast(`已发送 ${sent} 条消息`, "success");
+    if (firstError) toast(firstError.message || "部分消息重试失败", "error");
+  } finally {
+    hideLoading();
   }
 }
 

@@ -9,6 +9,7 @@
  */
 
 import { showSheet, toast } from "./ui.js";
+import { clearOfflineData, outboxCount, storageUsage } from "./offline_store.js";
 
 let deferredInstallPrompt = null;
 let installBanner = null;
@@ -83,6 +84,60 @@ export function pwaInstallState() {
   if (isStandalone()) return "installed";
   if (deferredInstallPrompt || isIos()) return "available";
   return "browser";
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 MB";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / (1024 ** index)).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
+}
+
+async function updateConnectivityBanner() {
+  const banner = document.getElementById("offline-mode-banner");
+  if (!banner) return;
+  const offline = !navigator.onLine;
+  const count = await outboxCount().catch(() => 0);
+  banner.classList.toggle("show", offline || count > 0);
+  banner.classList.toggle("is-offline", offline);
+  const text = banner.querySelector(".offline-mode-text");
+  const action = banner.querySelector(".offline-mode-action");
+  if (text) {
+    text.textContent = offline
+      ? "离线模式：可查看缓存、编辑草稿，消息不会丢失"
+      : `${count} 条消息等待重试`;
+  }
+  if (action) action.hidden = offline || count === 0;
+}
+
+export async function getLocalStorageSummary() {
+  const { usage, quota } = await storageUsage().catch(() => ({ usage: 0, quota: 0 }));
+  const count = await outboxCount().catch(() => 0);
+  return {
+    usage,
+    quota,
+    outboxCount: count,
+    label: quota
+      ? `${formatBytes(usage)} / ${formatBytes(quota)}`
+      : formatBytes(usage),
+  };
+}
+
+export async function clearLocalCache() {
+  await clearOfflineData();
+  if ("serviceWorker" in navigator) {
+    const registration = await navigator.serviceWorker.ready.catch(() => null);
+    const worker = navigator.serviceWorker.controller || registration?.active;
+    worker?.postMessage({ type: "clear_local_cache" });
+  }
+  await updateConnectivityBanner();
+}
+
+export function initOfflineMode() {
+  window.addEventListener("offline", updateConnectivityBanner);
+  window.addEventListener("online", updateConnectivityBanner);
+  window.addEventListener("pawzo:outbox-changed", updateConnectivityBanner);
+  void updateConnectivityBanner();
 }
 
 export async function initPwa() {

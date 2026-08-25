@@ -253,7 +253,9 @@ def create_app(app_instance: App) -> Flask:
     @flask_app.route("/logout")
     def logout():
         session.clear()
-        return redirect(url_for("login"))
+        response = redirect(url_for("login"))
+        response.headers["Clear-Site-Data"] = '"cache", "storage"'
+        return response
 
     @flask_app.route("/admin/login", methods=["GET", "POST"])
     def admin_login():

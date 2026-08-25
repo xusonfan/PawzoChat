@@ -1,15 +1,46 @@
 /* PawzoChat PWA Service Worker */
 const STATIC_CACHE_PREFIX = "pawzochat-static";
-const STATIC_CACHE_VERSION = "v1";
+const STATIC_CACHE_VERSION = "v2";
 const STATIC_CACHE_NAME = `${STATIC_CACHE_PREFIX}-${STATIC_CACHE_VERSION}`;
 const IMAGE_CACHE_PREFIX = "pawzochat-images";
 const IMAGE_CACHE_VERSION = "v1";
 const IMAGE_CACHE_NAME = `${IMAGE_CACHE_PREFIX}-${IMAGE_CACHE_VERSION}`;
+const IMAGE_CACHE_MAX_ENTRIES = 160;
+const IMAGE_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 const MAX_NOTIFICATION_ICON_BYTES = 2 * 1024 * 1024;
 const basePath = new URL(self.registration.scope).pathname.replace(/\/$/, "");
 const staticPrefix = `${basePath}/static/`;
+const appPath = `${basePath || ""}/`;
+const APP_SHELL_PATHS = [
+  appPath,
+  `${basePath}/static/style.css`,
+  `${basePath}/static/desktop.css`,
+  `${basePath}/static/app.js`,
+  `${basePath}/static/logo.png`,
+  `${basePath}/static/pwa-icon-192.png`,
+  `${basePath}/static/pwa/icon-512.png`,
+  `${basePath}/static/pwa/maskable-512.png`,
+  `${basePath}/static/assets/vendor/remixicon/remixicon.symbol.svg`,
+  ...[
+    "api", "chat", "chat_message_identity", "chat_message_time", "chat_pending",
+    "chat_scroll", "choice_picker", "contacts", "contacts_index", "conversation_list_ownership",
+    "conversation_menu", "drafts", "error_banner", "error_feedback", "history_edit",
+    "image_gallery", "image_gallery_state", "image_layout_cache", "image_preview",
+    "image_preview_transform", "mcp", "memory", "message_content", "moments",
+    "moments_item_chrome", "moments_timeline", "navigation", "notification_feedback",
+    "offline_store", "persona_writer", "plugins", "push_notifications", "pwa", "qr_verify",
+    "quick_setup", "radar", "settings", "state", "sticker_maker",
+    "sticker_maker_capabilities", "theme", "ui", "unread", "utils", "worldbook",
+  ].map(name => `${basePath}/static/modules/${name}.js`),
+];
 
-self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("install", event => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(STATIC_CACHE_NAME);
+    await cache.addAll(APP_SHELL_PATHS);
+    await self.skipWaiting();
+  })());
+});
 
 self.addEventListener("activate", event => {
   event.waitUntil((async () => {
@@ -136,6 +167,18 @@ self.addEventListener("notificationclick", event => {
 });
 
 self.addEventListener("message", event => {
+  if (event.data?.type === "clear_local_cache") {
+    event.waitUntil((async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys
+        .filter(key => key.startsWith("pawzochat-"))
+        .map(key => caches.delete(key)));
+      const appCache = await caches.open(STATIC_CACHE_NAME);
+      await appCache.addAll(APP_SHELL_PATHS);
+      event.source?.postMessage?.({ type: "local_cache_cleared" });
+    })());
+    return;
+  }
   if (event.data?.type !== "clear_persona_notifications") return;
   const personaId = event.data.personaId || "";
   event.waitUntil((async () => {
@@ -151,15 +194,51 @@ self.addEventListener("message", event => {
   })());
 });
 
+async function responseSize(response) {
+  const value = Number(response?.headers?.get?.("content-length"));
+  if (Number.isFinite(value) && value > 0) return value;
+  try { return Number((await response.clone().blob()).size) || 0; } catch (_) { return 0; }
+}
+
+async function trimImageCache(cache) {
+  if (typeof cache.keys !== "function" || typeof cache.delete !== "function") return;
+  const keys = await cache.keys();
+  let totalBytes = 0;
+  const entries = [];
+  for (const key of keys) {
+    const response = await cache.match(key);
+    const bytes = await responseSize(response);
+    totalBytes += bytes;
+    entries.push({ key, bytes });
+  }
+  while (entries.length > IMAGE_CACHE_MAX_ENTRIES || totalBytes > IMAGE_CACHE_MAX_BYTES) {
+    const oldest = entries.shift();
+    if (!oldest) break;
+    await cache.delete(oldest.key);
+    totalBytes -= oldest.bytes;
+  }
+}
+
 async function cachedImageResponse(request) {
   const cache = await caches.open(IMAGE_CACHE_NAME);
   const cached = await cache.match(request);
-  if (cached) return cached;
+  if (cached) {
+    // Cache Storage keeps insertion order. Reinsert hits so trimming removes
+    // genuinely least-recently-used images first.
+    if (typeof cache.delete === "function") {
+      try {
+        await cache.delete(request);
+        await cache.put(request, cached.clone());
+      } catch (_) { /* a cache hit remains usable even if the LRU touch fails */ }
+    }
+    return cached;
+  }
 
   const response = await fetch(request);
   if (response.ok || response.type === "opaque") {
     try {
       await cache.put(request, response.clone());
+      await trimImageCache(cache);
     } catch (_) {
       // Quota and browser privacy policies may reject persistent caching.
     }
@@ -204,7 +283,22 @@ self.addEventListener("fetch", event => {
   }
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || !url.pathname.startsWith(staticPrefix)) return;
+  if (url.origin !== self.location.origin) return;
+
+  if (request.mode === "navigate") {
+    event.respondWith((async () => {
+      try {
+        return await fetch(request);
+      } catch (error) {
+        const cached = await caches.match(appPath);
+        if (cached) return cached;
+        throw error;
+      }
+    })());
+    return;
+  }
+
+  if (!url.pathname.startsWith(staticPrefix)) return;
 
   event.respondWith((async () => {
     try {

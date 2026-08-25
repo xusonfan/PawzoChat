@@ -15,6 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+import { isOfflineResource, loadResource, saveResource } from "./offline_store.js";
+
 const BASE = window.PAWZOCHAT_BASE || "";
 
 // SWR cache for GET responses. On a hit, the cached value is returned
@@ -55,7 +57,7 @@ function _fetchJson(url) {
   let p = _inflight.get(url);
   if (p) return p;
   p = fetch(BASE + url)
-    .then(async r => ({ ok: r.ok, data: await r.json() }))
+    .then(async r => ({ ok: r.ok, status: r.status, data: await r.json() }))
     .finally(() => _inflight.delete(url));
   _inflight.set(url, p);
   return p;
@@ -86,6 +88,7 @@ export const api = {
         // relative to whatever the user just did.
         if (!ok || _cacheGen !== gen) return;
         _cacheSet(url, data);
+        if (isOfflineResource(url)) void saveResource(url, data).catch(() => undefined);
         if (onUpdate && _changed(cached, data)) {
           try { onUpdate(_clone(data)); } catch (e) { /* swallow */ }
         }
@@ -93,9 +96,26 @@ export const api = {
       return _clone(cached);
     }
     const gen = _cacheGen;
-    const { ok, data } = await _fetchJson(url);
-    if (ok && _cacheGen === gen) _cacheSet(url, data);
-    return _clone(data);
+    try {
+      const { ok, status, data } = await _fetchJson(url);
+      if (ok && _cacheGen === gen) {
+        _cacheSet(url, data);
+        if (isOfflineResource(url)) void saveResource(url, data).catch(() => undefined);
+      }
+      if (!ok && status >= 500) {
+        const persisted = await loadResource(url).catch(() => null);
+        if (persisted !== null) {
+          _cacheSet(url, persisted);
+          return _clone(persisted);
+        }
+      }
+      return _clone(data);
+    } catch (error) {
+      const persisted = await loadResource(url).catch(() => null);
+      if (persisted === null) throw error;
+      _cacheSet(url, persisted);
+      return _clone(persisted);
+    }
   },
   // Mutating helpers don't invalidate the cache directly — the fetch hook
   // installed below handles it uniformly for both `api.*` calls and the many

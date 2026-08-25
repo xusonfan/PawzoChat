@@ -89,6 +89,10 @@
 </head>
 <body>
 <div id="phone-shell">
+  <div id="offline-mode-banner" class="offline-mode-banner" role="status" aria-live="polite">
+    <span class="offline-mode-text">离线模式</span>
+    <button type="button" class="offline-mode-action" onclick="PawzoChat.retryOutboxMessages()" hidden>重试发送</button>
+  </div>
 
   <div id="sidebar">
     <div id="sidebar-tabs">

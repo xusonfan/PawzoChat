@@ -39,7 +39,10 @@ import {
   notifyNewMessage,
   rememberHandledMessageKeys,
 } from "./modules/notification_feedback.js";
-import { initPwa, requestPwaInstall } from "./modules/pwa.js";
+import {
+  clearLocalCache, getLocalStorageSummary, initOfflineMode,
+  initPwa, requestPwaInstall,
+} from "./modules/pwa.js";
 import {
   syncWebPushSubscription,
   systemNotificationsEnabled,
@@ -54,6 +57,7 @@ import {
   linkWechat, doLinkWechat, unlinkWechat, viewPersonaFromChat, viewMemoryFromChat,
   openHistoryEdit,
   onChatInput, onChatKey, onChatCompositionStart, onChatCompositionEnd, sendChat,
+  retryOutboxMessages,
   toggleVoiceInputMode, startVoiceRecording, moveVoiceRecording, finishVoiceRecording, cancelVoiceRecording,
   takePhoto, capturePhoto, switchCameraFacing, toggleCameraTorch, setCameraZoom,
   startCameraGesture, moveCameraGesture, endCameraGesture,
@@ -123,6 +127,7 @@ import {
   openVoiceTest, onVoiceTestProviderChange, onVoiceTestModelChange, onVoiceTestVoiceChange, onVoiceTestTextInput, runVoiceTest,
   onTypingDelayToggle,
   previewNewMessageSound, enableSystemNotifications,
+  confirmClearLocalCache,
   saveSettingsChat, saveSettingsReply,
   onThemeModeChange, onThemeToggle, onThemeMove, onThemeDelete, saveSettingsTheme,
   themeImportPick, themeImportSubmit,
@@ -372,7 +377,7 @@ function initSSE() {
 
 window.PawzoChat = {
   switchTab, goBack, pushPage,
-  requestPwaInstall,
+  requestPwaInstall, clearLocalCache, getLocalStorageSummary,
   closeOverlay, closeConfirm, choicePickerSelect,
   closeErrorBanner, toggleErrorBanner,
   openImagePreview, closeImagePreview, rememberImageLayout,
@@ -387,6 +392,7 @@ window.PawzoChat = {
   heEnterSelectMode, heExitSelectMode, heToggleSelectItem,
   heToggleSelectAllCurrentDate, heBatchDeleteSelected,
   onChatInput, onChatKey, onChatCompositionStart, onChatCompositionEnd, sendChat,
+  retryOutboxMessages,
   toggleVoiceInputMode, startVoiceRecording, moveVoiceRecording, finishVoiceRecording, cancelVoiceRecording,
   takePhoto, capturePhoto, switchCameraFacing, toggleCameraTorch, setCameraZoom,
   startCameraGesture, moveCameraGesture, endCameraGesture,
@@ -432,6 +438,7 @@ window.PawzoChat = {
   openVoiceTest, onVoiceTestProviderChange, onVoiceTestModelChange, onVoiceTestVoiceChange, onVoiceTestTextInput, runVoiceTest,
   onTypingDelayToggle,
   previewNewMessageSound, enableSystemNotifications,
+  confirmClearLocalCache,
   saveSettingsChat, saveSettingsReply,
   onThemeModeChange, onThemeToggle, onThemeMove, onThemeDelete, saveSettingsTheme,
   themeImportPick, themeImportSubmit,
@@ -677,6 +684,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   loadProfile();
   loadThemeSettings();
+  initOfflineMode();
   void initPwa().then(() => syncWebPushSubscription());
   initMobileTabSwipe();
   switchTab("chat");

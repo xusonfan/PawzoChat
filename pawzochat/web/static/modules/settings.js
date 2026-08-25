@@ -37,6 +37,7 @@ import {
   unsubscribeWebPush,
   webPushState,
 } from "./push_notifications.js";
+import { clearLocalCache, getLocalStorageSummary } from "./pwa.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -156,6 +157,10 @@ async function renderSettings() {
         <div class="row-icon cyan">${iconHtml("ri-global-line")}</div>
         <span class="row-label">网络设置</span><span class="row-arrow">›</span>
       </div>` : ''}
+      <div class="card-row" onclick="PawzoChat.pushPage('settingsOfflineStorage')">
+        <div class="row-icon blue">${iconHtml("ri-database-2-line")}</div>
+        <span class="row-label">离线与本机缓存</span><span class="row-arrow">›</span>
+      </div>
       <div class="card-row" onclick="PawzoChat.requestPwaInstall()">
         <div class="row-icon green">${iconHtml("ri-download-2-line")}</div>
         <span class="row-label">安装到桌面</span><span class="row-value">全屏使用</span><span class="row-arrow">›</span>
@@ -166,6 +171,53 @@ async function renderSettings() {
       </div>
     </div>
   </div>`;
+}
+
+async function renderOfflineStorage() {
+  setTopBar("离线与本机缓存", true, "");
+  content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
+  const summary = await getLocalStorageSummary();
+  const percent = summary.quota > 0
+    ? Math.min(100, Math.round((summary.usage / summary.quota) * 100))
+    : 0;
+  content().innerHTML = `<div class="page">
+    <div class="card">
+      <div class="card-row">
+        <div class="row-icon blue">${iconHtml("ri-hard-drive-3-line")}</div>
+        <span class="row-label">本机存储</span>
+        <span class="row-value">${esc(summary.label)}${summary.quota ? ` · ${percent}%` : ""}</span>
+      </div>
+      <div class="card-row">
+        <div class="row-icon orange">${iconHtml("ri-send-plane-line")}</div>
+        <span class="row-label">待发送消息</span>
+        <span class="row-value">${summary.outboxCount} 条</span>
+      </div>
+    </div>
+    <div class="settings-note">最近会话、联系人、消息摘要和附件会保存在此设备。离线时可阅读缓存内容并编辑草稿；AI 回复需要网络连接。</div>
+    <div class="persona-actions">
+      <button class="btn-text danger" onclick="PawzoChat.confirmClearLocalCache()">清除本机缓存</button>
+    </div>
+  </div>`;
+}
+
+export async function confirmClearLocalCache() {
+  const ok = await confirm(
+    "清除本机缓存",
+    "将删除离线会话、图片、草稿和待发送消息。服务器上的聊天记录不会受影响。",
+    true,
+  );
+  if (!ok) return;
+  showLoading("清理中…");
+  try {
+    await clearLocalCache();
+    api.invalidate();
+    toast("本机缓存已清除", "success");
+    await renderOfflineStorage();
+  } catch (_) {
+    toast("清理失败，请稍后重试", "error");
+  } finally {
+    hideLoading();
+  }
 }
 
 /* ============ Accounts ============ */
@@ -4090,6 +4142,7 @@ export async function saveSettingsTheme() {
 registerTabRenderer("settings", renderSettings);
 registerPageRenderer("profileDetail", renderProfileDetail);
 registerPageRenderer("profileEdit", renderProfileEdit);
+registerPageRenderer("settingsOfflineStorage", renderOfflineStorage);
 registerPageRenderer("settingsAccounts", renderSettingsAccounts);
 registerPageRenderer("accountDetail", renderAccountDetail);
 registerPageRenderer("settingsProviders", renderSettingsProviders);

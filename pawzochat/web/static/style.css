@@ -140,6 +140,56 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---- Offline / weak-network status ---- */
+.offline-mode-banner {
+  display: none;
+  position: absolute;
+  top: env(safe-area-inset-top);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: calc(100% - 24px);
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 0 0 10px 10px;
+  background: color-mix(in srgb, var(--success) 92%, var(--card));
+  color: #fff;
+  box-shadow: var(--shadow-card);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.offline-mode-banner.show { display: flex; }
+.offline-mode-banner.is-offline { background: color-mix(in srgb, var(--danger) 90%, var(--card)); }
+.offline-mode-text { overflow: hidden; text-overflow: ellipsis; }
+.offline-mode-action {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(255,255,255,0.22);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+.msg-outbox-status {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.msg-outbox-status button {
+  border: 0;
+  padding: 1px 5px;
+  background: transparent;
+  color: var(--primary-dark);
+  cursor: pointer;
+  font: inherit;
+}
+
 /* ---- Phone Shell ---- */
 #phone-shell {
   width: 390px;
