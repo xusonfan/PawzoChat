@@ -19,11 +19,13 @@ import {
   state, $, content, sidebar, topTitle, topBack, topActions,
   setMobileTabContentTarget,
 } from "./state.js";
+import { toast } from "./ui.js";
 
 const tabRenderers = {};
 const pageRenderers = {};
 
 const _historyKey = "pawzoNavigation";
+const _rootBackExitIntervalMs = 2000;
 const _bootstrapRoute = history.state?.[_historyKey];
 const _historySession = _bootstrapRoute?.rootGuard
   ? _bootstrapRoute.session
@@ -33,6 +35,8 @@ let _historyIndex = _bootstrapRoute?.session === _historySession
   : 0;
 let _rootBackGuardInitialized = _bootstrapRoute?.session === _historySession
   && _bootstrapRoute.rootGuard === true;
+let _rootBackExitArmedUntil = 0;
+let _rootBackExitTimer = null;
 
 function _isStandaloneApp() {
   return window.matchMedia("(display-mode: standalone)").matches
@@ -746,7 +750,27 @@ window.addEventListener("popstate", event => {
     && state.pageStack.length === 0
     && route?.session === _historySession
     && targetIndex === 0) {
-    history.forward();
+    const now = Date.now();
+    if (now <= _rootBackExitArmedUntil) {
+      clearTimeout(_rootBackExitTimer);
+      _rootBackExitTimer = null;
+      _rootBackExitArmedUntil = 0;
+      _rootBackGuardInitialized = false;
+      history.back();
+      return;
+    }
+    _rootBackExitArmedUntil = now + _rootBackExitIntervalMs;
+    toast("再按一次返回键退出");
+    clearTimeout(_rootBackExitTimer);
+    _rootBackExitTimer = setTimeout(() => {
+      _rootBackExitTimer = null;
+      _rootBackExitArmedUntil = 0;
+      if (_rootBackGuardInitialized
+        && state.pageStack.length === 0
+        && _historyIndex === 0) {
+        history.forward();
+      }
+    }, _rootBackExitIntervalMs);
     return;
   }
 

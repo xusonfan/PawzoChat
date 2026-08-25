@@ -120,6 +120,21 @@ assert.match(
   /state\.pageStack\.length === 0[\s\S]*?targetIndex === 0[\s\S]*?history\.forward\(\);/,
   "根页面消费系统返回后应回到既有保护层，持续避免退出应用",
 );
+assert.match(
+  navigationSource,
+  /const _rootBackExitIntervalMs = 2000/,
+  "根页面应提供两秒内再次返回的退出窗口",
+);
+assert.match(
+  navigationSource,
+  /if \(now <= _rootBackExitArmedUntil\)[\s\S]*?_rootBackGuardInitialized = false;[\s\S]*?history\.back\(\);/,
+  "退出窗口内再次返回应解除保护并真正退出",
+);
+assert.match(
+  navigationSource,
+  /_rootBackExitArmedUntil = now \+ _rootBackExitIntervalMs;[\s\S]*?toast\("再按一次返回键退出"\);[\s\S]*?history\.forward\(\);/,
+  "首次返回应提示用户并恢复根页面保护层",
+);
 assert.doesNotMatch(
   navigationSource,
   /if \(isDesktop\(\) \|\| state\.pageStack\.length === 0\) return;/,

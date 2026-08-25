@@ -1,6 +1,6 @@
 /* PawzoChat PWA Service Worker */
 const STATIC_CACHE_PREFIX = "pawzochat-static";
-const STATIC_CACHE_VERSION = "v4";
+const STATIC_CACHE_VERSION = "v5";
 const STATIC_CACHE_NAME = `${STATIC_CACHE_PREFIX}-${STATIC_CACHE_VERSION}`;
 const IMAGE_CACHE_PREFIX = "pawzochat-images";
 const IMAGE_CACHE_VERSION = "v1";
