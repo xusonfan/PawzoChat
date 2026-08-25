@@ -75,7 +75,25 @@ assert.match(serviceWorkerSource, /await request\.formData\(\)/);
 assert.match(serviceWorkerSource, /indexedDB\.open\("pawzo-share-targets", 1\)/);
 assert.match(serviceWorkerSource, /Response\.redirect\(launchUrl\.href, 303\)/);
 assert.match(appSource, /readSharedPayload\(id\)/);
+assert.match(appSource, /await detectSharedImport\(payload\)/);
+assert.match(appSource, /const accepted = await confirmSharedImport\(detectedImport\)/);
+assert.match(appSource, /showSheet\([\s\S]*?shared-import-confirm[\s\S]*?shared-import-submit/);
+assert.match(appSource, /URL\.createObjectURL\(detected\.file\)/);
+assert.match(appSource, /URL\.revokeObjectURL\(previewUrl\)/);
+assert.match(appSource, /if \(!accepted\) \{[\s\S]*?await deleteSharedPayload\(id\);[\s\S]*?return;/);
+assert.match(appSource, /await importDetectedSharedFile\([\s\S]*?detectedImport/);
+assert.match(appSource, /if \(!importResult\.imported\) \{[\s\S]*?toast\(importResult\.error[\s\S]*?return;/);
 assert.match(appSource, /await chooseSharedContent\(payload\)/);
+assert.ok(
+  appSource.indexOf("await detectSharedImport(payload)") < appSource.indexOf("await confirmSharedImport(detectedImport)")
+    && appSource.indexOf("await confirmSharedImport(detectedImport)") < appSource.indexOf("await importDetectedSharedFile("),
+  "应先识别、再展示定制确认弹层，用户确认后才能调用导入接口",
+);
+assert.doesNotMatch(
+  appSource,
+  /if \(!accepted\)[\s\S]{0,180}?chooseSharedContent/,
+  "取消导入必须直接结束，不能回退到人物发送",
+);
 assert.match(chatSource, /选择接收分享的角色/);
 assert.match(chatSource, /recentForwardPersonas\(state\.personas\)/);
 assert.match(chatSource, /recentSharedPersonas\(state\.personas, state\.conversations, state\.conversations\.length\)/);

@@ -2052,6 +2052,84 @@ body {
   border-top: 8px solid var(--bg);
 }
 #action-sheet.share-target-picker { max-height: min(82vh, 680px); }
+#action-sheet.shared-import-sheet {
+  width: min(360px, calc(100vw - 24px));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  border-radius: 20px;
+}
+.shared-import-sheet .sheet-handle { display: none; }
+.shared-import-sheet #sheet-content { padding: 0; }
+.shared-import-confirm {
+  display: flex;
+  padding: 28px 24px 22px;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.shared-import-preview {
+  display: flex;
+  width: 88px;
+  height: 88px;
+  margin-bottom: 14px;
+  align-items: center;
+  justify-content: center;
+}
+.shared-import-avatar-image,
+.shared-import-preview .avatar {
+  width: 88px;
+  height: 88px;
+  margin: 0;
+  border-radius: 20px;
+}
+.shared-import-avatar-image {
+  display: block;
+  object-fit: cover;
+  box-shadow: 0 6px 20px rgba(78, 58, 46, 0.16);
+}
+.shared-import-preview .avatar img { border-radius: 20px; }
+.shared-import-book-icon {
+  display: flex;
+  width: 76px;
+  height: 76px;
+  border-radius: 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.shared-import-book-icon .ui-icon { width: 38px; height: 38px; }
+.shared-import-type { color: var(--text-3); font-size: 13px; }
+.shared-import-name {
+  max-width: 100%;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: 19px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shared-import-file {
+  max-width: 100%;
+  margin-top: 7px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shared-import-question { margin-top: 18px; color: var(--text-2); font-size: 14px; }
+.shared-import-actions { display: flex; width: 100%; gap: 12px; margin-top: 22px; }
+.shared-import-actions button {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  font: 500 15px var(--font);
+  cursor: pointer;
+}
+.shared-import-cancel { color: var(--text-2); background: var(--bg); }
+.shared-import-submit { color: #fff; background: var(--primary); }
 .share-section-title {
   padding: 10px 20px 8px;
   color: var(--text-2);

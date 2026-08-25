@@ -17,10 +17,10 @@
  */
 /* PawzoChat SPA — Module entry point */
 
-import { esc, iconHtml } from "./modules/utils.js";
+import { avatarHtml, esc, escAttr, iconHtml } from "./modules/utils.js";
 import { api } from "./modules/api.js";
 import { state, content, sidebar } from "./modules/state.js";
-import { closeOverlay, closeConfirm, step, toast, showSheet } from "./modules/ui.js";
+import { closeOverlay, closeConfirm, step, toast, showSheet, showLoading, hideLoading } from "./modules/ui.js";
 import {
   showErrorBanner, toggleErrorBanner, closeErrorBanner,
 } from "./modules/error_banner.js";
@@ -44,6 +44,9 @@ import {
   initPwa, requestPwaInstall,
 } from "./modules/pwa.js";
 import { deleteSharedPayload, readSharedPayload } from "./modules/share_target_store.js";
+import {
+  detectSharedImport, importDetectedSharedFile,
+} from "./modules/shared_import.js";
 import {
   syncWebPushSubscription,
   systemNotificationsEnabled,
@@ -675,6 +678,54 @@ window.addEventListener("online", () => {
   if (!state.sseSource || state.sseSource.readyState === EventSource.CLOSED) initSSE();
 });
 
+function formatSharedFileSize(bytes) {
+  const size = Math.max(0, Number(bytes) || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function confirmSharedImport(detected) {
+  return new Promise(resolve => {
+    const isPersona = detected.kind === "persona";
+    const typeLabel = isPersona ? "角色卡" : "世界书";
+    const previewUrl = isPersona && detected.preview === "image"
+      ? URL.createObjectURL(detected.file)
+      : "";
+    const preview = previewUrl
+      ? `<img class="shared-import-avatar-image" src="${escAttr(previewUrl)}" alt="${escAttr(detected.name)}">`
+      : isPersona
+        ? avatarHtml(detected.name, "lg", "")
+        : `<div class="shared-import-book-icon">${iconHtml("ri-book-open-line")}</div>`;
+    let accepted = false;
+
+    showSheet(`
+      <div class="shared-import-confirm" role="dialog" aria-labelledby="shared-import-title">
+        <div class="shared-import-preview">${preview}</div>
+        <div class="shared-import-type">检测到${typeLabel}</div>
+        <div class="shared-import-name" id="shared-import-title">${esc(detected.name)}</div>
+        <div class="shared-import-file">${esc(detected.file.name || "未命名文件")} · ${formatSharedFileSize(detected.file.size)}</div>
+        <div class="shared-import-question">是否导入到 PawzoChat？</div>
+        <div class="shared-import-actions">
+          <button type="button" class="shared-import-cancel" id="shared-import-cancel">取消</button>
+          <button type="button" class="shared-import-submit" id="shared-import-submit">导入</button>
+        </div>
+      </div>`,
+    () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      resolve(accepted);
+    }, { className: "shared-import-sheet" });
+
+    document.getElementById("shared-import-cancel")?.addEventListener("click", () => {
+      void closeOverlay();
+    });
+    document.getElementById("shared-import-submit")?.addEventListener("click", () => {
+      accepted = true;
+      void closeOverlay();
+    });
+  });
+}
+
 async function handleShareTarget(id) {
   try {
     const payload = await readSharedPayload(id);
@@ -682,9 +733,55 @@ async function handleShareTarget(id) {
       toast("分享内容已失效，请重新分享", "error");
       return;
     }
+
+    showLoading("正在识别分享内容…");
+    let detectedImport;
+    try {
+      detectedImport = await detectSharedImport(payload);
+    } finally {
+      hideLoading();
+    }
+    if (detectedImport) {
+      const typeLabel = detectedImport.kind === "persona" ? "角色" : "世界书";
+      const accepted = await confirmSharedImport(detectedImport);
+      if (!accepted) {
+        await deleteSharedPayload(id);
+        return;
+      }
+
+      showLoading(`正在导入${typeLabel}…`);
+      let importResult;
+      try {
+        importResult = await importDetectedSharedFile(
+          detectedImport,
+          window.PAWZOCHAT_BASE || "",
+        );
+      } finally {
+        hideLoading();
+      }
+      await deleteSharedPayload(id);
+      if (!importResult.imported) {
+        toast(importResult.error || "导入失败", "error");
+        return;
+      }
+      if (importResult.kind === "persona") {
+        api.invalidate(key => key.startsWith("/api/personas"));
+        switchTab("contacts");
+        const name = importResult.data?.name || "角色";
+        const bookCount = importResult.data?.created_worldbooks?.length || 0;
+        toast(bookCount > 0 ? `已导入「${name}」及 ${bookCount} 本世界书` : `已导入角色「${name}」`, "success");
+      } else {
+        api.invalidate(key => key.startsWith("/api/worldbooks"));
+        switchTab("discover");
+        pushPage("worldbookList", {});
+        toast(`已导入世界书「${importResult.data?.book?.name || "未命名"}」`, "success");
+      }
+      return;
+    }
     await chooseSharedContent(payload);
     await deleteSharedPayload(id);
   } catch (error) {
+    await deleteSharedPayload(id).catch(() => undefined);
     console.warn("读取系统分享内容失败", error);
     toast("无法读取分享内容，请重新分享", "error");
   }
