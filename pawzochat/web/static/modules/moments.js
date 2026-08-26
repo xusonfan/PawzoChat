@@ -24,6 +24,7 @@ import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } fro
 import { setTopBar, goBack, pushPage, registerPageRenderer } from "./navigation.js";
 import { renderTextMedia } from "./message_content.js";
 import { buildMomentActionsPopHtml, buildMomentMetaHtml } from "./moments_item_chrome.js";
+import { markMomentsRead, recordUnreadMoment } from "./moments_unread.js";
 import {
   groupMomentsByYearMonth,
   stablePersonaCoverStyle,
@@ -188,6 +189,7 @@ function _setupCoverTopBar() {
 }
 
 async function renderMomentsList() {
+  markMomentsRead();
   _list.inListPage = true;
   _list.view = "feed";
   _list.authorFilter = null;
@@ -1217,6 +1219,10 @@ function _isListPageVisible() {
 }
 
 export async function momentsOnUpdate(data) {
+  if (data.action === "added" && data.moment_id) {
+    if (_isListPageVisible()) markMomentsRead();
+    else void recordUnreadMoment(api, data.moment_id);
+  }
   if (!_isListPageVisible()) return;
   const action = data.action;
   const mid = data.moment_id;

@@ -1,6 +1,6 @@
 /* PawzoChat PWA Service Worker */
 const STATIC_CACHE_PREFIX = "pawzochat-static";
-const STATIC_CACHE_VERSION = "v5";
+const STATIC_CACHE_VERSION = "v6";
 const STATIC_CACHE_NAME = `${STATIC_CACHE_PREFIX}-${STATIC_CACHE_VERSION}`;
 const IMAGE_CACHE_PREFIX = "pawzochat-images";
 const IMAGE_CACHE_VERSION = "v1";
@@ -27,7 +27,7 @@ const APP_SHELL_PATHS = [
     "conversation_menu", "drafts", "error_banner", "error_feedback", "history_edit",
     "image_gallery", "image_gallery_state", "image_layout_cache", "image_preview",
     "image_preview_transform", "mcp", "memory", "message_content", "moments",
-    "moments_item_chrome", "moments_timeline", "navigation", "notification_feedback",
+    "moments_item_chrome", "moments_timeline", "moments_unread", "navigation", "notification_feedback",
     "offline_store", "persona_writer", "plugins", "push_notifications", "pwa", "qr_verify",
     "quick_setup", "radar", "settings", "share_target_store", "shared_import", "state", "sticker_maker",
     "sticker_maker_capabilities", "theme", "ui", "unread", "utils", "worldbook",

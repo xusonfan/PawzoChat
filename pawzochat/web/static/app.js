@@ -19,6 +19,12 @@
 
 import { avatarHtml, esc, escAttr, iconHtml } from "./modules/utils.js";
 import { api } from "./modules/api.js";
+import {
+  getMomentsUnreadAuthors,
+  initMomentsUnread,
+  markMomentsRead,
+  subscribeMomentsUnread,
+} from "./modules/moments_unread.js";
 import { state, content, sidebar } from "./modules/state.js";
 import { closeOverlay, closeConfirm, step, toast, showSheet, showLoading, hideLoading } from "./modules/ui.js";
 import {
@@ -241,6 +247,48 @@ import {
 
 /* ============ Discover Tab ============ */
 
+function momentsUnreadAvatarsHtml() {
+  const authors = getMomentsUnreadAuthors();
+  if (!authors.length) return "";
+  const labels = authors.map(item => item.authorLabel).join("、");
+  const avatars = authors.map(item => {
+    const avatarUrl = `${window.PAWZOCHAT_BASE || ""}/api/personas/${encodeURIComponent(item.author)}/avatar`;
+    return avatarHtml(item.authorLabel, "", avatarUrl);
+  }).join("");
+  return `<span class="moments-unread-avatars" role="status" aria-label="${escAttr(labels)} 发布了新朋友圈">${avatars}</span>`;
+}
+
+function syncMomentsUnreadIndicators() {
+  const html = momentsUnreadAvatarsHtml();
+  const hasUnread = getMomentsUnreadAuthors().length > 0;
+  document.querySelectorAll("[data-moments-unread]").forEach(host => {
+    host.innerHTML = html;
+  });
+  document.querySelectorAll("#tab-bar .tab[data-tab='discover']").forEach(tab => {
+    const dot = tab.querySelector(".moments-tab-unread-dot");
+    if (!hasUnread) {
+      dot?.remove();
+      tab.removeAttribute("aria-label");
+      return;
+    }
+    tab.setAttribute("aria-label", "发现，有新朋友圈");
+    if (dot) return;
+    const nextDot = document.createElement("span");
+    nextDot.className = "moments-tab-unread-dot";
+    nextDot.setAttribute("aria-hidden", "true");
+    tab.appendChild(nextDot);
+  });
+}
+
+subscribeMomentsUnread(syncMomentsUnreadIndicators);
+
+function openMomentsFromDiscover() {
+  // Clear while the discover panel is still mounted; navigation caches the
+  // panel after this handler returns, so the cached copy must already be clean.
+  markMomentsRead();
+  pushPage("momentsList", {});
+}
+
 function renderDiscover() {
   const desktop = isDesktop();
   const target = desktop ? sidebar() : content();
@@ -250,9 +298,11 @@ function renderDiscover() {
 
   target.innerHTML = `<div class="page">
     <div class="card">
-      <div class="card-row" onclick="PawzoChat.pushPage('momentsList',{})">
+      <div class="card-row" onclick="PawzoChat.openMomentsFromDiscover()">
         <div class="row-icon peach">${iconHtml("ri-camera-fill")}</div>
-        <span class="row-label">朋友圈</span><span class="row-arrow">›</span>
+        <span class="row-label">朋友圈</span>
+        <span class="moments-unread-host" data-moments-unread>${momentsUnreadAvatarsHtml()}</span>
+        <span class="row-arrow">›</span>
       </div>
       <div class="card-row" onclick="PawzoChat.pushPage('stickerMaker',{})">
         <div class="row-icon yellow">${iconHtml("ri-chat-smile-2-line")}</div>
@@ -382,7 +432,7 @@ function initSSE() {
 /* ============ Public API ============ */
 
 window.PawzoChat = {
-  switchTab, goBack, pushPage,
+  switchTab, goBack, pushPage, openMomentsFromDiscover,
   requestPwaInstall, clearLocalCache, getLocalStorageSummary,
   closeOverlay, closeConfirm, choicePickerSelect,
   closeErrorBanner, toggleErrorBanner,
@@ -816,6 +866,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initOfflineMode();
   void initPwa().then(() => syncWebPushSubscription());
   initMobileTabSwipe();
+  void initMomentsUnread(api);
   switchTab("chat");
   if (notificationPersonaId) {
     setTimeout(() => openConversationFromNotification(notificationPersonaId), 0);
