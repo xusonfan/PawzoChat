@@ -159,6 +159,25 @@ assert.equal(mod.conversationLatestMessageSequence([
 ], "cat"), 7);
 assert.equal(mod.conversationLatestMessageSequence(conversations, "cat"), null);
 assert.equal(mod.conversationLatestMessageSequence(conversations, "missing"), null);
+
+const readWatermarks = new Map([["cat", 8]]);
+const staleUnread = mod.applyConversationReadWatermarks([
+  { persona_id: "cat", latest_message_seq: 8, unread_count: 1 },
+], readWatermarks);
+assert.equal(staleUnread[0].unread_count, 0, "已提交已读的旧列表响应不得恢复角标");
+assert.equal(readWatermarks.get("cat"), 8);
+const genuinelyNewUnread = mod.applyConversationReadWatermarks([
+  { persona_id: "cat", latest_message_seq: 9, unread_count: 1 },
+], readWatermarks);
+assert.equal(genuinelyNewUnread[0].unread_count, 1, "更高序号的消息必须保留未读");
+assert.equal(readWatermarks.has("cat"), false);
+readWatermarks.set("dog", 5);
+const confirmedRead = mod.applyConversationReadWatermarks([
+  { persona_id: "dog", latest_message_seq: 5, unread_count: 0 },
+], readWatermarks);
+assert.equal(confirmedRead[0].unread_count, 0);
+assert.equal(readWatermarks.has("dog"), false, "服务端确认后应释放已读水位");
+
 assert.equal(mod.setConversationUnreadCount(conversations, "cat", 3), true);
 assert.equal(conversations[0].unread_count, 3);
 assert.equal(mod.setConversationUnreadCount(conversations, "missing", 8), false);

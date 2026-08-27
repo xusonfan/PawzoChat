@@ -78,6 +78,30 @@ export function conversationLatestMessageSequence(conversations, personaId) {
   return Number.isInteger(sequence) && sequence >= 0 ? sequence : null;
 }
 
+/**
+ * Ignore a stale list response when its latest message was already submitted as read.
+ * A higher server sequence is a genuinely new message and must keep its unread count.
+ */
+export function applyConversationReadWatermarks(conversations, readThroughByPersona) {
+  return (conversations || []).map(conversation => {
+    const personaId = conversation.persona_id;
+    const latestSequence = Number(conversation.latest_message_seq);
+    const readThrough = Number(readThroughByPersona?.get(personaId));
+    const unreadCount = normalizeUnreadCount(conversation.unread_count);
+
+    if (!unreadCount) {
+      readThroughByPersona?.delete(personaId);
+      return conversation;
+    }
+    if (!Number.isInteger(latestSequence) || !Number.isInteger(readThrough)) return conversation;
+    if (latestSequence > readThrough) {
+      readThroughByPersona?.delete(personaId);
+      return conversation;
+    }
+    return { ...conversation, unread_count: 0 };
+  });
+}
+
 export function setConversationUnreadCount(conversations, personaId, count) {
   const conversation = (conversations || []).find(item => item.persona_id === personaId);
   if (!conversation) return false;

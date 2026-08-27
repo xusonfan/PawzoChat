@@ -20,7 +20,8 @@ import { renderTextMedia, summarizeConversationMessage } from "./message_content
 import { imageLayoutAttributes } from "./image_layout_cache.js";
 import { clampMapZoom, coordinateAtMapPoint, mapTiles } from "./location_map.js";
 import {
-  conversationLatestMessageSequence, isConversationReadContext, markConversationReadLocal,
+  applyConversationReadWatermarks, conversationLatestMessageSequence,
+  isConversationReadContext, markConversationReadLocal,
   mergeConversationsPreserveUnread, setConversationUnreadCount,
   unreadBadgeHtml, updateChatTabUnread, updateConversationUnread,
 } from "./unread.js";
@@ -72,6 +73,7 @@ const _CHAT_DRAFT_NAMESPACE = "chat";
 // response may write state + DOM, so concurrent SSE refreshes cannot flash
 // badges by applying an older payload after a newer one.
 let _conversationsFetchGen = 0;
+const _submittedReadThrough = new Map();
 
 function _newReadAuditId() {
   return globalThis.crypto?.randomUUID?.()
@@ -362,8 +364,9 @@ async function _restoreChatDraft(personaId, generation, revision) {
 /* ---- Chat List (Tab) ---- */
 
 function _mergeConversationState(incoming) {
+  const merged = mergeConversationsPreserveUnread(state.conversations, incoming || []);
   return projectPendingConversationSummaries(
-    mergeConversationsPreserveUnread(state.conversations, incoming || []),
+    applyConversationReadWatermarks(merged, _submittedReadThrough),
   );
 }
 
@@ -725,13 +728,21 @@ export async function markConversationRead(personaId = chatPersonaId, throughSeq
   updateConversationUnread(state.conversations);
   updateChatTabUnread(state.conversations);
   if (!Number.isInteger(throughSeq) || throughSeq < 0) return;
+  const previousReadThrough = _submittedReadThrough.get(personaId);
+  const submittedReadThrough = Math.max(previousReadThrough || 0, throughSeq);
+  _submittedReadThrough.set(personaId, submittedReadThrough);
   try {
     await api.post(`/api/conversations/${encodeURIComponent(personaId)}/read`, {
       through_seq: throughSeq,
       client_id: _readClientId,
       page_id: _readPageId,
     });
-  } catch (e) { /* the next list refresh restores server truth */ }
+  } catch (e) {
+    if (_submittedReadThrough.get(personaId) === submittedReadThrough) {
+      if (previousReadThrough == null) _submittedReadThrough.delete(personaId);
+      else _submittedReadThrough.set(personaId, previousReadThrough);
+    }
+  }
 }
 
 export function applyAssistantUnread(personaId, unreadCount) {
