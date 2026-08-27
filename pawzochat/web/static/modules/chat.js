@@ -241,6 +241,53 @@ function _draftPreview(summary) {
   return "";
 }
 
+const _previewSegmenter = globalThis.Intl?.Segmenter
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+let _conversationPreviewObserver = null;
+
+function _previewGraphemes(text) {
+  if (!_previewSegmenter) return Array.from(text);
+  return Array.from(_previewSegmenter.segment(text), part => part.segment);
+}
+
+function _fitConversationPreview(preview) {
+  const textNode = preview.querySelector("[data-full-preview]");
+  if (!textNode) return;
+
+  const fullText = textNode.dataset.fullPreview || "";
+  textNode.textContent = fullText;
+  const label = preview.querySelector(".conv-draft-label");
+  const gap = label ? parseFloat(getComputedStyle(preview).columnGap) || 0 : 0;
+  const availableWidth = Math.max(0, preview.clientWidth - (label?.offsetWidth || 0) - gap);
+  if (textNode.scrollWidth <= availableWidth) return;
+
+  const graphemes = _previewGraphemes(fullText);
+  let low = 0;
+  let high = graphemes.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    textNode.textContent = graphemes.slice(0, middle).join("");
+    if (textNode.scrollWidth <= availableWidth) low = middle;
+    else high = middle - 1;
+  }
+  textNode.textContent = graphemes.slice(0, low).join("");
+}
+
+function _observeConversationPreviews(target) {
+  _conversationPreviewObserver?.disconnect();
+  const list = target.querySelector("#conv-list-items");
+  if (!list) return;
+
+  const fitAll = () => list.querySelectorAll(".conv-preview").forEach(_fitConversationPreview);
+  fitAll();
+  if (typeof ResizeObserver !== "undefined") {
+    _conversationPreviewObserver = new ResizeObserver(fitAll);
+    _conversationPreviewObserver.observe(list);
+  }
+  document.fonts?.ready.then(fitAll).catch(() => undefined);
+}
+
 function _paintConversationDraftPreview(personaId) {
   const summary = getDraftSummary(_CHAT_DRAFT_NAMESPACE, personaId);
   document.querySelectorAll(".conv-item").forEach(item => {
@@ -248,9 +295,11 @@ function _paintConversationDraftPreview(personaId) {
     const preview = item.querySelector(".conv-preview");
     if (!preview) return;
     const fallback = preview.dataset.messagePreview || "";
+    const fullText = summary ? _draftPreview(summary) : fallback;
     preview.innerHTML = summary
-      ? `<span class="conv-draft-label">草稿</span><span>${esc(_draftPreview(summary))}</span>`
-      : esc(fallback);
+      ? `<span class="conv-draft-label">草稿</span><span data-full-preview="${escAttr(fullText)}">${esc(fullText)}</span>`
+      : `<span data-full-preview="${escAttr(fullText)}">${esc(fullText)}</span>`;
+    _fitConversationPreview(preview);
   });
 }
 
@@ -320,6 +369,7 @@ function _mergeConversationState(incoming) {
 
 function _paintChatList(target, desktop) {
   closeConversationMenu();
+  _conversationPreviewObserver?.disconnect();
   if (state.conversations.length === 0) {
     target.innerHTML = `
       <div class="empty-state" style="position:relative">
@@ -343,9 +393,10 @@ function _paintChatList(target, desktop) {
     const avUrl = personaAvatarUrl(persona);
     const preview = summarizeConversationMessage(c.last_message);
     const draft = getDraftSummary(_CHAT_DRAFT_NAMESPACE, c.persona_id);
+    const previewText = draft ? _draftPreview(draft) : preview;
     const previewHtml = draft
-      ? `<span class="conv-draft-label">草稿</span><span>${esc(_draftPreview(draft))}</span>`
-      : esc(preview);
+      ? `<span class="conv-draft-label">草稿</span><span data-full-preview="${escAttr(previewText)}">${esc(previewText)}</span>`
+      : `<span data-full-preview="${escAttr(previewText)}">${esc(previewText)}</span>`;
     const time = c.last_message ? formatTime(c.last_message.timestamp) : "";
     const active = (desktop && chatPersonaId === c.persona_id) ? " active" : "";
     const unreadBadge = unreadBadgeHtml(c.unread_count, "conv-unread-badge");
@@ -365,6 +416,7 @@ function _paintChatList(target, desktop) {
   target.innerHTML = `<div class="page" id="conv-list-page" style="position:relative">${searchHtml}<div class="card" id="conv-list-items">${listHtml}</div>
     <div class="about-footer" aria-hidden="true" style="position:absolute;right:8px;bottom:4px;font-size:11px;line-height:1;color:var(--text-3);opacity:0.1;white-space:nowrap;pointer-events:none;user-select:none"></div>
   </div>`;
+  _observeConversationPreviews(target);
   attachConversationMenu(target.querySelector("#conv-list-items"), state.conversations, {
     onOpen: openChat,
     onPin: setConversationPinned,
