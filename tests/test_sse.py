@@ -41,3 +41,26 @@ def test_stream_replays_events_after_last_event_id():
     assert payload == {"type": "conversation_updated", "persona_id": "cat"}
 
     stream.close()
+
+
+def test_image_failure_update_remains_retryable_without_leaking_arguments():
+    message = {
+        "role": "assistant",
+        "_seq": 2,
+        "content": [{
+            "type": "image",
+            "status": "failed",
+            "task_id": "0123456789abcdef",
+            "error": "provider unavailable",
+            "retry_arguments": {"prompt": "a cat"},
+        }],
+    }
+
+    sse.broadcast("assistant_message_updated", persona_id="cat", message=message)
+
+    _, raw_event = sse._event_history[-1]
+    payload = json.loads(raw_event)
+    image = payload["message"]["content"][0]
+    assert image["retryable"] is True
+    assert "retry_arguments" not in image
+    assert message["content"][0]["retry_arguments"] == {"prompt": "a cat"}

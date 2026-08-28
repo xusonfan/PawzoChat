@@ -23,6 +23,8 @@ import queue
 import threading
 from collections import deque
 
+from pawzochat.web.message_serialization import messages_for_api
+
 MAX_SSE_CLIENTS = 20
 SSE_HEARTBEAT_SECONDS = 15.0
 SSE_REPLAY_LIMIT = 200
@@ -77,11 +79,23 @@ def sse_stream(
                 _clients.remove(q)
 
 
+def _public_payload(event_type: str, payload: dict) -> dict:
+    message = payload.get("message")
+    if event_type not in {"assistant_message", "assistant_message_updated"} or not isinstance(message, dict):
+        return payload
+
+    return {
+        **payload,
+        "message": messages_for_api([message])[0],
+    }
+
+
 def broadcast(event_type: str, **payload):
     """Push an event to connected clients and retain a bounded replay window."""
     global _event_sequence
 
-    message = json.dumps({"type": event_type, **payload}, ensure_ascii=False)
+    public_payload = _public_payload(event_type, payload)
+    message = json.dumps({"type": event_type, **public_payload}, ensure_ascii=False)
     with _clients_lock:
         _event_sequence += 1
         event = (_event_sequence, message)
