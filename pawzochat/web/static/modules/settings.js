@@ -2128,6 +2128,7 @@ export function onVoiceTestProviderChange() {
   const currentProvider = _voiceTestState.providers.find(p => p.name === _voiceTestState.provider);
   const models = currentProvider?.models || [];
   _voiceTestState.model = models[0]?.id || "";
+  _voiceTestState.voice = models[0]?.voice || "";
   const sel = $("vt-model");
   if (sel) {
     sel.innerHTML = models.map(m =>
@@ -2139,6 +2140,9 @@ export function onVoiceTestProviderChange() {
 
 export function onVoiceTestModelChange() {
   _voiceTestState.model = $("vt-model")?.value || "";
+  const currentProvider = _voiceTestState.providers.find(p => p.name === _voiceTestState.provider);
+  const currentModel = currentProvider?.models?.find(m => m.id === _voiceTestState.model);
+  _voiceTestState.voice = currentModel?.voice || "";
   _refreshVoiceDropdown();
 }
 
@@ -2161,7 +2165,7 @@ function _refreshVoiceDropdown() {
     voiceList.innerHTML = voiceOptionsHtml(voices);
   }
   const voiceInput = $("vt-voice");
-  if (voiceInput && !voiceInput.value.trim()) {
+  if (voiceInput) {
     voiceInput.value = currentVoice;
   }
 }
