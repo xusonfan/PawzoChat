@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,8 +18,7 @@
 
 The web UI receives assistant messages over SSE (broadcast by the reply
 dispatcher), so this channel does no network I/O. It only reproduces the
-human-like pacing between message bubbles that used to live inline in
-``ReplyDispatcher._delay_for_local_preview``.
+human-like pacing between message bubbles using the shared delay estimator.
 """
 
 from __future__ import annotations
@@ -44,22 +43,8 @@ class WebChannel(Channel):
         is_last: bool = False,
     ) -> bool:
         if not is_first:
-            self._delay_for_local_preview(message)
+            reply_cfg = self._app.config.get("reply", default={})
+            delay = MessageSender.estimate_message_delay(message, reply_cfg)
+            if delay:
+                time.sleep(delay)
         return True
-
-    def _delay_for_local_preview(self, message: dict) -> None:
-        reply_cfg = self._app.config.get("reply", default={})
-        if not reply_cfg.get("typing_delay_enabled", True):
-            return
-
-        content = message.get("content", [])
-        if any(block.get("type") in {"emoji", "image", "file", "voice"} for block in content):
-            time.sleep(0.6)
-            return
-        text = "".join(
-            block.get("text", "")
-            for block in content
-            if block.get("type") == "text"
-        )
-        if text.strip():
-            time.sleep(MessageSender.estimate_delay_from_config(text, reply_cfg))

@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -17,15 +17,20 @@
  */
 import { avatarHtml, personaAvatarUrl, formatTime, formatMsgTime, esc, escAttr, iconHtml, placeActionsPop, jsArg } from "./utils.js";
 import { api } from "./api.js";
+import { ChatHistory } from "./chat_history.js";
+import { renderQuoteBox } from "./quote.js";
 import { state, $, content, sidebar } from "./state.js";
 import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
 import {
   setTopBar, pushPage, goBack, switchTab,
-  registerTabRenderer, registerPageRenderer,
+  registerTabRenderer, registerPageRenderer, setPageCleanup,
   isDesktop, setSidebarBar, refreshSidebar,
 } from "./navigation.js";
 
 export let chatPersonaId = null;
+let _history = null;
+let _temporaryMessage = 0;
+const _chatObjectUrls = new Set();
 let _pendingImages = [];
 let _pendingFiles = [];
 let _pendingQuote = "";
@@ -100,7 +105,9 @@ const _STANDARD_EMOJIS = [
 
 /* ---- Chat List (Tab) ---- */
 
+let _chatListGeneration = 0;
 async function renderChatList() {
+  const generation = ++_chatListGeneration;
   const desktop = isDesktop();
   const target = desktop ? sidebar() : content();
   const actionBtn = `<button class="top-btn" onclick="PawzoChat.newConversation()">
@@ -117,6 +124,11 @@ async function renderChatList() {
     const pres = await api.get("/api/personas");
     state.personas = pres.personas || [];
   } catch (e) { toast("加载失败", "error"); return; }
+
+  // Layout changes start a tab refresh before restoring the open page. Its
+  // late response must not replace that page with the mobile conversation list.
+  if (generation !== _chatListGeneration || desktop !== isDesktop()
+      || state.currentTab !== "chat" || (!desktop && state.pageStack.length)) return;
 
   if (state.conversations.length === 0) {
     target.innerHTML = `
@@ -226,7 +238,7 @@ function renderContentBlocks(content) {
   if (emojiBlocks.length > 0) {
     const base = window.PAWZOCHAT_BASE || "";
     return emojiBlocks
-      .map(b => `<div class="msg-emoji"><img src="${esc(base + b.url)}" alt="emoji" onclick="PawzoChat.openImagePreview(this.src)"></div>`)
+      .map(b => `<div class="msg-emoji"><img src="${esc(base + b.url)}" alt="emoji" loading="lazy" onclick="PawzoChat.openImagePreview(this.src)"></div>`)
       .join("");
   }
   const base = window.PAWZOCHAT_BASE || "";
@@ -235,7 +247,7 @@ function renderContentBlocks(content) {
     if (b.type === "image") {
       let src = "";
       if (b.url) {
-        src = /^https?:\/\//i.test(b.url) ? b.url : base + b.url;
+        src = /^(https?:|blob:)/i.test(b.url) ? b.url : base + b.url;
       } else if (b.path) {
         const filename = b.path.split(/[\\/]/).pop();
         src = base + "/api/images/" + chatPersonaId + "/" + filename;
@@ -265,7 +277,7 @@ function renderContentBlocks(content) {
         // a percentage width would collapse to the minimum content width)
         const width = Math.min(220, 84 + secs * 6);
         parts += `<div class="msg-voice-wrap" data-voice-key="${escAttr(voiceKey)}">
-          <div class="msg-voice" style="width:${width}px" data-src="${escAttr(src)}" data-transcript="${escAttr(transcript)}" onclick="PawzoChat.playVoiceMessage(this)">
+          <div class="msg-voice${_voiceAudio && !_voiceAudio.paused && _voiceAudio.getAttribute("src") === src ? " playing" : ""}" style="width:${width}px" data-src="${escAttr(src)}" data-transcript="${escAttr(transcript)}" onclick="PawzoChat.playVoiceMessage(this)">
             <svg class="msg-voice-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path class="v1" d="M8.5 9.5a4 4 0 010 5"/><path class="v2" d="M11.5 7a8 8 0 010 10"/><path class="v3" d="M14.5 4.5a12.5 12.5 0 010 15"/></svg>
             <span class="msg-voice-dur">${secs}″</span>
           </div>
@@ -294,18 +306,16 @@ export function playVoiceMessage(el) {
   }
   const src = el?.dataset?.src;
   if (!src) return;
-  if (_voiceEl === el && _voiceAudio && !_voiceAudio.paused) {
+  if (_voiceAudio && _voiceAudio.getAttribute("src") === src && !_voiceAudio.paused) {
     // Clicking the same one again = stop
     _voiceAudio.pause();
-    el.classList.remove("playing");
-    _voiceEl = null;
+    _clearVoicePlaying();
     return;
   }
-  if (_voiceEl) _voiceEl.classList.remove("playing");
+  _clearVoicePlaying();
   if (!_voiceAudio) _voiceAudio = new Audio();
   _voiceAudio.onended = _voiceAudio.onerror = () => {
-    if (_voiceEl) _voiceEl.classList.remove("playing");
-    _voiceEl = null;
+    _clearVoicePlaying();
   };
   _voiceAudio.src = src;
   _voiceEl = el;
@@ -316,44 +326,15 @@ export function playVoiceMessage(el) {
   });
 }
 
-function _isNearBottom(el) {
-  return el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
-}
-
-// After a full re-render, images (message images/emoji) that haven't finished
-// loading have height 0 before load; a single scrollTop=scrollHeight lands at
-// the bottom of the "collapsed list". Once the images load and push the
-// content taller, the viewport ends up stuck above the real bottom (appears
-// stuck at the previous message). So attach a one-shot load/error listener to
-// each unfinished image and re-pin to the bottom when it finishes loading.
-function _pinBottomAfterMediaLoad(el) {
-  for (const img of el.querySelectorAll("img")) {
-    if (img.complete) continue;
-    const repin = () => { el.scrollTop = el.scrollHeight; };
-    img.addEventListener("load", repin, { once: true });
-    img.addEventListener("error", repin, { once: true });
-  }
-}
-
-function _scrollAfterInsert(el) {
-  el.scrollTop = el.scrollHeight;
-  const lastRow = el.lastElementChild;
-  if (!lastRow) return;
-  for (const img of lastRow.querySelectorAll("img")) {
-    if (!img.complete) {
-      img.addEventListener("load", () => { el.scrollTop = el.scrollHeight; }, { once: true });
-      img.addEventListener("error", () => { el.scrollTop = el.scrollHeight; }, { once: true });
-    }
-  }
+function _clearVoicePlaying() {
+  if (_voiceEl) _voiceEl.classList.remove("playing");
+  $("chat-msgs")?.querySelectorAll(".msg-voice.playing").forEach(el => el.classList.remove("playing"));
+  _voiceEl = null;
 }
 
 /* ---- Quoted-message bubble + long-press quote ---- */
 
 // WeChat-style gray quote box rendered below a message that quotes another.
-function renderQuoteBox(quote) {
-  if (!quote) return "";
-  return `<div class="msg-quote">${esc(quote)}</div>`;
-}
 
 // Extract the quotable text of a rendered message row from the DOM. Reading
 // textContent (rather than a data-attribute) sidesteps attribute-escaping and
@@ -581,7 +562,13 @@ async function renderChatWindow(data) {
   _pendingQuote = "";
   _closeQuotePop();  // never let a popup (in document.body) outlive the chat that spawned it
   content().innerHTML = `<div class="chat-container">
-    <div class="chat-messages" id="chat-msgs"><div class="loading-center"><div class="spinner"></div></div></div>
+    <div class="chat-message-pane">
+      <div class="chat-messages" id="chat-msgs"></div>
+      <button class="chat-to-bottom" id="chat-to-bottom" type="button" aria-label="回到底部" hidden>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 9l5 5 5-5M7 15l5 5 5-5"/></svg>
+        <span>回到底部</span><span class="chat-unread-count" id="chat-unread-count" hidden></span>
+      </button>
+    </div>
     <div id="img-preview-bar" class="img-preview-bar" style="display:none"></div>
     <div id="file-preview-bar" class="file-preview-bar" style="display:none"></div>
     <div id="quote-preview-bar" class="quote-preview-bar" style="display:none"></div>
@@ -649,62 +636,58 @@ async function renderChatWindow(data) {
   _emojiActiveTab = 0;
   _plusMenuOpen = false;
 
-  try {
-    const res = await api.get(`/api/conversations/${chatPersonaId}/messages?rounds=10`);
-    renderMessages(res.messages || []);
-  } catch (e) { toast("加载消息失败", "error"); }
-
+  const history = _history = new ChatHistory({
+    el: $("chat-msgs"), personaId: chatPersonaId, renderItem: renderMessage,
+    onDistanceChange: distance => {
+      const button = $("chat-to-bottom");
+      if (button) button.hidden = distance <= 300;
+    },
+    onUnread: count => {
+      const badge = $("chat-unread-count");
+      if (badge) { badge.hidden = !count; badge.textContent = count > 99 ? "99+" : String(count); }
+      $("chat-to-bottom")?.setAttribute("aria-label", count ? `回到底部，${count}条新消息` : "回到底部");
+    },
+    onError: message => toast(message),
+  });
+  $("chat-to-bottom").addEventListener("click", () => history.goToBottom());
+  setPageCleanup(() => {
+    history.destroy();
+    if (_history === history) { _history = null; chatPersonaId = null; }
+    _cancelLongPress();
+    _closeQuotePop();
+    document.removeEventListener("click", _onDocumentClickForPicker);
+    _voiceAudio?.pause();
+    _clearVoicePlaying();
+    _expandedVoiceTranscripts.clear();
+    for (const url of _chatObjectUrls) URL.revokeObjectURL(url);
+    for (const img of _pendingImages) URL.revokeObjectURL(img.url);
+    _chatObjectUrls.clear();
+    _pendingImages = [];
+    _pendingFiles = [];
+    _pendingQuote = "";
+  });
   if (state.processingPersonas.has(chatPersonaId)) showTypingIndicator();
 }
 
-function renderMessages(messages) {
-  const el = $("chat-msgs");
-  if (!el) return;
-  _closeQuotePop();  // a full in-place re-render (e.g. SSE refresh) detaches the popup anchor
-
-  if (messages.length === 0) {
-    el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="empty-text">开始对话吧</div></div>`;
-    return;
-  }
-
-  const _persona = state.personas.find(p => p.id === chatPersonaId);
-  const _pname = _persona?.name || chatPersonaId;
-  const _avUrl = personaAvatarUrl(_persona);
-
+function renderMessage(m, previous) {
+  const persona = state.personas.find(p => p.id === chatPersonaId);
   const base = window.PAWZOCHAT_BASE || "";
-  const _userName = state.profile?.name || "我";
-  const _userAvUrl = state.profile?.has_avatar ? `${base}/api/profile/avatar` : "";
-
-  let html = "";
-  let lastTime = 0;
-  for (const m of messages) {
-    const mt = new Date(m.timestamp).getTime();
-    if (mt - lastTime > 300000) {
-      html += `<div class="msg-time">${formatMsgTime(m.timestamp)}</div>`;
-    }
-    lastTime = mt;
-
-    const role = m.role;
-    const av = role === "assistant"
-      ? avatarHtml(_pname, "sm", _avUrl)
-      : avatarHtml(_userName, "sm", _userAvUrl);
-    const source = sourceBadge(m.source);
-    const bubbleHtml = renderContentBlocks(m.content);
-
-    html += `<div class="msg-row ${role}">
-      ${av}
-      <div>
-        ${bubbleHtml}
-        ${renderQuoteBox(m.quote)}
-        ${source}
-      </div>
+  const assistant = m.role === "assistant";
+  const avatar = assistant
+    ? avatarHtml(persona?.name || chatPersonaId, "sm", personaAvatarUrl(persona))
+    : avatarHtml(state.profile?.name || "我", "sm", state.profile?.has_avatar ? `${base}/api/profile/avatar` : "");
+  const showTime = !previous || new Date(m.timestamp) - new Date(previous.timestamp) > 300000;
+  return `${showTime ? `<div class="msg-time">${formatMsgTime(m.timestamp)}</div>` : ""}
+    <div class="msg-row ${assistant ? "assistant" : "user"}">
+      ${avatar}<div>${renderContentBlocks(m.content)}
+      ${renderQuoteBox(m.quote, m.quote_media || [], m.local_id, chatPersonaId)}
+      ${sourceBadge(m.source)}${m._failed ? '<div class="msg-send-failed">发送失败</div>' : ""}</div>
     </div>`;
-  }
-  el.innerHTML = html;
-  requestAnimationFrame(() => {
-    el.scrollTop = el.scrollHeight;
-    _pinBottomAfterMediaLoad(el);
-  });
+}
+
+function optimisticMessage(history, content, quote = "") {
+  return history.optimistic({ local_id: `pending:${++_temporaryMessage}`,
+    role: "user", source: "web", timestamp: new Date().toISOString(), content, quote });
 }
 
 export function onChatInput() {
@@ -800,72 +783,46 @@ function _renderFilePreviews() {
 }
 
 export async function sendChat() {
+  const history = _history;
   const inp = $("chat-input");
+  if (!history || !inp) return;
   const text = inp.value.trim();
-  const hasImages = _pendingImages.length > 0;
-  const hasFiles = _pendingFiles.length > 0;
-  if (!text && !hasImages && !hasFiles) return;
-
+  const images = [..._pendingImages], files = [..._pendingFiles], quote = _pendingQuote;
+  if (!text && !images.length && !files.length) return;
+  const blocks = [];
+  if (text) blocks.push({ type: "text", text });
+  for (const img of images) { blocks.push({ type: "image", url: img.url }); _chatObjectUrls.add(img.url); }
+  for (const file of files) blocks.push({ type: "file", name: file.name });
+  const key = optimisticMessage(history, blocks, quote);
   inp.value = "";
+  _pendingImages = []; _pendingFiles = []; _pendingQuote = "";
   onChatInput();
-
-  const msgsEl = $("chat-msgs");
-  const emptyState = msgsEl.querySelector(".empty-state");
-  if (emptyState) emptyState.remove();
-
-  const _base = window.PAWZOCHAT_BASE || "";
-  const _uName = state.profile?.name || "我";
-  const _uAvUrl = state.profile?.has_avatar ? `${_base}/api/profile/avatar` : "";
-
-  let userBubble = "";
-  if (text) userBubble += `<div class="msg-bubble">${esc(text)}</div>`;
-  for (const img of _pendingImages) {
-    userBubble += `<div class="msg-image"><img src="${img.url}" alt="image"></div>`;
-  }
-  for (const f of _pendingFiles) {
-    userBubble += `<div class="msg-file-inline">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-      <span>${esc(f.name)}</span>
-    </div>`;
-  }
-  const quoteToSend = _pendingQuote;
-  const wasAtBottom = _isNearBottom(msgsEl);
-  msgsEl.insertAdjacentHTML("beforeend", `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div>${userBubble}${renderQuoteBox(quoteToSend)}</div></div>`);
-  if (wasAtBottom) _scrollAfterInsert(msgsEl);
-
-  const imagesToSend = [..._pendingImages];
-  const filesToSend = [..._pendingFiles];
-  _pendingImages = [];
-  _pendingFiles = [];
-  _pendingQuote = "";
-  _renderImagePreviews();
-  _renderFilePreviews();
-  _renderQuotePreview();
-
+  _renderImagePreviews(); _renderFilePreviews(); _renderQuotePreview();
   try {
-    if (imagesToSend.length > 0 || filesToSend.length > 0) {
-      const fd = new FormData();
-      fd.append("text", text);
-      if (quoteToSend) fd.append("quote", quoteToSend);
-      for (const img of imagesToSend) fd.append("images", img.file);
-      for (const f of filesToSend) fd.append("files", f.file);
-      const base = window.PAWZOCHAT_BASE || "";
-      const resp = await fetch(`${base}/api/conversations/${chatPersonaId}/messages`, {
-        method: "POST",
-        body: fd,
-      });
-      const res = await resp.json();
-      if (resp.status >= 400) toast(res.error || "发送失败", "error");
+    let status, result;
+    const url = `/api/conversations/${encodeURIComponent(history.personaId)}/messages`;
+    if (images.length || files.length) {
+      const body = new FormData();
+      body.append("text", text);
+      if (quote) body.append("quote", quote);
+      for (const img of images) body.append("images", img.file);
+      for (const file of files) body.append("files", file.file);
+      const response = await fetch((window.PAWZOCHAT_BASE || "") + url, { method: "POST", body });
+      status = response.status; result = await response.json();
     } else {
-      const body = quoteToSend ? { text, quote: quoteToSend } : { text };
-      const res = await api.post(`/api/conversations/${chatPersonaId}/messages`, body);
-      if (res.status >= 400) toast(res.data.error || "发送失败", "error");
+      const response = await api.post(url, quote ? { text, quote } : { text });
+      status = response.status; result = response.data;
     }
-  } catch (e) {
-    toast("网络错误", "error");
+    if (status >= 400) throw new Error(result.error || "发送失败");
+    if (result.persona_id && result.persona_id !== history.personaId) {
+      history.acknowledge(key, null);
+      if (!history.destroyed) toast("消息已转入其他对话");
+    } else history.acknowledge(key, result.message);
+    for (const img of images) { URL.revokeObjectURL(img.url); _chatObjectUrls.delete(img.url); }
+  } catch (error) {
+    history.fail(key);
+    if (!history.destroyed) toast(error.message || "网络错误", "error");
   }
-
-  for (const img of imagesToSend) URL.revokeObjectURL(img.url);
 }
 
 export function showTypingIndicator() {
@@ -881,33 +838,10 @@ function hideTypingIndicator() {
 }
 
 export function appendAssistantMessage(message, isLast) {
-  const msgsEl = $("chat-msgs");
-  if (!msgsEl) return;
-
-  const wasAtBottom = _isNearBottom(msgsEl);
-
-  const persona = state.personas.find(p => p.id === chatPersonaId);
-  const pname = persona?.name || chatPersonaId;
-  const avUrl = personaAvatarUrl(persona);
-  const source = sourceBadge(message.source);
-  const bubbleHtml = renderContentBlocks(message.content);
-
-  msgsEl.insertAdjacentHTML("beforeend", `<div class="msg-row assistant">
-    ${avatarHtml(pname, "sm", avUrl)}
-    <div>
-      ${bubbleHtml}
-      ${renderQuoteBox(message.quote)}
-      ${source}
-    </div>
-  </div>`);
-
-  if (isLast) {
-    hideTypingIndicator();
-  } else {
-    showTypingIndicator();
-  }
-
-  if (wasAtBottom) _scrollAfterInsert(msgsEl);
+  if (!_history) return;
+  _history.receive(message);
+  if (isLast) hideTypingIndicator();
+  else showTypingIndicator();
 }
 
 /* ---- Emoji Picker ---- */
@@ -1080,29 +1014,17 @@ export function insertEmoji(emoji) {
 
 export async function sendSticker(stickerUrl) {
   _closeEmojiPicker();
-  if (!chatPersonaId) return;
-
-  const msgsEl = $("chat-msgs");
-  if (!msgsEl) return;
-  const emptyState = msgsEl.querySelector(".empty-state");
-  if (emptyState) emptyState.remove();
-
-  const _base = window.PAWZOCHAT_BASE || "";
-  const _uName = state.profile?.name || "我";
-  const _uAvUrl = state.profile?.has_avatar ? `${_base}/api/profile/avatar` : "";
-
-  const wasAtBottom = _isNearBottom(msgsEl);
-  const imgSrc = _base + stickerUrl;
-  msgsEl.insertAdjacentHTML("beforeend",
-    `<div class="msg-row user">${avatarHtml(_uName, "sm", _uAvUrl)}<div><div class="msg-image"><img src="${esc(imgSrc)}" alt="sticker" onclick="PawzoChat.openImagePreview(this.src)"></div></div></div>`
-  );
-  if (wasAtBottom) _scrollAfterInsert(msgsEl);
-
+  const history = _history;
+  if (!history) return;
+  const key = optimisticMessage(history, [{ type: "image", url: stickerUrl }]);
   try {
-    const res = await api.post(`/api/conversations/${chatPersonaId}/messages`, { sticker_url: stickerUrl });
-    if (res.status >= 400) toast(res.data?.error || "发送失败", "error");
-  } catch (e) {
-    toast("网络错误", "error");
+    const res = await api.post(`/api/conversations/${encodeURIComponent(history.personaId)}/messages`, { sticker_url: stickerUrl });
+    if (res.status >= 400) throw new Error(res.data?.error || "发送失败");
+    const message = res.data.persona_id && res.data.persona_id !== history.personaId ? null : res.data.message;
+    history.acknowledge(key, message);
+  } catch (error) {
+    history.fail(key);
+    if (!history.destroyed) toast(error.message || "网络错误", "error");
   }
 }
 
@@ -1129,13 +1051,16 @@ export function chatMore() {
 }
 
 export async function clearChat() {
+  const history = _history;
+  if (!history) return;
   closeOverlay();
   const ok = await confirm("清空聊天记录", "消息将被永久删除，但对话会保留", true);
   if (!ok) return;
   showLoading("操作中…");
   try {
-    await api.del(`/api/conversations/${chatPersonaId}/messages`);
-    renderMessages([]);
+    const res = await api.del(`/api/conversations/${encodeURIComponent(history.personaId)}/messages`);
+    if (res.status >= 400) throw new Error(res.data?.error || "清空失败");
+    if (!history.destroyed) history.reload();
     refreshSidebar();
     toast("已清空", "success");
   } catch (e) { toast("操作失败", "error"); }
@@ -1143,14 +1068,17 @@ export async function clearChat() {
 }
 
 export async function deleteChat() {
+  const history = _history;
+  if (!history) return;
   closeOverlay();
   const ok = await confirm("删除对话", "确认删除这个对话？", true);
   if (!ok) return;
   showLoading("删除中…");
   try {
-    await api.del(`/api/conversations/${chatPersonaId}`);
+    const res = await api.del(`/api/conversations/${encodeURIComponent(history.personaId)}`);
+    if (res.status >= 400) throw new Error(res.data?.error || "删除失败");
     toast("已删除", "success");
-    goBack();
+    if (_history === history) goBack();
     refreshSidebar();
   } catch (e) { toast("操作失败", "error"); }
   finally { hideLoading(); }
@@ -1231,13 +1159,12 @@ export function openHistoryEdit() {
 
 /* ---- SSE helper ---- */
 
-export async function refreshChatMessages() {
-  if (!chatPersonaId) return;
+export function refreshChatMessages() {
+  if (!_history) return;
+  // Also clear the indicator when a round ends without a final reply bubble
+  // (for example a plugin cancels it), or after reconnecting to the event stream.
   hideTypingIndicator();
-  try {
-    const res = await api.get(`/api/conversations/${chatPersonaId}/messages?rounds=10`);
-    renderMessages(res.messages || []);
-  } catch (e) { /* silent */ }
+  return _history.sync();
 }
 
 /* ---- Register renderers ---- */

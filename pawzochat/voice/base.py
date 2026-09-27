@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -50,6 +50,7 @@ class VoiceProvider(ABC):
     """Base class for all TTS (Text-to-Speech) service providers."""
 
     provider_type: str = ""
+    control_family: str = "openai"
 
     @abstractmethod
     def synthesize(
@@ -71,6 +72,6 @@ class VoiceProvider(ABC):
                    MiniMax: 0.5-2.0).
 
         ``**kwargs`` forwards provider-specific tunables (format, sample_rate,
-        emotion, etc.). The web "test" endpoint passes only ``text`` + ``model``;
-        richer call sites will fill more later.
+        emotion, etc.). Chat and preview both resolve persona settings through
+        ``synthesize_with_settings`` before calling this interface.
         """

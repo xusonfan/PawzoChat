@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -220,9 +220,14 @@ registerPageRenderer("discoverPlaceholder", renderPlaceholder);
 function initSSE() {
   if (state.sseSource) state.sseSource.close();
   state.sseSource = new EventSource((window.PAWZOCHAT_BASE || "") + "/api/events");
+  state.sseSource.onopen = () => refreshChatMessages();
   state.sseSource.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+      if (data.type === "channel_upload") {
+        if (data.error) toast(`${data.name || "附件"}：${data.error}`, "error");
+        else if (data.total) toast(`${data.name || "附件"} 上传 ${Math.round(data.uploaded * 100 / data.total)}%`);
+      }
       if (data.type === "processing") {
         state.processingPersonas.add(data.persona_id);
         if (data.persona_id === chatPersonaId) showTypingIndicator();
@@ -260,9 +265,8 @@ function initSSE() {
       }
     } catch (err) { /* silent */ }
   };
-  state.sseSource.onerror = () => {
-    setTimeout(initSSE, 5000);
-  };
+  // EventSource reconnects automatically; onopen catches up missed messages.
+  // Recreating it from onerror would leave competing reconnect timers behind.
 }
 
 /* ============ Public API ============ */

@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -19,8 +19,8 @@
 MiMo exposes TTS through a chat/completions-shaped endpoint: the user message
 carries a natural-language style instruction, the assistant message carries the
 text to synthesize, and the base64 audio comes back in
-``choices[0].message.audio.data``. Output is WAV only (24kHz PCM16LE mono) —
-there is no MP3 option and no speed parameter.
+``choices[0].message.audio.data``. This adapter uses non-streaming WAV output.
+Speech rate and style are expressed through natural-language instructions.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from typing import Any
 import requests
 
 from pawzochat.voice.base import VoiceGenerationError, VoiceProvider, VoiceResponse
+from pawzochat.voice.settings import RATES
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class MimoTTSProvider(VoiceProvider):
     """MiMo TTS native API provider (POST /v1/chat/completions)."""
 
     provider_type = "mimo_tts"
+    control_family = "mimo"
 
     # base_url should point to the versioned root, e.g. "https://api.xiaomimimo.com/v1"
     _ENDPOINT = "/chat/completions"
@@ -54,6 +56,7 @@ class MimoTTSProvider(VoiceProvider):
         "disgusted": "请用嫌弃厌恶的语气朗读",
         "surprised": "请用惊讶的语气朗读",
         "neutral": "请用平静自然的语气朗读",
+        "calm": "请用平静自然的语气朗读",
     }
     _DEFAULT_INSTRUCTION = "请用自然的语气朗读"
 
@@ -76,10 +79,22 @@ class MimoTTSProvider(VoiceProvider):
         if not text:
             raise VoiceGenerationError(self.provider_type, "输入文本为空")
 
-        # speed is accepted for interface compatibility but MiMo has no such
-        # parameter; the persona's speed setting does not apply here.
+        # Numeric speed remains accepted for interface compatibility; MiMo uses
+        # its own qualitative rate control instead.
         emotion = kwargs.get("emotion", "")
-        instruction = self._EMOTION_INSTRUCTIONS.get(emotion, self._DEFAULT_INSTRUCTION)
+        style = kwargs.get("style_instruction", "")
+        requirements = []
+        if kwargs.get("dialect", "auto") != "auto":
+            requirements.append(f"请用{kwargs['dialect']}朗读")
+        rate = kwargs.get("speaking_rate", "auto")
+        if rate in RATES and rate != "auto":
+            requirements.append(f"朗读语速：{RATES[rate]}")
+        if emotion in self._EMOTION_INSTRUCTIONS:
+            requirements.append(self._EMOTION_INSTRUCTIONS[emotion])
+        parts = [f"风格描述：\n{style}"] if style else []
+        if requirements:
+            parts.append("以下明确设置优先于风格描述中冲突的要求：\n" + "；".join(requirements))
+        instruction = "\n\n".join(parts) or self._DEFAULT_INSTRUCTION
 
         body: dict[str, Any] = {
             "model": model,
@@ -135,7 +150,7 @@ class MimoTTSProvider(VoiceProvider):
             raise VoiceGenerationError(self.provider_type, "响应中无音频数据")
 
         try:
-            audio_bytes = base64.b64decode(audio_b64)
+            audio_bytes = base64.b64decode(audio_b64, validate=True)
         except Exception as e:
             raise VoiceGenerationError(
                 self.provider_type, f"base64 解码失败: {e}",

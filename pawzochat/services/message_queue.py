@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from contextlib import nullcontext
+import uuid
 import logging
 import threading
 import time
@@ -223,6 +226,9 @@ class MessageQueue:
                         msg["source"],
                         timestamp=msg.get("timestamp"),
                         quote=msg.get("quote", ""),
+                        local_id=msg.get("local_id", ""),
+                        quote_ref=msg.get("quote_ref"),
+                        quote_media=msg.get("quote_media"),
                     )
                     self._dispatch_message_stored(persona_id, stored, msg)
                 except Exception:
@@ -266,6 +272,9 @@ class MessageQueue:
         context_token: str = "",
         timestamp: str | None = None,
         quote: str = "",
+        admission=None,
+        quote_ref: dict | None = None,
+        quote_media: list | None = None,
     ) -> tuple[str, dict] | None:
         """Run inbound hooks and enqueue the user message for deferred storage."""
         channel = (reply_ctx or {}).get("channel", source)
@@ -301,26 +310,39 @@ class MessageQueue:
             logger.warning("消息缺少 persona_id，已丢弃: source=%s", event.source)
             return None
 
-        self._app.conversation_store.ensure_conversation(event.persona_id)
-        stored = self.enqueue(
-            event.persona_id,
-            event.text,
-            event.source,
-            reply_ctx=event.reply_ctx,
-            images=event.images,
-            files=event.files,
-            voices=event.voices,
-            timestamp=timestamp,
-            quote=quote,
-            stored_event={
-                "channel": channel,
-                "account_id": event.account_id,
-                "user_id": event.user_id,
-                "context_token": event.context_token,
-                "reply_ctx": event.reply_ctx,
-                "raw_message": event.raw_message,
-            },
-        )
+        if event.persona_id != persona_id and quote_ref:
+            # Hooks may reroute a message. Never carry a cached quote across
+            # persona boundaries merely because it was resolved before hooks.
+            resolved = self._app.conversation_store.quotes.resolve(
+                quote_ref.get("channel", channel), quote_ref.get("account_id", account_id),
+                quote_ref.get("peer_id", user_id), quote_ref.get("platform_id", ""),
+                event.persona_id,
+            )
+            quote, quote_ref, quote_media = resolved["quote"], resolved["quote_ref"], resolved["quote_media"]
+
+        with admission() if admission else nullcontext():
+            self._app.conversation_store.ensure_conversation(event.persona_id)
+            stored = self.enqueue(
+                event.persona_id,
+                event.text,
+                event.source,
+                reply_ctx=event.reply_ctx,
+                images=event.images,
+                files=event.files,
+                voices=event.voices,
+                timestamp=timestamp,
+                quote=quote,
+                quote_ref=quote_ref,
+                quote_media=quote_media,
+                stored_event={
+                    "channel": channel,
+                    "account_id": event.account_id,
+                    "user_id": event.user_id,
+                    "context_token": event.context_token,
+                    "reply_ctx": event.reply_ctx,
+                    "raw_message": event.raw_message,
+                },
+            )
         if getattr(self._app, "proactive_service", None):
             try:
                 self._app.proactive_service.on_user_message(event.persona_id)
@@ -342,6 +364,8 @@ class MessageQueue:
         voices: list[dict] | None = None,
         timestamp: str | None = None,
         quote: str = "",
+        quote_ref: dict | None = None,
+        quote_media: list | None = None,
         stored_event: dict | None = None,
     ) -> dict:
         """Buffer a user message for deferred storage and processing.
@@ -353,15 +377,22 @@ class MessageQueue:
         """
         content_blocks = _build_pending_content_blocks(text, images, files, voices)
         pending_message: dict = {
+            "local_id": uuid.uuid4().hex,
+            "quote_ref": quote_ref,
+            "quote_media": quote_media or [],
             "role": "user",
             "content": content_blocks,
             "source": source,
             "timestamp": timestamp or _now_iso(),
             "quote": quote,
+            "reply_ctx": dict(reply_ctx or {}),
         }
         if stored_event:
             pending_message["stored_event"] = dict(stored_event)
         message: dict = {
+            "local_id": pending_message["local_id"],
+            "quote_ref": quote_ref,
+            "quote_media": quote_media or [],
             "role": pending_message["role"],
             "content": _sanitize_content_blocks(content_blocks),
             "source": pending_message["source"],
@@ -414,11 +445,38 @@ class MessageQueue:
                 if not queue or not queue.pending_messages:
                     return
                 pending = list(queue.pending_messages)
+                def key(msg):
+                    ctx = msg.get("reply_ctx", {})
+                    return (ctx.get("channel"), ctx.get("account_id"), ctx.get("generation"))
+                for i in range(1, len(pending)):
+                    if key(pending[i]) != key(pending[0]) and (
+                        key(pending[i])[0] == "wechat" or key(pending[0])[0] == "wechat"
+                    ):
+                        pending = pending[:i]
+                        break
                 n_pending = len(pending)
-                reply_ctx = dict(queue.reply_ctx or {})
-                queue.reply_ctx = None
+                reply_ctx = dict(pending[-1].get("reply_ctx") or {})
 
             texts, images, files, has_voice = _extract_from_pending(pending)
+            images, files = list(images or []), list(files or [])
+            seen_paths = {m.get("path") for m in images + files}
+            for entry in pending:
+                for media in self._app.conversation_store.quotes.available_media(persona_id, entry.get("quote_media")):
+                    path = media.get("path")
+                    if media.get("expired") or not path or path in seen_paths:
+                        continue
+                    if media.get("type") in {"image", "emoji"}:
+                        try:
+                            with Path(path).open("rb") as image_file:
+                                raw = image_file.read(30 * 1024 * 1024 + 1)
+                            if len(raw) > 30 * 1024 * 1024:
+                                raise ValueError("引用图片超过大小限制")
+                            images.append({**media, "data": raw})
+                        except (OSError, ValueError):
+                            entry["quote"] = entry.get("quote", "") + "\n[引用附件已失效]"
+                    elif media.get("type") == "file":
+                        files.append(media)
+                    seen_paths.add(path)
 
             stored_count = 0
             for msg_data in pending:
@@ -430,6 +488,9 @@ class MessageQueue:
                         msg_data["source"],
                         timestamp=msg_data.get("timestamp"),
                         quote=msg_data.get("quote", ""),
+                        local_id=msg_data.get("local_id", ""),
+                        quote_ref=msg_data.get("quote_ref"),
+                        quote_media=msg_data.get("quote_media"),
                     )
                     self._dispatch_message_stored(persona_id, stored, msg_data)
                     stored_count += 1
@@ -501,10 +562,9 @@ class MessageQueue:
                 len(delivered_messages),
             )
 
-            # Round-end consolidation check. Triggered here instead of inside
-            # the tool handler so that index-shifting consolidation never races
-            # with an in-flight update_memory that references #N from the prompt.
-            # The actual merge runs in a background thread.
+            # Round-end consolidation runs in a background thread. It may
+            # finish during a later round; memory updates check fingerprints
+            # before writing to an index from their prompt snapshot.
             # Moments has its own trigger (moments.py).
             if self._app.memory_service:
                 try:
@@ -513,11 +573,10 @@ class MessageQueue:
                     logger.exception("记忆合并检查失败: persona=%s", persona_id)
 
             # Round-end automatic summarization check (only effective when the
-            # persona's memory.trigger_mode is "summarize"). Runs in a
+            # persona uses either fixed-round summary mode). Runs in a
             # background thread; the cutoff pins the window to this round's
             # last delivered message so messages arriving while the summary
             # LLM call is in flight are not skipped by the cursor.
-            # Moments has its own trigger (moments.py).
             if (
                 self._app.memory_service
                 and delivered_messages

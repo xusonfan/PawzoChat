@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,6 +19,15 @@ import { state, $, content, sidebar, topTitle, topBack, topActions } from "./sta
 
 const tabRenderers = {};
 const pageRenderers = {};
+let pageCleanup = null;
+
+export function setPageCleanup(cleanup) { pageCleanup = cleanup; }
+
+function disposePage() {
+  const cleanup = pageCleanup;
+  pageCleanup = null;
+  cleanup?.();
+}
 
 export function registerTabRenderer(tab, fn) {
   tabRenderers[tab] = fn;
@@ -84,6 +93,7 @@ function renderCurrentTab() {
 }
 
 function renderPage(name, data) {
+  disposePage();
   resetContentScroll();
   const fn = pageRenderers[name];
   if (fn) fn(data);
@@ -209,6 +219,7 @@ window.addEventListener("pawzo:api-invalidated", () => {
 /* ---- Core navigation ---- */
 
 export function switchTab(tab) {
+  disposePage();
   if (isDesktop()) {
     state.sidebarScrollPos[state.currentTab] = sidebar()?.scrollTop || 0;
     _saveTabDom(state.currentTab);
@@ -261,6 +272,7 @@ export function pushPage(name, data) {
 
 export function goBack() {
   if (state.pageStack.length === 0) return;
+  disposePage();
   state.pageStack.pop();
   if (state.pageStack.length === 0) {
     if (isDesktop()) {
@@ -285,6 +297,15 @@ _desktopMQ.addEventListener("change", () => {
   if (!$("phone-shell")) return;
   // Drop every snapshot — they're tied to the previous layout mode.
   _tabCache.clear();
+  if (state.pageStack[state.pageStack.length - 1]?.name === "chatWindow") {
+    // The chat uses the same content pane in both layouts. Keep its DOM and
+    // session alive so ResizeObserver can preserve the reading anchor/draft.
+    $("tab-bar").classList.add("hide");
+    $("top-bar").classList.remove("desktop-hidden");
+    if (isDesktop()) renderCurrentTab();
+    content().style.overflow = "hidden";
+    return;
+  }
   const savedPages = [...state.pageStack];
   switchTab(state.currentTab);
   for (const p of savedPages) {

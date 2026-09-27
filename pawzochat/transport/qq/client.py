@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -22,12 +22,15 @@ thread and the reply-delivery thread share a client).
 
 from __future__ import annotations
 
-import base64
+from contextlib import contextmanager
 import logging
 import threading
 import time
+import uuid
 
 import requests
+
+from pawzochat.transport.qq.push import ActivePushPolicy
 
 from pawzochat.transport.qq.models import (
     FILE_TYPE_FILE,
@@ -47,7 +50,14 @@ _REFRESH_SKEW_SECONDS = 60
 
 
 class QQClientError(RuntimeError):
-    """Raised when a QQ API call fails (bad creds, rate limit, etc.)."""
+    """Structured API failure; only explicit transient failures are retried."""
+
+    def __init__(self, message, *, biz_code=None, retryable=False, push_defer_reason=None):
+        super().__init__(message)
+        self.biz_code = biz_code
+        self.retryable = retryable
+        self.push_defer_reason = push_defer_reason
+        self._push_policy = None
 
 
 class QQClient:
@@ -55,6 +65,10 @@ class QQClient:
         self.app_id = app_id
         self.app_secret = app_secret
         self.base_url = SANDBOX_BASE_URL if sandbox else PROD_BASE_URL
+        self._state_lock = threading.RLock()
+        self._closed = threading.Event()
+        self.generation = uuid.uuid4().hex
+        self.push_policy = ActivePushPolicy(self._closed)
         self._session = requests.Session()
         self._token_lock = threading.Lock()
         self._access_token = ""
@@ -67,7 +81,9 @@ class QQClient:
 
         Raises :class:`QQClientError` if the credentials are rejected.
         """
+        self.check_open()
         with self._token_lock:
+            self.check_open()
             now = time.time()
             if (
                 not force
@@ -86,13 +102,19 @@ class QQClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-            except (requests.RequestException, ValueError) as exc:
-                raise QQClientError(f"获取 QQ access_token 失败: {exc}") from exc
+            except requests.RequestException as exc:
+                retryable = (
+                    exc.response is None or exc.response.status_code == 429
+                    or exc.response.status_code >= 500
+                )
+                raise QQClientError("获取 QQ access_token 失败", retryable=retryable) from exc
+            except ValueError as exc:
+                raise QQClientError("QQ access_token 响应不是 JSON") from exc
 
-            token = data.get("access_token", "")
+            token = data.get("access_token", "") if isinstance(data, dict) else ""
             if not token:
                 raise QQClientError(
-                    f"QQ access_token 响应异常: {data}"
+                    "QQ access_token 响应缺少有效凭据"
                 )
             try:
                 expires_in = int(data.get("expires_in", 7200))
@@ -101,6 +123,16 @@ class QQClient:
             self._access_token = token
             self._expires_at = time.time() + expires_in
             return token
+
+    @contextmanager
+    def admit(self):
+        with self._state_lock:
+            self.check_open()
+            yield
+
+    def check_open(self):
+        if self._closed.is_set():
+            raise QQClientError("QQ 账号已停止，消息未投递")
 
     def _auth_headers(self) -> dict:
         return {"Authorization": f"QQBot {self.get_access_token()}"}
@@ -116,31 +148,76 @@ class QQClient:
 
     def _auth_get(self, url: str, *, timeout) -> requests.Response:
         """GET with one forced token refresh on a 401/403."""
+        headers = self._auth_headers()
+        self.check_open()
         resp = self._session.get(
-            url, headers=self._auth_headers(), timeout=timeout,
+            url, headers=headers, timeout=timeout,
         )
         if resp.status_code in (401, 403):
             self._invalidate_token()
+            headers = self._auth_headers()
+            self.check_open()
             resp = self._session.get(
-                url, headers=self._auth_headers(), timeout=timeout,
+                url, headers=headers, timeout=timeout,
             )
         return resp
 
     def _auth_post(self, url: str, payload: dict, *, timeout) -> requests.Response:
         """POST with the bearer token, force-refreshing once on a 401/403 (the
         token may have been revoked before its natural expiry) before failing."""
-        resp = self._session.post(
-            url, json=payload, headers=self._auth_headers(), timeout=timeout,
-        )
+        headers = self._auth_headers()
+        self.check_open()
+        resp = self._post_message_request(url, payload, headers, timeout)
         if resp.status_code in (401, 403):
-            self._invalidate_token()
-            resp = self._session.post(
-                url, json=payload, headers=self._auth_headers(), timeout=timeout,
-            )
+            # Business failures cannot be fixed by refreshing the access token.
+            if not self._is_push_policy_error(resp):
+                self._invalidate_token()
+                headers = self._auth_headers()
+                self.check_open()
+                resp = self._post_message_request(url, payload, headers, timeout)
         return resp
+
+    def _post_message_request(self, url, payload, headers, timeout):
+        active = (
+            url.startswith(f"{self.base_url}/v2/users/") and url.endswith("/messages")
+            and not payload.get("msg_id") and not payload.get("event_id")
+        )
+        if active:
+            peer = url.rsplit("/", 2)[1]
+            with self.push_policy.turn(peer) as reason:
+                if reason:
+                    raise QQClientError(reason, push_defer_reason=reason)
+                self.check_open()
+                try:
+                    response = self._session.post(url, json=payload, headers=headers, timeout=timeout)
+                    # Record the failure before releasing the send lock so
+                    # concurrent active sends see the pause immediately. Token
+                    # rejection alone still gets the existing refresh attempt.
+                    if response.status_code not in (401, 403) or self._is_push_policy_error(response):
+                        self._decode_api_response(response)
+                    return response
+                except requests.RequestException as exc:
+                    error = QQClientError("QQ 请求网络错误", retryable=True)
+                    self.push_policy.record_failure(peer, error)
+                    raise error from exc
+                except QQClientError as exc:
+                    self.push_policy.record_failure(peer, exc)
+                    raise
+        self.check_open()
+        return self._session.post(url, json=payload, headers=headers, timeout=timeout)
+
+    @staticmethod
+    def _is_push_policy_error(response):
+        try:
+            return int(response.json().get("code", 0)) in (40034100, 40034105, 40054013, 40054004)
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     def close(self) -> None:
         """Release the underlying HTTP connection pool."""
+        with self._state_lock:
+            self._closed.set()
+            self.push_policy.clear()
         try:
             self._session.close()
         except Exception:
@@ -178,45 +255,71 @@ class QQClient:
         """Send a C2C (private) message. ``msg_id`` ties it to an inbound
         message for a passive reply; ``msg_seq`` is a 16-bit deduplication key.
         """
-        url = f"{self.base_url}/v2/users/{openid}/messages"
         payload: dict = {"msg_type": msg_type, "content": content}
         if msg_id:
             payload["msg_id"] = msg_id
             payload["msg_seq"] = msg_seq
         if media is not None:
             payload["media"] = media
-        resp = self._auth_post(url, payload, timeout=15)
-        if resp.status_code >= 400:
-            raise QQClientError(
-                f"QQ 发送消息失败 status={resp.status_code} body={resp.text[:300]}"
-            )
-        return resp.json() if resp.content else {}
+        self.check_open()
+        if not msg_id:
+            reason = self.push_policy.defer_reason(openid)
+            if reason:
+                raise QQClientError(reason, push_defer_reason=reason)
+        try:
+            return self.api_post(f"/v2/users/{openid}/messages", payload, timeout=15)
+        except QQClientError as exc:
+            if not msg_id:
+                self.push_policy.record_failure(openid, exc)
+            raise
 
-    def upload_c2c_media(
-        self,
-        openid: str,
-        file_data: bytes,
-        *,
-        file_type: int = FILE_TYPE_IMAGE,
-        file_name: str = "",
-    ) -> dict:
-        """Upload rich media for a C2C message (base64). Returns the response
-        whose ``file_info`` is referenced in a later ``msg_type=7`` send.
-        """
-        url = f"{self.base_url}/v2/users/{openid}/files"
-        payload = {
-            "file_type": file_type,
-            "srv_send_msg": False,
-            "file_data": base64.b64encode(file_data).decode("ascii"),
-        }
-        if file_type == FILE_TYPE_FILE and file_name:
-            payload["file_name"] = _sanitize_file_name(file_name)
-        resp = self._auth_post(url, payload, timeout=30)
-        if resp.status_code >= 400:
+    def api_post(self, path, payload, *, timeout=30):
+        self.check_open()
+        try:
+            response = self._auth_post(f"{self.base_url}{path}", payload, timeout=timeout)
+        except requests.RequestException as exc:
+            raise QQClientError("QQ 请求网络错误", retryable=True) from exc
+        return self._decode_api_response(response)
+
+    @staticmethod
+    def _decode_api_response(response):
+        try:
+            result = response.json() if response.content else {}
+        except ValueError as exc:
+            raise QQClientError(f"QQ 响应不是 JSON (HTTP {response.status_code})",
+                                retryable=response.status_code == 429 or response.status_code >= 500) from exc
+        if not isinstance(result, dict):
             raise QQClientError(
-                f"QQ 上传媒体失败 status={resp.status_code} body={resp.text[:300]}"
+                "QQ 响应格式异常",
+                retryable=response.status_code == 429 or response.status_code >= 500,
             )
-        return resp.json() if resp.content else {}
+        try:
+            code = int(result.get("code", 0) or 0)
+        except (TypeError, ValueError):
+            code = -1
+        if response.status_code >= 400 or code:
+            reason = "今日上传额度已用尽" if code == 40093002 else str(result.get("message") or result.get("msg") or "请求失败")[:200]
+            retryable = (
+                (response.status_code == 429 or response.status_code >= 500)
+                and code not in (40093001, 40093002, 40034105, 40054013, 40054004)
+            )
+            raise QQClientError(
+                f"QQ {reason} (HTTP {response.status_code}, code={code})",
+                biz_code=code, retryable=retryable,
+            )
+        return result
+
+    def upload_c2c_media(self, openid, file_data: bytes, *, file_type=FILE_TYPE_IMAGE,
+                         file_name="", on_progress=None):
+        from pawzochat.transport.qq.upload import RichMediaUploader
+        return RichMediaUploader(self, openid, file_type=file_type, file_name=file_name,
+                                 on_progress=on_progress).upload(file_data)
+
+    def upload_c2c_media_path(self, openid, file_path, *, file_type=FILE_TYPE_IMAGE,
+                              file_name="", on_progress=None):
+        from pawzochat.transport.qq.upload import RichMediaUploader
+        return RichMediaUploader(self, openid, file_type=file_type, file_name=file_name,
+                                 on_progress=on_progress).upload(file_path)
 
 
 def _sanitize_file_name(file_name: str) -> str:

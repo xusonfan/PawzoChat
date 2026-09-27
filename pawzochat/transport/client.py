@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -34,6 +34,7 @@ import secrets
 import time
 
 import requests
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,9 @@ def _generate_client_id() -> str:
 class ILinkClient:
     """HTTP client wrapping all iLink Bot API calls for a single account."""
 
-    def __init__(self, bot_token: str, base_url: str = DEFAULT_BASE_URL):
+    def __init__(self, bot_token: str, base_url: str = DEFAULT_BASE_URL, *, connection=None):
         self.bot_token = bot_token
+        self.connection = connection
         self.base_url = base_url.rstrip("/")
         self._session = requests.Session()
 
@@ -99,12 +101,35 @@ class ILinkClient:
             headers["Authorization"] = f"Bearer {self.bot_token}"
         return headers
 
-    def _post(self, endpoint: str, payload: dict, timeout: int = DEFAULT_API_TIMEOUT) -> dict:
+    def _post(self, endpoint: str, payload: dict, timeout: int = DEFAULT_API_TIMEOUT, *, lifecycle=False) -> dict:
+        if self.connection and not lifecycle:
+            self.connection.check()
         url = f"{self.base_url}/{endpoint}"
         payload["base_info"] = _build_base_info()
         resp = self._session.post(url, json=payload, headers=self._headers(), timeout=timeout)
         resp.raise_for_status()
-        return resp.json() if resp.text.strip() else {}
+        result = resp.json() if resp.text.strip() else {}
+        if self.connection and any(str(result.get(k)) == "-14" for k in ("ret", "errcode")):
+            self.connection.stale()
+            self.connection.check()
+        return result
+
+    def close(self):
+        self._session.close()
+
+    async def get_updates_async(self, http, buf="", timeout=None):
+        if self.connection:
+            self.connection.check()
+        try:
+            resp = await http.post(
+                f"{self.base_url}/ilink/bot/getupdates",
+                json={"get_updates_buf": buf, "base_info": _build_base_info()},
+                headers=self._headers(), timeout=(timeout or DEFAULT_LONG_POLL_TIMEOUT) + 5,
+            )
+            resp.raise_for_status()
+            return resp.json() if resp.content else {}
+        except httpx.TimeoutException:
+            return {"ret": 0, "msgs": [], "get_updates_buf": buf}
 
     # ---- Core API endpoints ----
 
@@ -191,7 +216,7 @@ class ILinkClient:
         account startup. Mirrors upstream gateway.startAccount -> notifyStart.
         """
         try:
-            self._post("ilink/bot/msg/notifystart", {}, timeout=DEFAULT_CONFIG_TIMEOUT)
+            self._post("ilink/bot/msg/notifystart", {}, timeout=DEFAULT_CONFIG_TIMEOUT, lifecycle=True)
         except Exception:
             logger.warning("notifystart 失败（已忽略）", exc_info=True)
 
@@ -202,14 +227,14 @@ class ILinkClient:
         shutdown / account removal. Mirrors upstream gateway.stopAccount -> notifyStop.
         """
         try:
-            self._post("ilink/bot/msg/notifystop", {}, timeout=DEFAULT_CONFIG_TIMEOUT)
+            self._post("ilink/bot/msg/notifystop", {}, timeout=DEFAULT_CONFIG_TIMEOUT, lifecycle=True)
         except Exception:
             logger.warning("notifystop 失败（已忽略）", exc_info=True)
 
-    # ---- QR Code login (GET endpoints, no auth needed) ----
+    # ---- QR Code login (POST start / GET status, no auth needed) ----
 
     @staticmethod
-    def get_qrcode(base_url: str = DEFAULT_BASE_URL) -> dict:
+    def get_qrcode(base_url: str = DEFAULT_BASE_URL, local_tokens=()) -> dict:
         """Request a new QR code for login. Returns {"qrcode": "...", ...}.
 
         Upstream 2.1.4 removed the client-side timeout (no AbortController);
@@ -218,7 +243,11 @@ class ILinkClient:
         """
         url = f"{base_url.rstrip('/')}/ilink/bot/get_bot_qrcode"
         headers = _build_common_headers()
-        resp = requests.get(url, params={"bot_type": 3}, headers=headers, timeout=None)
+        tokens = list(dict.fromkeys(t for t in local_tokens if isinstance(t, str) and t))[:10]
+        resp = requests.post(url, params={"bot_type": 3}, json={"local_token_list": tokens},
+                             headers=headers, timeout=None)
+        if resp.status_code in (404, 405):
+            resp = requests.get(url, params={"bot_type": 3}, headers=headers, timeout=None)
         resp.raise_for_status()
         return resp.json()
 

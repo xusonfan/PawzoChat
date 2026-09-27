@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,9 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+# Re-export for existing config and transport callers.
+from pawzochat.voice.settings import VOICE_GENERATION_DEFAULTS, normalize_voice_generation
 
 
 # Single source of truth for proactive message defaults. Kept here (not in
@@ -89,37 +92,6 @@ def normalize_image_generation(raw: Any) -> dict:
         "negative_enabled": bool(raw.get("negative_enabled", d["negative_enabled"])),
         "ref_mode": ref_mode,
         "custom_ref_filename": str(raw.get("custom_ref_filename", "") or "").strip(),
-    }
-
-
-# Single source of truth for per-persona voice-generation (TTS) defaults.
-# Mirrored by the Persona dataclass below and re-used by config
-# deserialization, REST validation, and the frontend default template.
-VOICE_GENERATION_DEFAULTS: dict = {
-    "enabled": False,
-    "provider": "",
-    "model": "",
-    "voice": "",   # Voice ID; empty = use the model entry's default voice
-    "speed": 1.0,
-}
-
-
-def normalize_voice_generation(raw: Any) -> dict:
-    """Coerce a ``voice_generation`` payload into a complete, safe dict."""
-    raw = raw if isinstance(raw, dict) else {}
-    d = VOICE_GENERATION_DEFAULTS
-    try:
-        speed = float(raw.get("speed", d["speed"]))
-    except (TypeError, ValueError):
-        speed = d["speed"]
-    # Each provider layer further tightens this (MiniMax 0.5-2.0, OpenAI 0.25-4.0).
-    speed = max(0.25, min(4.0, speed))
-    return {
-        "enabled": bool(raw.get("enabled", d["enabled"])),
-        "provider": str(raw.get("provider", "") or ""),
-        "model": str(raw.get("model", "") or ""),
-        "voice": str(raw.get("voice", "") or "").strip(),
-        "speed": speed,
     }
 
 
@@ -213,6 +185,8 @@ class VideoData:
 
 @dataclass
 class RefMessage:
+    svr_id: str = ""
+    partial_text: dict | None = None
     message_item: Optional[MessageItem] = None
     title: str = ""
 
@@ -232,7 +206,7 @@ class MessageItem:
 
 @dataclass
 class Message:
-    message_id: int = 0
+    message_id: str = ""
     from_user_id: str = ""
     to_user_id: str = ""
     client_id: str = ""
@@ -342,7 +316,7 @@ class Binding:
 def parse_message(raw: dict) -> Message:
     """Parse a raw JSON message dict from getUpdates into a Message object."""
     msg = Message(
-        message_id=raw.get("message_id", 0),
+        message_id=str(raw.get("message_id", "") or ""),
         from_user_id=raw.get("from_user_id", ""),
         to_user_id=raw.get("to_user_id", ""),
         client_id=raw.get("client_id", ""),
@@ -364,7 +338,7 @@ def _parse_message_item(raw: dict) -> MessageItem:
     item = MessageItem(
         type=item_type,
         create_time_ms=raw.get("create_time_ms", 0),
-        msg_id=raw.get("msg_id", ""),
+        msg_id=str(raw.get("msg_id", "") or ""),
     )
     if item_type == MessageItemType.TEXT:
         text_item = raw.get("text_item", {})
@@ -380,7 +354,11 @@ def _parse_message_item(raw: dict) -> MessageItem:
 
     raw_ref = raw.get("ref_msg")
     if raw_ref:
-        item.ref_msg = RefMessage(title=raw_ref.get("title", ""))
+        item.ref_msg = RefMessage(
+            title=raw_ref.get("title", ""),
+            svr_id=str(raw_ref.get("svr_id", "") or ""),
+            partial_text=raw_ref.get("partial_text") if isinstance(raw_ref.get("partial_text"), dict) else None,
+        )
         if raw_ref.get("message_item"):
             item.ref_msg.message_item = _parse_message_item(raw_ref["message_item"])
 

@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -268,7 +268,7 @@ class MessagingFacade:
 
         Args:
             persona_id: Target conversation (one persona = one conversation).
-            channel: ``"web"`` or ``"wechat"``. Plugin chooses explicitly.
+            channel: Registered channel (e.g. ``"web"``, ``"wechat"``, ``"qq"``).
             text: Plain-text body. At least one of ``text`` / ``images`` /
                 ``files`` is required.
             images: Optional list of image blocks of the form
@@ -288,8 +288,8 @@ class MessagingFacade:
         Raises:
             PermissionError: plugin lacks ``messaging.send``.
             ValueError: bad arguments / unknown persona.
-            RuntimeError: WeChat preconditions not met (no link, group chat,
-                missing user_id, or older than the 23h safety window).
+            RuntimeError: Channel push preconditions not met (binding, peer,
+                reply window, connection or active-send pause).
         """
         if "messaging.send" not in self._manifest.permissions:
             raise PermissionError(
@@ -370,11 +370,11 @@ class MessagingFacade:
                 f"Persona {persona_id} has no historical user message to anchor on"
             )
         # Per-channel push policy (WeChat 23h openclaw TTL window + 10-reply
-        # quota; QQ passive-only).
+        # quota; QQ connection and active-send recovery state).
         if not channel_impl.can_push_now(link, last_user_at, messages):
             raise RuntimeError(
                 f"Persona {persona_id} channel {channel!r} cannot push right now "
-                "(reply window expired or active-push quota exhausted)"
+                "(offline, reply window expired, or active push paused)"
             )
 
         return channel_impl.reply_ctx_from_link(link)

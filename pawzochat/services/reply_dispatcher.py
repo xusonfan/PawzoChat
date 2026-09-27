@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -47,9 +47,9 @@ class ReplyDispatcher:
         channel = (reply_ctx or {}).get("channel", "web")
         account_id = (reply_ctx or {}).get("account_id", "")
         user_id = (reply_ctx or {}).get("user_id", "")
+        is_first = True
 
         for index, draft in enumerate(messages):
-            is_first = index == 0
             is_last = index == len(messages) - 1
             message = self._normalize_message(draft)
 
@@ -101,6 +101,7 @@ class ReplyDispatcher:
                 message=stored,
                 is_last=is_last,
             )
+            is_first = False
             # Only count as delivered when the channel actually accepted
             # it — lets callers (e.g. ProactiveService) detect wechat send
             # failures even though the message was persisted.

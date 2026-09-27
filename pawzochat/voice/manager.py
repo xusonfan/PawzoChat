@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -32,9 +32,11 @@ from __future__ import annotations
 import logging
 
 from pawzochat.voice.base import VoiceProvider
+from pawzochat.voice.settings import control_family
 from pawzochat.voice.providers.mimo_tts import MimoTTSProvider
 from pawzochat.voice.providers.minimaxi_tts import MiniMaxTTSProvider
 from pawzochat.voice.providers.openai_tts import OpenAITTSProvider
+from pawzochat.voice.providers.pawapi_tts import PawAPITTSProvider
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +407,14 @@ class VoiceManager:
             )
             return None
 
+        if cfg.get("preset") == "pawapi" and ptype == "openai_tts":
+            cls = PawAPITTSProvider
         return cls(base_url=resolve_base_url(cfg), api_key=cfg["api_key"])
+
+    def get_control_family(self, name: str, model_id: str) -> str:
+        cfg = self._providers_cfg.get(name, {})
+        model = next((m for m in (cfg.get("models") or []) if m.get("id") == model_id), {})
+        return control_family(cfg, {**model, "type": resolve_model_type(cfg, model)})
 
     def get_model_voice(self, name: str, model_id: str) -> str:
         """Return the model entry's default voice id ("" when unset/missing)."""

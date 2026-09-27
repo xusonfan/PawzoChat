@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -38,6 +38,7 @@ from pawzochat.image.reference import (
 from pawzochat.paths import CHATS_DIR
 from pawzochat.services import bundle as bundle_mod
 from pawzochat.services import card_parser, persona_card
+from pawzochat.services.memory import auto_summary_enabled
 from pawzochat.services.worldbook import validate_book_name
 from pawzochat.transport.models import (
     PROACTIVE_DEFAULTS,
@@ -45,6 +46,7 @@ from pawzochat.transport.models import (
     normalize_voice_generation,
 )
 from pawzochat.web.routes import download_response, get_app, safe_download_stem
+from pawzochat.voice.settings import merge_voice_generation, validate_voice_generation
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +145,7 @@ def _validate_image_generation(app, patch: dict) -> tuple[str | None, dict]:
     """Coerce + validate an ``image_generation`` block.
 
     Returns ``(error_msg_or_None, normalized_dict)``. An empty/disabled
-    block always validates so users can save partial state.
+    block can omit provider/model so users can save partial state.
     """
     normalized = normalize_image_generation(patch)
     provider = normalized["provider"].strip()
@@ -168,8 +170,11 @@ def _validate_voice_generation(app, patch: dict) -> tuple[str | None, dict]:
     """Coerce + validate a ``voice_generation`` block.
 
     Returns ``(error_msg_or_None, normalized_dict)``. An empty/disabled
-    block always validates so users can save partial state.
+    block can omit provider/model so users can save partial state.
     """
+    error = validate_voice_generation(patch)
+    if error:
+        return error, {}
     normalized = normalize_voice_generation(patch)
     provider = normalized["provider"].strip()
     model = normalized["model"].strip()
@@ -312,8 +317,8 @@ def create_persona():
 
         mem_input = data.get("memory", {})
         trigger_mode = mem_input.get("trigger_mode", "remind")
-        if trigger_mode not in ("remind", "summarize"):
-            return jsonify({"error": "trigger_mode 必须是 remind 或 summarize"}), 400
+        if trigger_mode not in ("remind", "summarize", "summarize_only"):
+            return jsonify({"error": "trigger_mode 必须是 remind、summarize 或 summarize_only"}), 400
         try:
             trigger_rounds = int(mem_input.get("trigger_rounds", 10))
             if trigger_rounds < 0:
@@ -376,24 +381,6 @@ def create_persona():
     return jsonify({"ok": True, "id": persona_id}), 201
 
 
-def _summarize_effective(mem: dict) -> bool:
-    """Whether the persona's memory auto-summarization is currently active.
-
-    Used to detect the enabled/trigger_rounds/trigger_mode transition in
-    ``update_persona`` so the summary cursor is reset only when the feature
-    newly turns on (never on a plain summarize→summarize save).
-    """
-    try:
-        rounds = int(mem.get("trigger_rounds", 10))
-    except (TypeError, ValueError):
-        rounds = 10
-    return (
-        bool(mem.get("enabled", True))
-        and mem.get("trigger_mode", "remind") == "summarize"
-        and rounds > 0
-    )
-
-
 @api_personas_bp.route("/<persona_id>", methods=["PUT"])
 def update_persona(persona_id: str):
     app = get_app()
@@ -436,8 +423,10 @@ def update_persona(persona_id: str):
         summarize_activated = False
         if "memory" in data:
             mem_patch = data["memory"]
-            existing_mem = cfg.get("memory", {})
-            old_summarize = _summarize_effective(existing_mem)
+            if not isinstance(mem_patch, dict):
+                return jsonify({"error": "memory 必须是 JSON 对象"}), 400
+            existing_mem = dict(cfg.get("memory", {}))
+            old_summarize = auto_summary_enabled(existing_mem)
             if "enabled" in mem_patch:
                 existing_mem["enabled"] = bool(mem_patch["enabled"])
             if "max_memories" in mem_patch:
@@ -456,8 +445,8 @@ def update_persona(persona_id: str):
                     return jsonify({"error": "trigger_rounds 不能为负数"}), 400
                 existing_mem["trigger_rounds"] = trigger_rounds
             if "trigger_mode" in mem_patch:
-                if mem_patch["trigger_mode"] not in ("remind", "summarize"):
-                    return jsonify({"error": "trigger_mode 必须是 remind 或 summarize"}), 400
+                if mem_patch["trigger_mode"] not in ("remind", "summarize", "summarize_only"):
+                    return jsonify({"error": "trigger_mode 必须是 remind、summarize 或 summarize_only"}), 400
                 existing_mem["trigger_mode"] = mem_patch["trigger_mode"]
             cfg["memory"] = existing_mem
             # Auto-summarization newly became effective (enabled/trigger_rounds/
@@ -466,7 +455,7 @@ def update_persona(persona_id: str):
             # swallow the whole pre-existing history at once. Done after the
             # config is saved, best-effort: a failure must not fail the request.
             summarize_activated = (
-                not old_summarize and _summarize_effective(existing_mem)
+                not old_summarize and auto_summary_enabled(existing_mem)
             )
 
         if "proactive" in data:
@@ -500,11 +489,7 @@ def update_persona(persona_id: str):
         # returned 400, it would leave a "partially saved" inconsistent state.
         if "voice_generation" in data:
             vg_patch = data["voice_generation"] or {}
-            merged_vg = normalize_voice_generation(cfg.get("voice_generation"))
-            if isinstance(vg_patch, dict):
-                for key in ("enabled", "provider", "model", "voice", "speed"):
-                    if key in vg_patch:
-                        merged_vg[key] = vg_patch[key]
+            merged_vg = merge_voice_generation(cfg.get("voice_generation"), vg_patch)
             vg_err, vg_cfg = _validate_voice_generation(app, merged_vg)
             if vg_err:
                 return jsonify({"error": vg_err}), 400
@@ -779,6 +764,7 @@ def _persona_config_from_card_result(
             "mode": "all", "list": [], "max_iterations": 10, "timeout_seconds": 30,
         },
         "image_generation": image_generation,
+        "voice_generation": normalize_voice_generation(result.voice_generation),
         "bound_worldbooks": [],
     }
 

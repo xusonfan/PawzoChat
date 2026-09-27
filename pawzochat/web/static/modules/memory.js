@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -26,6 +26,8 @@ const _IMP_LABELS = ["", "1 - 不重要", "2 - 一般", "3 - 普通", "4 - 重�
 const _WEEKDAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 let _currentPersonaId = "";
+let _editingMemory = null;
+let _editRequest = 0;
 
 function _impBadge(val) {
   const v = Math.max(1, Math.min(5, val || 3));
@@ -79,6 +81,8 @@ function _syncMemoryTimePreview() {
 
 async function renderMemoryManage(data) {
   _currentPersonaId = data.personaId;
+  _editingMemory = null;
+  const request = ++_editRequest;
   setTopBar("记忆管理", true,
     `<button class="top-btn" onclick="PawzoChat.addMemory()">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -87,7 +91,8 @@ async function renderMemoryManage(data) {
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
 
   try {
-    const res = await api.get(`/api/personas/${data.personaId}/memories`);
+    const res = await api.get(`/api/personas/${data.personaId}/memories`, { bypassCache: true });
+    if (request !== _editRequest) return;
     const memories = res.memories || [];
 
     if (memories.length === 0) {
@@ -100,7 +105,7 @@ async function renderMemoryManage(data) {
     }
 
     const listHtml = memories.map(m =>
-      `<div class="mem-card" onclick="PawzoChat.editMemory(${m.index})">
+      `<div class="mem-card" onclick="PawzoChat.editMemory(${m.index},'${esc(m.fingerprint)}')">
         <div class="mem-header">
           ${_impBadge(m.importance)}
           <span class="mem-time">${esc(m.created_at || "")}</span>
@@ -117,23 +122,32 @@ async function renderMemoryManage(data) {
 }
 
 export function addMemory() {
+  ++_editRequest;
   _showMemorySheet(-1, "", 3, "");
 }
 
-export function editMemory(index) {
-  _loadAndShowEdit(index);
+export function editMemory(index, fingerprint) {
+  return _loadAndShowEdit(index, fingerprint);
 }
 
-async function _loadAndShowEdit(index) {
+async function _loadAndShowEdit(index, fingerprint) {
+  const personaId = _currentPersonaId;
+  const request = ++_editRequest;
   try {
-    const res = await api.get(`/api/personas/${_currentPersonaId}/memories`);
+    const res = await api.get(`/api/personas/${personaId}/memories`, { bypassCache: true });
+    if (request !== _editRequest || personaId !== _currentPersonaId) return;
     const mem = (res.memories || []).find(m => m.index === index);
-    if (!mem) { toast("记忆不存在", "error"); return; }
-    _showMemorySheet(index, mem.summary, mem.importance, mem.created_at);
+    if (!fingerprint || !mem || mem.fingerprint !== fingerprint) {
+      toast("记忆已变化，请从刷新后的列表重新打开", "error");
+      renderMemoryManage({ personaId });
+      return;
+    }
+    _showMemorySheet(index, mem.summary, mem.importance, mem.created_at, fingerprint);
   } catch (e) { toast("加载失败", "error"); }
 }
 
-function _showMemorySheet(index, summary, importance, createdAt) {
+function _showMemorySheet(index, summary, importance, createdAt, fingerprint = "") {
+  _editingMemory = { personaId: _currentPersonaId, index, fingerprint };
   const isNew = index < 0;
   const title = isNew ? "新增记忆" : "编辑记忆";
   const rawCreatedAt = String(createdAt || "");
@@ -181,6 +195,8 @@ function _showMemorySheet(index, summary, importance, createdAt) {
 }
 
 export async function saveMemory(index) {
+  const editing = _editingMemory;
+  if (!editing || editing.index !== index || editing.personaId !== _currentPersonaId) return;
   const summary = $("mem-edit-summary")?.value?.trim();
   if (!summary) { toast("记忆内容不能为空", "error"); return; }
   const importance = parseInt($("mem-edit-imp")?.value) || 3;
@@ -194,14 +210,15 @@ export async function saveMemory(index) {
   try {
     let res;
     if (isNew) {
-      res = await api.post(`/api/personas/${_currentPersonaId}/memories`, {
+      res = await api.post(`/api/personas/${editing.personaId}/memories`, {
         summary, importance, created_at: createdAt,
       });
     } else {
-      res = await api.put(`/api/personas/${_currentPersonaId}/memories/${index}`, {
-        summary, importance, created_at: createdAt,
+      res = await api.put(`/api/personas/${editing.personaId}/memories/${index}`, {
+        summary, importance, created_at: createdAt, fingerprint: editing.fingerprint,
       });
     }
+    if (_editingMemory !== editing) return;
     if (res.status >= 400) { toast(res.data?.error || "保存失败", "error"); return; }
     closeOverlay();
     toast("已保存", "success");
@@ -211,13 +228,20 @@ export async function saveMemory(index) {
 }
 
 export async function deleteMemoryConfirm(index) {
+  const editing = _editingMemory;
+  if (!editing || editing.index !== index || editing.personaId !== _currentPersonaId) return;
   closeOverlay();
   const ok = await confirm("删除记忆", "确认删除这条记忆？", true);
   if (!ok) return;
   showLoading("删除中…");
   try {
-    const res = await api.del(`/api/personas/${_currentPersonaId}/memories/${index}`);
-    if (res.status >= 400) { toast(res.data?.error || "删除失败", "error"); return; }
+    const res = await api.del(`/api/personas/${editing.personaId}/memories/${index}?fingerprint=${encodeURIComponent(editing.fingerprint)}`);
+    if (_editingMemory !== editing) return;
+    if (res.status >= 400) {
+      toast(res.data?.error || "删除失败", "error");
+      if (res.status === 409 || res.status === 400) renderMemoryManage({ personaId: editing.personaId });
+      return;
+    }
     toast("已删除", "success");
     renderMemoryManage({ personaId: _currentPersonaId });
   } catch (e) { toast("删除失败", "error"); }

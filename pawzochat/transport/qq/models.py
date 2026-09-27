@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -105,6 +105,8 @@ class QQInboundMessage:
     ref_msg_idx: str = ""
     msg_elements: list[dict] = field(default_factory=list)
     quote: str = ""
+    quote_text: str = ""
+    quote_media: list[dict] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
 
     @classmethod
@@ -130,7 +132,7 @@ class QQInboundMessage:
             msg_elements,
         )
         return cls(
-            msg_id=d.get("id", "") or "",
+            msg_id=str(d.get("id", "") or ""),
             openid=author.get("user_openid", "") or author.get("id", "") or "",
             content=d.get("content", "") or "",
             timestamp=d.get("timestamp", "") or "",
@@ -140,6 +142,8 @@ class QQInboundMessage:
             ref_msg_idx=ref_msg_idx,
             msg_elements=msg_elements,
             quote=_quote_from_elements(msg_elements) if ref_msg_idx else "",
+            quote_text=str(msg_elements[0].get("content") or "") if ref_msg_idx and msg_elements else "",
+            quote_media=_quote_media_from_elements(msg_elements) if ref_msg_idx else [],
             raw=d,
         )
 
@@ -207,6 +211,20 @@ def _parse_ref_indices(
                 ref_msg_idx = element_idx
                 break
     return msg_idx, ref_msg_idx
+
+
+def _quote_media_from_elements(msg_elements: list[dict]) -> list[dict]:
+    if not msg_elements:
+        return []
+    result = []
+    for raw in msg_elements[0].get("attachments", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        att = _parse_attachment(raw)
+        kind = "image" if att.is_image else "voice" if att.is_voice or att.content_type.startswith("audio/") else "file"
+        result.append({"type": kind, "name": att.filename, "mime": att.content_type,
+                       "text": att.asr_refer_text})
+    return result
 
 
 def _quote_from_elements(msg_elements: list[dict]) -> str:

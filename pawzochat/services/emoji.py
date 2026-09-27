@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -170,7 +170,7 @@ def _detect_emotion(persona, reply_text: str, emotions: list[str], llm_chat) -> 
             persona.llm_model,
             [{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=50,
+            max_tokens=2048,
         ).strip()
     except Exception:
         logger.debug("情绪检测 LLM 调用失败", exc_info=True)

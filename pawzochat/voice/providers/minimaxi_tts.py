@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -37,6 +37,7 @@ class MiniMaxTTSProvider(VoiceProvider):
     """MiniMax T2A native API provider (non-OpenAI format)."""
 
     provider_type = "minimaxi_tts"
+    control_family = "minimax"
 
     # MiniMax T2A uses /v1/t2a_v2; base_url should point to the root,
     # e.g. "https://api.minimaxi.com"
@@ -69,6 +70,8 @@ class MiniMaxTTSProvider(VoiceProvider):
         if not model:
             raise VoiceGenerationError(self.provider_type, "未指定模型")
 
+        if kwargs.get("stream"):
+            raise VoiceGenerationError(self.provider_type, "当前不支持流式语音合成")
         audio_format = kwargs.get("format", "mp3")
 
         body: dict[str, Any] = {
@@ -77,8 +80,8 @@ class MiniMaxTTSProvider(VoiceProvider):
             "voice_setting": {
                 "voice_id": voice or "male-qn-qingse",
                 "speed": max(0.5, min(2.0, speed)),
-                "vol": 1.0,
-                "pitch": 0,
+                "vol": kwargs.get("volume", 1.0),
+                "pitch": kwargs.get("pitch", 0),
             },
             "audio_setting": {
                 "sample_rate": kwargs.get("sample_rate", 32000),
@@ -94,11 +97,10 @@ class MiniMaxTTSProvider(VoiceProvider):
         # comforting or saying goodnight.
         emotion = kwargs.get("emotion")
         if emotion:
-            body["voice_setting"]["emotion"] = emotion
+            body["voice_setting"]["emotion"] = "calm" if emotion == "neutral" else emotion
 
-        stream = kwargs.get("stream", False)
-        if stream:
-            body["stream"] = True
+        if kwargs.get("language_boost"):
+            body["language_boost"] = kwargs["language_boost"]
 
         url = f"{self.base_url}{self._ENDPOINT}"
         headers = {

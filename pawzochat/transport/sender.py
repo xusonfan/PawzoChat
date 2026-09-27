@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Message sending with typing simulation and segmented delivery."""
+"""Prepared message delivery with typing simulation."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ import time
 
 from pawzochat.transport.client import ILinkClient
 from pawzochat.transport.models import TypingStatus
+from pawzochat.transport.lifecycle import ConnectionInactive
 
 logger = logging.getLogger(__name__)
 
@@ -36,27 +37,29 @@ class MessageSender:
 
     def __init__(self, client: ILinkClient, reply_config: dict | None = None):
         self.client = client
-        cfg = reply_config or {}
-        self.typing_delay_enabled: bool = cfg.get("typing_delay_enabled", True)
-        self.typing_speed: float = cfg.get("typing_speed", 0.2)
-        self.typing_speed_random_min: float = cfg.get("typing_speed_random_min", 0.05)
-        self.typing_speed_random_max: float = cfg.get("typing_speed_random_max", 0.1)
-        self.split_by_newline: bool = cfg.get("split_by_newline", True)
-        self.show_typing: bool = cfg.get("show_typing_indicator", True)
-
+        self._reply_config = dict(reply_config or {})
         self._typing_tickets: dict[str, str] = {}
 
-    def send_text(self, to_user_id: str, text: str, context_token: str) -> bool:
+    @staticmethod
+    def _record_receipt(callback, response):
+        if callback:
+            try:
+                callback(response)
+            except Exception:
+                logger.warning("发送成功，但引用回执记录失败", exc_info=True)
+
+    def send_text(self, to_user_id: str, text: str, context_token: str, *, on_sent=None) -> bool:
         """Send a simple text message (no typing simulation)."""
         msg = ILinkClient.build_text_message(to_user_id, text, context_token)
         try:
-            self.client.send_message(msg)
+            response = self.client.send_message(msg)
+            self._record_receipt(on_sent, response)
             return True
         except Exception:
             logger.exception("发送文本消息失败: to=%s", to_user_id)
             return False
 
-    def send_image(self, to_user_id: str, image_path: str, context_token: str) -> bool:
+    def send_image(self, to_user_id: str, image_path: str, context_token: str, *, on_sent=None) -> bool:
         """Upload an image to CDN and send it as a WeChat image message."""
         from pawzochat.transport.cdn import upload_image
 
@@ -64,9 +67,12 @@ class MessageSender:
             try:
                 cdn_info = upload_image(self.client, image_path, to_user_id)
                 msg = ILinkClient.build_image_message(to_user_id, cdn_info, context_token)
-                self.client.send_message(msg)
+                response = self.client.send_message(msg)
+                self._record_receipt(on_sent, response)
                 logger.info("图片发送成功: to=%s file=%s", to_user_id, image_path)
                 return True
+            except ConnectionInactive:
+                return False
             except Exception:
                 if attempt < SEND_IMAGE_MAX_RETRIES:
                     logger.warning(
@@ -87,6 +93,7 @@ class MessageSender:
         file_path: str,
         context_token: str,
         file_name: str = "",
+        *, on_sent=None,
     ) -> bool:
         """Upload a non-image file to CDN and send it as a WeChat file message."""
         from pawzochat.transport.cdn import upload_file
@@ -105,13 +112,16 @@ class MessageSender:
                     context_token,
                     file_name=file_name,
                 )
-                self.client.send_message(msg)
+                response = self.client.send_message(msg)
+                self._record_receipt(on_sent, response)
                 logger.info(
                     "文件发送成功: to=%s file=%s",
                     to_user_id,
                     file_name or file_path,
                 )
                 return True
+            except ConnectionInactive:
+                return False
             except Exception:
                 if attempt < SEND_FILE_MAX_RETRIES:
                     logger.warning(
@@ -126,40 +136,6 @@ class MessageSender:
                     )
         return False
 
-    def send_reply(
-        self,
-        to_user_id: str,
-        text: str,
-        context_token: str,
-        ilink_user_id: str = "",
-        *,
-        split_text: bool = True,
-    ):
-        """Send a reply with typing simulation and optional segmented delivery.
-
-        1. Split text by newlines (if configured)
-        2. For each segment: show typing → delay by char count → send text → cancel typing
-        """
-        if not text.strip():
-            return
-
-        segments = self._split_segments(text) if split_text else [text]
-
-        for i, segment in enumerate(segments):
-            segment = segment.strip()
-            if not segment:
-                continue
-
-            self.send_one_reply(
-                to_user_id,
-                segment,
-                context_token,
-                ilink_user_id,
-            )
-
-            if i < len(segments) - 1:
-                time.sleep(random.uniform(0.3, 0.8))
-
     def send_one_reply(
         self,
         to_user_id: str,
@@ -168,41 +144,41 @@ class MessageSender:
         ilink_user_id: str = "",
         *,
         is_first: bool = False,
+        reply_config: dict | None = None,
+        on_sent=None,
     ) -> bool:
         """Send one prepared text reply with typing simulation and no re-splitting."""
         if not text.strip():
             return False
 
-        if self.show_typing and ilink_user_id:
+        # Snapshot this send; an explicit empty config uses the global defaults.
+        cfg = dict(self._reply_config if reply_config is None else reply_config)
+        show_typing = cfg.get("show_typing_indicator", True)
+
+        if show_typing and ilink_user_id:
             self._send_typing(ilink_user_id, context_token, TypingStatus.TYPING)
 
-        if self.typing_delay_enabled and not is_first:
-            time.sleep(self._calculate_delay(text))
+        if cfg.get("typing_delay_enabled", True) and not is_first:
+            time.sleep(self.estimate_delay_from_config(text, cfg))
 
-        ok = self.send_text(to_user_id, text, context_token)
+        ok = self.send_text(to_user_id, text, context_token, on_sent=on_sent)
 
-        if self.show_typing and ilink_user_id:
+        if show_typing and ilink_user_id:
             self._send_typing(ilink_user_id, context_token, TypingStatus.CANCEL)
 
         return ok
 
-    def _split_segments(self, text: str) -> list[str]:
-        if not self.split_by_newline:
-            return [text]
-        segments = [s for s in text.split("\n") if s.strip()]
-        if not segments:
-            return [text]
-        return segments
-
-    def _calculate_delay(self, text: str) -> float:
-        return self.estimate_delay_from_config(
-            text,
-            {
-                "typing_speed": self.typing_speed,
-                "typing_speed_random_min": self.typing_speed_random_min,
-                "typing_speed_random_max": self.typing_speed_random_max,
-            },
-        )
+    @staticmethod
+    def estimate_message_delay(message: dict, reply_config: dict | None = None) -> float:
+        """Shared pacing for web and QQ message bubbles, including media."""
+        cfg = reply_config or {}
+        if not cfg.get("typing_delay_enabled", True):
+            return 0.0
+        content = message.get("content", []) or []
+        if any(block.get("type") in {"emoji", "image", "file", "voice"} for block in content):
+            return 0.6
+        text = "".join(block.get("text", "") for block in content if block.get("type") == "text")
+        return MessageSender.estimate_delay_from_config(text, cfg) if text.strip() else 0.0
 
     @staticmethod
     def estimate_delay_from_config(text: str, reply_config: dict | None = None) -> float:

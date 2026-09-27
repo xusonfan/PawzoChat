@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -39,7 +39,6 @@ from pawzochat.utils.message_text import (
     inject_quote_prefix,
 )
 from pawzochat.utils.text_splitter import (
-    VOICE_EMOTIONS,
     contains_voice_marker,
     parse_voice_reply,
     split_reply,
@@ -51,6 +50,7 @@ from pawzochat.transport.models import (
     normalize_voice_generation,
 )
 from pawzochat.voice.synthesis import synthesize_voice_clip
+from pawzochat.voice.settings import clean_fallback_text, voice_guidance
 
 if TYPE_CHECKING:
     from pawzochat.core.config import ConfigManager
@@ -148,6 +148,11 @@ class ChatService:
 
         tools = self._collect_tools(persona, capabilities)
         active_tool_names = {t.get("name", "") for t in (tools or [])}
+        memory_context = {
+            "fingerprints": {},
+            "blocked": False,
+            "cutoff_timestamp": history[-1].get("timestamp", "") if history else "",
+        }
 
         llm_messages = self._build_llm_messages(
             persona, persona_id, history, images, files, capabilities,
@@ -156,6 +161,7 @@ class ChatService:
             pending_images=pending_images,
             pending_files=pending_files,
             voice_settings=voice_settings,
+            memory_context=memory_context,
         )
         if self.extension_manager:
             context_event = ContextBuildEvent(
@@ -175,10 +181,10 @@ class ChatService:
             pending_images=pending_images,
             pending_files=pending_files,
             generated_images=generated_images,
+            memory_context=memory_context,
         )
 
-        # Increment round counter after the tool loop has run (tool handlers
-        # may have already called on_memory_recorded in this same round).
+        # Count the completed round after any tool writes were acknowledged.
         if self.memory_service:
             self.memory_service.on_round_complete(persona_id)
 
@@ -217,7 +223,8 @@ class ChatService:
                     continue
                 # Synthesis failed → fall through to the text degrade branch
                 # below (the helper already logged a warning).
-            for piece in split_reply(seg.raw, split_newline=do_split_newline):
+            fallback_text = clean_fallback_text(seg.raw) if seg.kind == "voice" else seg.raw
+            for piece in split_reply(fallback_text, split_newline=do_split_newline):
                 assistant_messages.append({
                     "role": "assistant",
                     "content": [{"type": "text", "text": piece}],
@@ -404,6 +411,7 @@ class ChatService:
         pending_images: dict[str, dict],
         pending_files: dict[str, dict],
         generated_images: list[dict],
+        memory_context: dict | None = None,
     ) -> LLMResponse | None:
         """Run the provider.chat / tool-call loop. Returns the terminal response.
 
@@ -470,6 +478,7 @@ class ChatService:
                         generated_images=generated_images,
                         pending_images=pending_images,
                         pending_files=pending_files,
+                        memory_context=memory_context,
                     )
                 except Exception as exc:
                     result_blocks = [ContentBlock(
@@ -529,6 +538,7 @@ class ChatService:
         worldbook_match_text: str | None = None,
         system_prompt_override: str | None = None,
         voice_settings: dict | None = None,
+        memory_context: dict | None = None,
     ) -> list[dict]:
         """Build the LLM message list from raw per-message history.
 
@@ -573,7 +583,9 @@ class ChatService:
                 llm_messages.append({"role": "system", "content": worldbook_text})
 
         if self.memory_service:
-            memory_text = self.memory_service.format_memories_for_prompt(persona_id)
+            memory_text = self.memory_service.format_memories_for_prompt(
+                persona_id, tool_context=memory_context,
+            )
             if memory_text:
                 llm_messages.append({"role": "system", "content": memory_text})
 
@@ -590,7 +602,7 @@ class ChatService:
         if voice_settings is not None:
             llm_messages.append({
                 "role": "system",
-                "content": self._build_voice_reply_guidance(),
+                "content": self._build_voice_reply_guidance(voice_settings),
             })
 
         if active_tool_names:
@@ -628,7 +640,11 @@ class ChatService:
                 text = f"{text}\n{voice_hints}" if text else voice_hints
             # Inject the quote marker after the media/file fallbacks so an
             # image-only quoted message keeps its [图片] placeholder for the LLM.
-            text = inject_quote_prefix(text, msg.get("quote", ""))
+            quote = msg.get("quote", "")
+            quoted_voices = self._voice_hints_from_blocks(msg.get("quote_media", []))
+            if quoted_voices and quoted_voices not in quote:
+                quote = f"{quote}\n{quoted_voices}"
+            text = inject_quote_prefix(text, quote)
             if not text:
                 continue
 
@@ -1030,34 +1046,42 @@ class ChatService:
                 "- [历史记忆]中每条记忆标注的『记忆 #N』就是它的编号。当某条记忆过时、"
                 "不准确或有了新进展时，调用 update_memory 并把 index 设为该编号来覆盖它；"
                 "新内容要包含旧记忆中仍然有效的信息，而不是只写新增部分。编号请原样照抄。"
+                "同一件事的新进展优先更新，不要另建相近记忆。"
+                "若工具提示记忆已变化或本轮写入停止，不要改用新增或重试，正常回复即可。"
             )
         lines.append("- 记录/更新记忆后正常回复用户即可，不要向用户提及你在操作记忆。")
         return "\n".join(lines)
 
-    @staticmethod
-    def _build_voice_reply_guidance() -> str:
+    def _build_voice_reply_guidance(self, settings: dict | None = None) -> str:
         """System guidance injected when the persona's voice reply is usable."""
-        emotions = "/".join(VOICE_EMOTIONS)
-        return (
-            "[语音消息规则]\n"
-            "- 你可以直接在回复文字里用标记发语音条：写 [语音]要说的话，"
-            "例如：[语音]今天也想你了。也可以写成 [voice]今天也想你了。\n"
-            "- 语音内容从标记处一直延伸到下一个语音标记或本轮回复结尾。"
-            "所以普通文字必须写在语音标记之前；标记之后的内容都会被合成进这条语音。\n"
-            "- 需要连发多条语音时，写多个标记：[语音]第一条[语音]第二条。\n"
-            f"- 可以为单条语音指定情绪基调：[语音-happy]内容。可选值仅限 {emotions}；"
-            "不确定时省略，直接写 [语音] 即可。\n"
-            "- 语音内容必须口语化、自然简短（建议单条不超过 60 个字），"
-            "不要包含动作/心理描写、颜文字或 emoji。语音内容里可以继续用反斜线(\\)"
-            "分隔短语，它们会变成语音里的自然停顿，不计入普通消息的句数限制。\n"
-            "- 聊天记录里的 [语音] 内容表示该段话是通过语音说出的；"
-            "你要发语音时也使用 [语音] 或 [voice] 标记。\n"
-            "- 根据当前对话的上下文、情绪和意境自行判断是否使用语音，不必等待用户主动要求。\n"
-            "- 如果用户明确表示想听语音、喜欢语音交流或要求后续使用语音，"
-            "则在接下来的对话中积极使用语音，直到上下文表明不再需要；"
-            "同时保持表达自然，避免无意义地连续发送。\n"
-            "- 不要在普通文字里复述语音的内容，也不要向用户解释你发的是语音。"
+        settings = normalize_voice_generation(settings)
+        family, voice = "openai", settings["voice"]
+        if self.voice_manager:
+            family = self.voice_manager.get_control_family(settings["provider"], settings["model"])
+            voice = voice or self.voice_manager.get_model_voice(settings["provider"], settings["model"])
+        controls = voice_guidance(settings, family, voice)
+        base = (
+            "[语音消息规则]\n\n"
+            "【何时使用语音】\n"
+            "你可以根据角色性格、当前对话的上下文、情绪和意境，自然选择用文字或语音回复，不必等待用户主动要求。\n"
+            "如果用户明确表示想听语音、喜欢语音交流或希望后续使用语音，可以在接下来的对话中积极使用，"
+            "直到用户的意愿或对话场景发生变化。保持表达自然，不要为了使用语音而重复内容或连续发送没有必要的语音。\n\n"
+            "【语音格式与内容】\n"
+            "使用 [语音]内容 发送一条语音，例如：[语音]今天也想你了。\n"
+            "[voice] 是同义写法，日常回复统一使用 [语音] 即可。\n\n"
+            "一条语音从它的标记之后开始，到下一个语音标记或本轮回复结尾结束。"
+            "标记本身不朗读，标记后面的内容会进入语音合成。\n"
+            "如果同一轮需要同时发送普通文字和语音，必须先写普通文字，再写语音；"
+            "语音开始后，不能通过换行、空行或反斜线切回普通文字。\n"
+            "需要发送多条语音时，分别添加标记，例如：[语音]我刚到家。[语音]你今天过得怎么样？\n\n"
+            "语音内容应当像角色真正说出口的话，口语化、自然简短，建议单条不超过 60 个字。"
+            "不要夹带动作描写、心理旁白、颜文字或 emoji，也不要把给语音合成器的说明写成正文。\n"
+            "语音段中的反斜线 \\ 可以分隔短语，程序会将其转换为逗号，由语音模型自然处理节奏；"
+            "它不会生成另一条语音，也不代表固定时长的停顿。语音段不计入普通文字消息的句数限制。\n\n"
+            "聊天记录中的 [语音] 内容表示对方或你曾通过语音说出这段话。\n"
+            "不要再用普通文字重复本轮语音已经表达的内容，也不要向用户解释语音标记、合成过程或这些规则。"
         )
+        return "\n\n".join(part for part in (base, controls) if part)
 
     def _filter_image_generation(
         self, tools: list[dict], persona,
@@ -1145,7 +1169,7 @@ class ChatService:
         self, tools: list[dict], persona,
     ) -> list[dict]:
         """Hide ``record_memory`` / ``update_memory`` unless the persona has
-        memory enabled.
+        memory enabled and permits AI memory writes.
 
         Reads ``persona.memory`` directly (mirroring
         :meth:`_filter_image_generation`) instead of
@@ -1159,7 +1183,11 @@ class ChatService:
         """
         mem = getattr(persona, "memory", None)
         enabled = isinstance(mem, dict) and bool(mem.get("enabled"))
-        if not enabled or self.memory_service is None:
+        if (
+            not enabled
+            or self.memory_service is None
+            or mem.get("trigger_mode") == "summarize_only"
+        ):
             return [
                 t for t in tools
                 if t.get("name") not in ("record_memory", "update_memory")
@@ -1178,6 +1206,7 @@ class ChatService:
         generated_images: list[dict] | None = None,
         pending_images: dict[str, dict] | None = None,
         pending_files: dict[str, dict] | None = None,
+        memory_context: dict | None = None,
     ) -> list[ContentBlock]:
         if self.capability_registry and self.capability_registry.is_capability_tool(tc.name):
             return self.capability_registry.execute(
@@ -1187,6 +1216,7 @@ class ChatService:
                     "pending_files": pending_files if pending_files is not None else {},
                     "persona": persona,
                     "persona_id": persona_id,
+                    "memory_context": memory_context,
                     "generated_images": generated_images if generated_images is not None else [],
                 },
                 timeout=timeout,

@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -64,6 +64,7 @@ DEFAULTS: dict = {
         "queue_wait_seconds": 7,
     },
     "reply": {
+        "typing_delay_enabled": True,
         "typing_speed": 0.2,
         "typing_speed_random_min": 0.05,
         "typing_speed_random_max": 0.1,
@@ -374,7 +375,7 @@ class ConfigManager:
                 "include_in_prompt": bool(mem_raw.get("include_in_prompt", True)),
                 "trigger_rounds": int(mem_raw.get("trigger_rounds", 10)),
                 "trigger_mode": trigger_mode
-                if trigger_mode in ("remind", "summarize") else "remind",
+                if trigger_mode in ("remind", "summarize", "summarize_only") else "remind",
             }
 
             pro_raw = pdata.get("proactive", {})

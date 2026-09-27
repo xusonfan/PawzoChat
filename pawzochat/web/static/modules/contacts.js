@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,6 +25,8 @@ import {
   isDesktop, setSidebarBar, refreshSidebar,
 } from "./navigation.js";
 import { fetchWorldbookSummary, openWorldbookPicker } from "./worldbook.js";
+
+import { initPersonaVoiceControls, refreshPersonaVoiceControls, collectPersonaVoiceSettings } from "./voice_controls.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -315,7 +317,13 @@ async function renderPersonaDetail(data) {
   setTopBar("角色详情", true, topBtns);
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
   try {
-    const p = await api.get(`/api/personas/${data.personaId}`);
+    const [p, voiceInfo] = await Promise.all([
+      api.get(`/api/personas/${data.personaId}`),
+      api.get("/api/voice-providers").catch(() => ({providers: []})),
+    ]);
+    const voiceProvider = voiceInfo.providers?.find(pr => pr.name === p.voice_generation?.provider);
+    const voiceControls = voiceProvider?.models?.find(m => m.id === p.voice_generation?.model)?.tts_controls;
+
     const prov = p.llm_provider || "未配置";
     const model = p.llm_model || "未选择";
 
@@ -391,7 +399,7 @@ async function renderPersonaDetail(data) {
         <div class="card-row"><span class="row-label">状态</span><span class="row-value">${vg.enabled ? '已开启' : '已关闭'}</span></div>
         <div class="card-row"><span class="row-label">服务商</span><span class="row-value" style="${truncStyle(vg.provider, 0)}">${esc(vg.provider || "未配置")}</span></div>
         <div class="card-row"><span class="row-label">模型</span><span class="row-value" style="${truncStyle(vg.model, 0)}">${esc(vg.model || "未选择")}</span></div>
-        <div class="card-row"><span class="row-label">语速</span><span class="row-value">${vg.speed ?? 1.0}x</span></div>
+        <div class="card-row"><span class="row-label">语速</span><span class="row-value">${voiceControls?.family === "mimo" ? esc(voiceControls.rates?.[vg.mimo?.speaking_rate || "auto"] || "自动") : `${vg.speed ?? 1.0}x`}</span></div>
         <div class="card-row"><span class="row-label">音色</span><span class="row-value" style="${truncStyle(vg.voice, 0)}">${esc(vg.voice || "模型默认")}</span></div>
       </div>`;
       })()}
@@ -447,6 +455,7 @@ async function renderPersonaEdit(data) {
   let imageProviders = [];
   let voiceProviders = [];
   let voicePresetVoices = {};
+  let voiceDefaults = {};
   try {
     const [provRes, emojiRes, imgRes, voiceRes] = await Promise.all([
       api.get("/api/providers"),
@@ -459,6 +468,7 @@ async function renderPersonaEdit(data) {
     imageProviders = (imgRes.providers || []).filter(pr => pr.api_key_set && (pr.models || []).length > 0);
     voiceProviders = (voiceRes.providers || []).filter(pr => pr.api_key_set && (pr.models || []).length > 0);
     voicePresetVoices = voiceRes.preset_voices || {};
+    voiceDefaults = voiceRes.voice_defaults || {};
   } catch (e) { /* silent */ }
 
   // Defaults for a brand-new persona. Keep proactive defaults in sync with
@@ -630,26 +640,25 @@ async function renderPersonaEdit(data) {
       <div class="form-group"><div class="form-row"><label>启用记忆</label>
         <label class="switch-wrap"><input type="checkbox" id="pe-mem-en" ${p.memory?.enabled !== false ? "checked" : ""}><span class="switch-track"></span></label>
       </div></div>
-      <div class="form-hint">开启后 AI 会在对话中自主记录和更新记忆（需模型支持工具调用），也可在下方手动管理</div>
+      <div class="form-hint">开启后按所选触发方式记录对话记忆；AI 自主记录需模型支持并允许使用记忆工具，按轮数总结无需工具调用。已有记忆也可在下方手动管理</div>
       <div class="form-group"><div class="form-row"><label>最大记忆条数</label>
         <div class="stepper"><button onclick="PawzoChat.step('pe-mem-max',-1)">−</button><span class="stepper-val" id="pe-mem-max">${p.memory?.max_memories || 50}</span><button onclick="PawzoChat.step('pe-mem-max',1)">+</button></div>
       </div></div>
       <div class="form-group"><div class="form-row"><label>包含在提示词</label>
         <label class="switch-wrap"><input type="checkbox" id="pe-mem-inc" ${p.memory?.include_in_prompt !== false ? "checked" : ""}><span class="switch-track"></span></label>
       </div></div>
-      <div class="form-hint">开启后将所有记忆注入 LLM 上下文；关闭后 AI 看不到已有记忆，也无法更新它们</div>
+      <div class="form-hint">开启后 AI 可读取已有记忆；能否自主新增或更新由触发方式及记忆工具是否可用决定。关闭后 AI 看不到已有记忆，也无法自主更新它们</div>
       <div class="form-group"><div class="form-row"><label>触发方式</label>
         <select id="pe-mem-trigger-mode" onchange="PawzoChat.onPeMemTriggerModeChange()">
-          <option value="remind" ${(p.memory?.trigger_mode || "remind") !== "summarize" ? "selected" : ""}>提醒 AI 记录（默认）</option>
-          <option value="summarize" ${p.memory?.trigger_mode === "summarize" ? "selected" : ""}>自动总结对话</option>
+          <option value="remind" ${!["summarize", "summarize_only"].includes(p.memory?.trigger_mode) ? "selected" : ""}>AI 自主记录＋定期提醒（默认）</option>
+          <option value="summarize" ${p.memory?.trigger_mode === "summarize" ? "selected" : ""}>AI 自主记录＋按轮数总结</option>
+          <option value="summarize_only" ${p.memory?.trigger_mode === "summarize_only" ? "selected" : ""}>仅按轮数总结</option>
         </select>
       </div></div>
       <div class="form-group"><div class="form-row"><label>触发轮数</label>
         <div class="stepper"><button onclick="PawzoChat.step('pe-mem-trigger',-1,0)">−</button><span class="stepper-val" id="pe-mem-trigger">${p.memory?.trigger_rounds || 0}</span><button onclick="PawzoChat.step('pe-mem-trigger',1,0)">+</button></div>
       </div></div>
-      <div class="form-hint" id="pe-mem-trigger-hint">${(p.memory?.trigger_mode || "remind") === "summarize"
-        ? "每积累 N 轮未总结的对话，自动调用一次 LLM 将其总结为一条记忆；设为 0 禁用自动总结（AI 仍可通过工具主动记录，主动记录后计数顺延）"
-        : "设置 N > 0 时，AI 每 N 轮对话未记录记忆则收到一次提醒；设为 0 禁用提醒"}</div>
+      <div class="form-hint" id="pe-mem-trigger-hint">${_memoryTriggerHint(p.memory?.trigger_mode)}</div>
       ${!isNew && p.id ? `<div style="padding:8px 16px 12px">
         <button class="btn-outline" onclick="PawzoChat.pushPage('memoryManage',{personaId:'${p.id}'})" style="width:100%">管理记忆 (${p.memory_count || 0} 条)</button>
       </div>` : ''}
@@ -659,21 +668,19 @@ async function renderPersonaEdit(data) {
       const qh = pro.quiet_hours || {};
       const ch = p.linked_channel || "";
       const isGroup = p.wechat_chat_type === "group";
-      // QQ is passive-reply only — proactive sends are never delivered, so the
-      // card is disabled the same way the WeChat-group case is.
-      const proDisabled = isGroup || ch === "qq";
+      const proDisabled = isGroup;
       const dis = proDisabled ? "disabled" : "";
       const cardStyle = proDisabled ? 'style="opacity:0.55"' : '';
       const disabledHint = isGroup
         ? '<div class="form-hint" style="color:var(--danger,#d33)">openclaw 不支持群聊主动消息，已禁用</div>'
-        : (ch === "qq"
-          ? '<div class="form-hint" style="color:var(--danger,#d33)">QQ 通道仅支持被动回复，主动消息不可用</div>'
-          : '');
+        : '';
       const limitNote = ch === "wechat" ? `<div class="form-hint" style="background:var(--primary-light);color:var(--text-2);padding:10px 12px;margin:0 16px 4px;border-radius:8px;line-height:1.6">
         <div style="color:var(--primary);font-weight:500;margin-bottom:2px">微信通道限制</div>
         · 只能在用户最近一次消息 <b>24 小时内</b> 回复，超时后该角色的主动消息会被跳过<br>
         · 用户每次发消息后，微信最多接受机器人 <b>10 条</b> 连续回复；配额用完后主动消息会自动跳过，等用户再次发言后恢复
-      </div>` : '';
+      </div>` : (ch === "qq"
+        ? '<div class="form-hint">受 QQ 平台频控和接收设置影响，暂不可发送时会自动暂停。</div>'
+        : '');
       return `<div class="card" ${cardStyle}>
       <div class="card-header">主动消息</div>
       ${disabledHint}
@@ -807,7 +814,6 @@ async function renderPersonaEdit(data) {
       const voiceOpts = voiceOptionsHtml(
         voiceCatalogFor(voicePresetVoices, currentModel, currentProv?.models),
       );
-      const speed = vg.speed ?? 1.0;
       return `
     <div class="form-hint" style="background:var(--primary-light);color:var(--text-2);padding:10px 12px;margin:8px 16px 12px;border-radius:8px;line-height:1.6">
       开启后该角色可以在合适的对话场景下（如"发个语音听听"、道晚安）在回复中用 [语音] 标记把想说的话合成为语音条发送。
@@ -825,14 +831,12 @@ async function renderPersonaEdit(data) {
       <div class="form-group"><div class="form-row"><label>模型</label>
         <select id="pe-voice-model" onchange="PawzoChat.onPersonaVoiceModelChange()" ${fieldDisabled}>${modelOpts}</select>
       </div></div>
-      <div class="form-group"><div class="form-row"><label>语速</label>
-        <div class="slider-wrap"><input type="range" id="pe-voice-speed" min="0.5" max="2" step="0.1" value="${speed}" ${fieldDisabled} oninput="this.nextElementSibling.textContent=this.value+'x'"><span class="slider-val">${speed}x</span></div>
-      </div></div>
       <div class="form-group"><div class="form-row"><label style="padding-right:12px">音色 (voice ID)</label>
         <input id="pe-voice-voice" list="pe-voice-list" value="${esc(vg.voice || "")}" placeholder="留空则使用模型默认音色" spellcheck="false" autocomplete="off" ${fieldDisabled} style="flex:1;border:1px solid var(--divider);border-radius:8px;padding:10px 12px;font-size:14px;font-family:var(--font);outline:none;background:var(--bg);color:var(--text-1);text-align:right">
       </div></div>
       <datalist id="pe-voice-list">${voiceOpts}</datalist>
-      <div class="form-hint">音色 ID 可自由输入；预设列表随所选模型的音色体系（MiniMax / OpenAI）变化。可先到「设置 → 语音服务商 → 语音测试」试听。</div>
+      <div class="form-hint">音色 ID 可自由输入；预设列表随所选模型的音色体系变化。试听请前往「设置 → 语音服务商 → 语音测试」。</div>
+      <div id="pe-voice-controls"></div>
     </div>`;
     })()}
     </div>
@@ -860,6 +864,7 @@ async function renderPersonaEdit(data) {
     </div>
   </div>`;
 
+  initPersonaVoiceControls(p.voice_generation, voiceProviders, voiceDefaults);
   _renderPeWorldbook();
 
   if (isNew) {
@@ -982,10 +987,12 @@ export function onPersonaVoiceProviderChange() {
     modelSel.innerHTML = window._peBuildVoiceModelOptions(provName, "");
   }
   _refreshPeVoiceDatalist();
+  refreshPersonaVoiceControls();
 }
 
 export function onPersonaVoiceModelChange() {
   _refreshPeVoiceDatalist();
+  refreshPersonaVoiceControls();
 }
 
 export function switchPersonaEditTab(name) {
@@ -1069,13 +1076,7 @@ export async function savePersona(isNew) {
   }
 
   if ($("pe-voice-en")) {
-    body.voice_generation = {
-      enabled: $("pe-voice-en").checked,
-      provider: $("pe-voice-provider")?.value || "",
-      model: $("pe-voice-model")?.value || "",
-      voice: $("pe-voice-voice")?.value.trim() || "",
-      speed: parseFloat($("pe-voice-speed")?.value) || 1.0,
-    };
+    body.voice_generation = collectPersonaVoiceSettings();
   }
 
   showLoading("保存中…");
@@ -1272,13 +1273,21 @@ export function onPeImgRefModeChange() {
 
 /* ---- Memory trigger-mode controls ---- */
 
+function _memoryTriggerHint(mode) {
+  if (mode === "summarize_only") {
+    return "每累计 N 轮未总结的对话，系统自动总结为一条记忆。AI 不会自主新增或更新记忆。设为 0 关闭聊天记忆的自动写入。朋友圈记忆写入和超限合并仍按各自规则执行";
+  }
+  if (mode === "summarize") {
+    return "AI 可自主新增或更新记忆；每累计 N 轮未总结的对话，系统自动总结为一条记忆。AI 新增或更新记忆后重新计数。设为 0 仅关闭自动总结，仍允许 AI 自主记录";
+  }
+  return "AI 自主决定何时新增或更新记忆。连续 N 轮未记录或更新时提醒一次，提醒后重新计数；是否记录由 AI 决定。设为 0 仅关闭提醒，仍允许 AI 自主记录";
+}
+
 export function onPeMemTriggerModeChange() {
   const sel = $("pe-mem-trigger-mode");
   const hint = $("pe-mem-trigger-hint");
   if (!sel || !hint) return;
-  hint.textContent = sel.value === "summarize"
-    ? "每积累 N 轮未总结的对话，自动调用一次 LLM 将其总结为一条记忆；设为 0 禁用自动总结（AI 仍可通过工具主动记录，主动记录后计数顺延）"
-    : "设置 N > 0 时，AI 每 N 轮对话未记录记忆则收到一次提醒；设为 0 禁用提醒";
+  hint.textContent = _memoryTriggerHint(sel.value);
 }
 
 export async function onPeImgRefFileSelected(input) {

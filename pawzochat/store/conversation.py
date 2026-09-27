@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -19,7 +19,10 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
 import hashlib
+import uuid
 import logging
 import os
 import tempfile
@@ -30,6 +33,10 @@ from pathlib import Path
 from pawzochat.paths import CHATS_DIR
 
 logger = logging.getLogger(__name__)
+
+
+class StaleMessageCursor(ValueError):
+    """The conversation changed structurally since this cursor was issued."""
 
 
 def _now_iso() -> str:
@@ -79,11 +86,14 @@ class ConversationStore:
     """
 
     def __init__(self, data_dir: str | Path = CHATS_DIR):
+        from pawzochat.store.quotes import QuoteStore
+        self.quotes = QuoteStore(chats_dir=data_dir)
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
         self._cache: dict[str, dict] = {}
+        self._page_versions: dict[str, str] = {}
         # {account_id: persona_id} — inbound routing index, built once at
         # startup. {account_id: channel} tracks which channel owns each link
         # so routing/UI can branch without re-reading files.
@@ -248,10 +258,21 @@ class ConversationStore:
         summaries.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
         return summaries
 
+    def _view_message(self, persona_id, message):
+        if not message.get("quote_media"):
+            return message
+        result = dict(message)
+        result["quote_media"] = self.quotes.available_media(persona_id, message["quote_media"])
+        if any(m.get("expired") for m in result["quote_media"]):
+            if "[引用附件已失效]" not in result.get("quote", ""):
+                result["quote"] = result.get("quote", "") + "\n[引用附件已失效]"
+        return result
+
     def get_conversation(self, persona_id: str) -> dict | None:
         lock = self._get_lock(persona_id)
         with lock:
-            return self._read_file(persona_id)
+            data = self._read_file(persona_id)
+            return {**data, "messages": [self._view_message(persona_id, m) for m in data.get("messages", [])]} if data else None
 
     def create_conversation(self, persona_id: str) -> dict:
         lock = self._get_lock(persona_id)
@@ -302,8 +323,10 @@ class ConversationStore:
                 aid = link["account_id"]
                 self._link_map.pop(aid, None)
                 self._link_channel.pop(aid, None)
+            self.quotes.purge(persona=persona_id, local_ids=[m.get("local_id") for m in (data or {}).get("messages", [])])
             fp.unlink()
             self._cache.pop(persona_id, None)
+            self._page_versions.pop(persona_id, None)
             return True
 
     def add_message(
@@ -315,6 +338,9 @@ class ConversationStore:
         *,
         timestamp: str | None = None,
         quote: str = "",
+        local_id: str = "",
+        quote_ref: dict | None = None,
+        quote_media: list | None = None,
     ) -> dict:
         lock = self._get_lock(persona_id)
         with lock:
@@ -322,6 +348,7 @@ class ConversationStore:
             if data is None:
                 raise ValueError(f"Conversation not found: {persona_id}")
             msg = {
+                "local_id": local_id or uuid.uuid4().hex,
                 "role": role,
                 "content": content,
                 "source": source,
@@ -329,10 +356,79 @@ class ConversationStore:
             }
             if quote:
                 msg["quote"] = quote
+            if quote_ref:
+                msg["quote_ref"] = quote_ref
+            if quote_media:
+                msg["quote_media"] = quote_media
             data["messages"].append(msg)
             data["updated_at"] = msg["timestamp"]
             self._write_file(persona_id, data)
             return msg
+
+    def get_message_page(
+        self, persona_id: str, *, limit: int = 60,
+        before: str | None = None, after: str | None = None,
+    ) -> dict | None:
+        """Read a bounded slice, without scanning or decorating the full history.
+
+        Cursors address gaps in the append-only array. Structural edits rotate
+        the in-memory version; process restarts also invalidate old cursors.
+        """
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if before is not None and after is not None:
+            raise ValueError("before and after are mutually exclusive")
+        with self._get_lock(persona_id):
+            data = self._read_file(persona_id)
+            if data is None:
+                return None
+            version = self._page_versions.get(persona_id)
+            if version is None:
+                version = self._page_versions[persona_id] = uuid.uuid4().hex
+            messages = data.get("messages", [])
+            position = len(messages)
+            token = before if before is not None else after
+            if token is not None:
+                try:
+                    if not isinstance(token, str) or not token or len(token) > 2048:
+                        raise ValueError()
+                    raw = base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True)
+                    cursor = json.loads(raw)
+                    if (not isinstance(cursor, list) or len(cursor) != 3
+                            or cursor[0] != persona_id or not isinstance(cursor[1], str)
+                            or type(cursor[2]) is not int or cursor[2] < 0):
+                        raise ValueError()
+                except (ValueError, TypeError, UnicodeError, binascii.Error) as exc:
+                    raise ValueError("Invalid message cursor") from exc
+                if cursor[1] != version:
+                    raise StaleMessageCursor("History changed; reload messages")
+                position = cursor[2]
+                if position > len(messages):
+                    raise ValueError("Invalid message cursor position")
+
+            if after is not None:
+                start, end = position, min(len(messages), position + limit)
+                has_more = end < len(messages)
+            else:
+                start, end = max(0, position - limit), position
+                has_more = start > 0
+
+            def encode(boundary: int) -> str:
+                raw = json.dumps([persona_id, version, boundary], separators=(",", ":")).encode()
+                return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+            return {
+                "persona_id": persona_id,
+                "messages": [
+                    {**self._view_message(persona_id, message),
+                     "_page_key": message.get("local_id") or f"{version}:{index}",
+                     "_position": index}
+                    for index, message in enumerate(messages[start:end], start)
+                ],
+                "before_cursor": encode(start),
+                "after_cursor": encode(end),
+                "has_more": has_more,
+            }
 
     def get_messages(
         self,
@@ -352,7 +448,7 @@ class ConversationStore:
             data = self._read_file(persona_id)
             if data is None:
                 return [], False
-            messages = data.get("messages", [])
+            messages = [self._view_message(persona_id, m) for m in data.get("messages", [])]
             starts = _round_start_indices(messages)
             if len(starts) <= rounds:
                 return list(messages), False
@@ -366,7 +462,7 @@ class ConversationStore:
             data = self._read_file(persona_id)
             if data is None:
                 return []
-            messages = data.get("messages", [])
+            messages = [self._view_message(persona_id, m) for m in data.get("messages", [])]
             starts = _round_start_indices(messages)
             if len(starts) <= count:
                 return list(messages)
@@ -379,7 +475,9 @@ class ConversationStore:
             data = self._read_file(persona_id)
             if data is None:
                 return False
+            self.quotes.purge(persona=persona_id, local_ids=[m.get("local_id") for m in (data or {}).get("messages", [])])
             data["messages"] = []
+            self._page_versions[persona_id] = uuid.uuid4().hex
             data["updated_at"] = _now_iso()
             self._write_file(persona_id, data)
             return True
@@ -450,7 +548,10 @@ class ConversationStore:
                 return "not_editable"
 
             messages[index]["content"] = new_content
+            self._page_versions[persona_id] = uuid.uuid4().hex
             if quote is not None:
+                messages[index].pop("quote_ref", None)
+                messages[index].pop("quote_media", None)
                 if quote:
                     messages[index]["quote"] = quote
                 else:
@@ -479,7 +580,10 @@ class ConversationStore:
             )
             if status != "ok":
                 return status
-            messages.pop(index)
+            removed = messages.pop(index)
+            self._page_versions[persona_id] = uuid.uuid4().hex
+            if removed.get("local_id"):
+                self.quotes.purge(persona=persona_id, local_id=removed["local_id"])
             data["updated_at"] = _now_iso()
             self._write_file(persona_id, data)
             return "ok"
@@ -522,7 +626,7 @@ class ConversationStore:
             result = []
             for i, m in enumerate(data.get("messages", [])):
                 if self._date_from_ts(m.get("timestamp", "")) == date_str:
-                    result.append({"index": i, **m, "fingerprint": _message_fingerprint(m)})
+                    result.append({"index": i, **self._view_message(persona_id, m), "fingerprint": _message_fingerprint(m)})
             return result
 
     # ---- Channel link management ----

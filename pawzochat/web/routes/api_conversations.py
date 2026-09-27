@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -24,6 +24,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from pawzochat.paths import CHATS_DIR, EMOJI_DIR
+from pawzochat.store.conversation import StaleMessageCursor
 from pawzochat.web.routes import get_app
 from pawzochat.web.sse import broadcast
 
@@ -113,6 +114,21 @@ def get_message_dates(persona_id: str):
 @api_conversations_bp.route("/<persona_id>/messages", methods=["GET"])
 def get_messages(persona_id: str):
     app = get_app()
+    if any(key in request.args for key in ("limit", "before", "after")):
+        if "date" in request.args or "rounds" in request.args:
+            return jsonify({"error": "Pagination cannot be combined with date or rounds"}), 400
+        try:
+            page = app.conversation_store.get_message_page(
+                persona_id, limit=int(request.args.get("limit", "60")),
+                before=request.args.get("before"), after=request.args.get("after"),
+            )
+        except StaleMessageCursor as exc:
+            return jsonify({"error": str(exc), "code": "stale_cursor"}), 409
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if page is None:
+            return jsonify({"error": "Conversation not found"}), 404
+        return jsonify(page)
     conv = app.conversation_store.get_conversation(persona_id)
     if conv is None:
         return jsonify({"error": "Conversation not found"}), 404
@@ -402,3 +418,22 @@ def get_wechat_links():
             "channel": app.conversation_store.get_link_channel(account_id),
         })
     return jsonify({"links": links})
+
+
+@api_conversations_bp.route("/<persona_id>/quote-media/<local_id>/<int:media_index>", methods=["GET"])
+def get_quote_media(persona_id, local_id, media_index):
+    """Resolve only persisted, owner-checked quote metadata, never caller paths."""
+    from flask import send_file
+    app = get_app()
+    data = app.conversation_store.get_conversation(persona_id)
+    message = next((m for m in (data or {}).get("messages", []) if m.get("local_id") == local_id), None)
+    media = app.conversation_store.quotes.available_media(persona_id, (message or {}).get("quote_media"))
+    if media_index >= len(media) or media[media_index].get("expired"):
+        return jsonify({"error": "引用附件已失效"}), 404
+    item = media[media_index]
+    try:
+        return send_file(item["path"], mimetype=item.get("mime"), conditional=True,
+                         as_attachment=item.get("mime") not in {"image/png", "image/jpeg", "image/gif", "image/webp", "audio/wav", "audio/mpeg", "audio/ogg"},
+                         download_name=item.get("name") or Path(item["path"]).name)
+    except OSError:
+        return jsonify({"error": "引用附件已失效"}), 404

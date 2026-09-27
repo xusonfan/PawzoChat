@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -53,6 +53,9 @@ class OpenAITTSProvider(VoiceProvider):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
 
+    def _metadata(self, voice, speed, kwargs):
+        return {}
+
     def synthesize(
         self,
         text: str,
@@ -83,12 +86,10 @@ class OpenAITTSProvider(VoiceProvider):
         if audio_format != "mp3":
             body["response_format"] = audio_format
 
-        # MiniMax-style relays (e.g. PaWAPI) accept emotion through the
-        # metadata extension of the OpenAI-compatible body (verified live:
-        # the field changes the rendition; invalid values return HTTP 400).
-        emotion = kwargs.get("emotion", "")
-        if emotion:
-            body["metadata"] = {"voice_setting": {"emotion": emotion}}
+        # PawAPI overrides this hook with its MiniMax-specific metadata.
+        metadata = self._metadata(body["voice"], body["speed"], kwargs)
+        if metadata:
+            body["metadata"] = metadata
 
         url = f"{self.base_url}{self._ENDPOINT}"
         headers = {
@@ -97,30 +98,16 @@ class OpenAITTSProvider(VoiceProvider):
         }
 
         logger.info(
-            "OpenAI 兼容 TTS 调用: model=%s voice=%s format=%s emotion=%s text_len=%d",
-            model, voice or "alloy", audio_format, emotion or "(无)", len(text),
+            "OpenAI 兼容 TTS 调用: model=%s voice=%s format=%s text_len=%d",
+            model, voice or "alloy", audio_format, len(text),
         )
 
-        def _post(payload: dict):
-            try:
-                return requests.post(url, json=payload, headers=headers, timeout=120)
-            except requests.exceptions.Timeout:
-                raise VoiceGenerationError(self.provider_type, "TTS 请求超时") from None
-            except requests.exceptions.ConnectionError as e:
-                raise VoiceGenerationError(self.provider_type, f"连接失败: {e}") from None
-
-        resp = _post(body)
-
-        # Endpoints without the metadata extension (OpenAI official rejects
-        # unknown fields) or models refusing the emotion value: retry once
-        # without it rather than losing the whole clip.
-        if not resp.ok and "metadata" in body and 400 <= resp.status_code < 500:
-            logger.info(
-                "TTS 端点拒绝 emotion 扩展字段 (HTTP %d)，去除后重试",
-                resp.status_code,
-            )
-            body.pop("metadata")
-            resp = _post(body)
+        try:
+            resp = requests.post(url, json=body, headers=headers, timeout=120)
+        except requests.exceptions.Timeout:
+            raise VoiceGenerationError(self.provider_type, "TTS 请求超时") from None
+        except requests.exceptions.ConnectionError as e:
+            raise VoiceGenerationError(self.provider_type, f"连接失败: {e}") from None
 
         if not resp.ok:
             detail = resp.text[:300]
@@ -129,6 +116,9 @@ class OpenAITTSProvider(VoiceProvider):
                 f"HTTP {resp.status_code}: {detail}",
                 status_code=resp.status_code,
             )
+
+        if not resp.content or "json" in resp.headers.get("Content-Type", "").lower():
+            raise VoiceGenerationError(self.provider_type, "响应中无音频数据，服务商返回了空内容或 JSON")
 
         mime = self._FORMAT_TO_MIME.get(audio_format, "audio/mpeg")
         return VoiceResponse(
