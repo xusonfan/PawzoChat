@@ -38,7 +38,7 @@ PawzoChat 是一个功能强大的 AI 对话平台，基于大语言模型（LLM
 
 ### 生图/语音
 - **AI 生图** — 角色在聊天中可调用 `generate_image` 工具直接生成图片发送给用户；支持 OpenAI Image、Gemini (NanoBanana)、NovelAI 等多种后端，可按角色设置画风前缀和参考图
-- **AI 语音（TTS）** — 角色可在回复中用 `[语音]` 标记将文字转为语音消息；支持 MiniMax、OpenAI 兼容接口、PawAPI 等后端，可按情绪切换语气（如 `[语音-happy]`）；微信以音频文件发送，QQ 转码为 SILK 原生语音气泡，Web 面板渲染为可播放语音气泡
+- **AI 语音（TTS）** — 角色可在回复中用 `[语音]` 标记将文字转为语音消息；支持 MiniMax、MiMo、OpenAI 兼容接口及 PawAPI；在角色编辑的语音页配置语言、音色和发音控制，在「设置 → 语音服务商 → 语音测试」中可调整参数并试听。微信通道以音频文件发送，QQ通道转码为 SILK 原生语音气泡，Web 面板渲染为可播放语音气泡
 - **入站语音回放** — 微信/QQ 用户语音会保存为 Web 面板可播放的语音条，聊天窗口中长按或右键可展开/收起平台转写；发送给 AI 的上下文统一为 `[语音] 转写内容`
 
 ### 朋友圈
@@ -259,7 +259,7 @@ PawzoChat/
 - **自定义** — 填写任意 OpenAI 兼容 Base URL + API Key
 
 生图后端：OpenAI Image / NanoBanana (Gemini) / NovelAI
-语音后端：MiniMax 原生 / OpenAI 兼容 TTS
+语音后端：MiniMax 原生 / MiMo 原生 / OpenAI 兼容 TTS
 
 ## 文档
 

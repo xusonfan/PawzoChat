@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -150,7 +150,7 @@ def upload_image(
     else:
         raise RuntimeError(f"getUploadUrl returned no upload URL: {resp}")
 
-    download_param = _cdn_post_with_retry(cdn_url, ciphertext, image_path)
+    download_param = _cdn_post_with_retry(cdn_url, ciphertext, image_path, guard=client.connection.check if client.connection else None)
 
     return {
         "encrypt_query_param": download_param,
@@ -217,7 +217,7 @@ def upload_file(
     else:
         raise RuntimeError(f"getUploadUrl returned no upload URL: {resp}")
 
-    download_param = _cdn_post_with_retry(cdn_url, ciphertext, file_path)
+    download_param = _cdn_post_with_retry(cdn_url, ciphertext, file_path, guard=client.connection.check if client.connection else None)
 
     return {
         "encrypt_query_param": download_param,
@@ -229,11 +229,13 @@ def upload_file(
     }
 
 
-def _cdn_post_with_retry(cdn_url: str, data: bytes, label: str) -> str:
+def _cdn_post_with_retry(cdn_url: str, data: bytes, label: str, *, guard=None) -> str:
     """POST ciphertext to CDN, return x-encrypted-param header."""
     last_error: Exception | None = None
 
     for attempt in range(1, UPLOAD_MAX_RETRIES + 1):
+        if guard:
+            guard()
         try:
             r = requests.post(
                 cdn_url,

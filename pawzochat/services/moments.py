@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pawzochat.services.memory import DuplicateMemoryError
 from pawzochat.utils.profile import load_profile_name
 from pawzochat.web.sse import broadcast
 
@@ -628,7 +629,10 @@ class MomentsService:
         if memory_service is None:
             return
         try:
-            memory_service.add_memory(persona_id, summary, importance=2)
+            try:
+                memory_service.add_memory(persona_id, summary, importance=2)
+            except DuplicateMemoryError:
+                logger.info("跳过重复朋友圈记忆 persona=%s", persona_id)
             # Chat-idle personas miss the round-end consolidation check in
             # MessageQueue, so trigger it here as a backstop. Runs in a
             # background thread with in-flight dedup.

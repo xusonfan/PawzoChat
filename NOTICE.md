@@ -24,7 +24,7 @@ complete license text.
 ### @tencent-weixin/openclaw-weixin (ported reference implementation)
 
 - **Source:** <https://github.com/Tencent/openclaw-weixin>
-- **Files:** `pawzochat/transport/client.py`, `pawzochat/transport/cdn.py`
+- **Files:** `pawzochat/transport/client.py`, `pawzochat/transport/cdn.py`, `pawzochat/store/quotes.py`
 - **License:** MIT
 - **Copyright:** Tencent WeChat
 
@@ -34,6 +34,13 @@ complete license text.
 - **Files:** `pawzochat/channels/qq.py`, `pawzochat/transport/qq/`
 - **License:** MIT
 - **Copyright:** sliverp; Tencent Connect
+
+### @tencent-connect/qqbot-nodejs 1.0.4 (protocol reference)
+
+- **Source:** <https://www.npmjs.com/package/@tencent-connect/qqbot-nodejs/v/1.0.4>
+- **Files:** `pawzochat/transport/qq/upload.py`
+- **License:** MIT
+- **Reference:** `src/protocol/api/media-chunked.ts` from the published SDK.
 
 ### Python Dependencies
 

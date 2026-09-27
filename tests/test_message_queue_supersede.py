@@ -21,6 +21,9 @@ class _ConversationStore:
         source,
         timestamp=None,
         quote="",
+        local_id="",
+        quote_ref=None,
+        quote_media=None,
     ):
         with self._lock:
             message = {
@@ -30,8 +33,14 @@ class _ConversationStore:
                 "timestamp": timestamp or "2026-08-20T10:00:00+08:00",
                 "_seq": len(self.messages) + 1,
             }
+            if local_id:
+                message["local_id"] = local_id
             if quote:
                 message["quote"] = quote
+            if quote_ref:
+                message["quote_ref"] = quote_ref
+            if quote_media:
+                message["quote_media"] = quote_media
             self.messages.append(message)
             return message
 

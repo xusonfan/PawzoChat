@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -27,8 +27,8 @@ Delivery depends on the persona's channel link (``channel_link``):
 - **Channel-bound**: send through that channel, subject to the channel's
   own push policy (``Channel.can_push_now``). WeChat enforces a 23h safety
   window under openclaw's 24h context_token TTL, a 10-replies-per-context
-  quota, and skips group chats; QQ is passive-reply only (never proactively
-  pushed).
+  quota, and skips group chats; QQ automatically paces active sends and
+  defers them while offline, cooling down or refused by the recipient.
 - **Not bound**: send through the web panel SSE channel directly. Web
   delivery has no TTL.
 
@@ -332,8 +332,8 @@ class ProactiveService:
             return
 
         # Per-channel push policy (WeChat 23h window, 10-reply quota, group-
-        # skip; QQ passive-only; web unrestricted). Web-only personas (link is
-        # None) always pass.
+        # skip; QQ automatic active-send recovery; web unrestricted). Web-only
+        # personas (link is None) always pass.
         if channel is not None and not channel.can_push_now(
             link, last_user_at, messages,
         ):
@@ -397,6 +397,11 @@ class ProactiveService:
         else:
             reply_ctx = {"channel": "web"}
 
+        if channel is not None and hasattr(channel, "is_reply_context_active"):
+            if not channel.is_reply_context_active(reply_ctx):
+                logger.info("通道已停用或冷却，跳过本次主动生成 persona=%s", persona_id)
+                return
+
         try:
             drafts = self._app.chat_service.process_round(
                 persona_id, extra_hint=prompt,
@@ -437,6 +442,10 @@ class ProactiveService:
             return
 
         if not delivered:
+            defer_reason = channel.get_push_defer_reason(reply_ctx) if channel is not None else None
+            if defer_reason:
+                logger.info("主动消息延期 persona=%s：%s", persona_id, defer_reason)
+                return
             logger.error(
                 "主动消息投递失败（通道未接受任何消息）persona=%s", persona_id,
             )

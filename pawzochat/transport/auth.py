@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,10 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+import threading
+from functools import wraps
 import json
 import logging
 
@@ -25,6 +29,14 @@ from pawzochat.paths import CREDENTIALS_PATH
 from pawzochat.transport.models import Account
 
 logger = logging.getLogger(__name__)
+
+
+def _locked(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class AuthManager:
@@ -35,6 +47,10 @@ class AuthManager:
     WeChat-shaped fields; QQ / plugin accounts store their creds in ``extra``.
     """
 
+    def __init__(self):
+        self._lock = threading.RLock()
+
+    @_locked
     def load_accounts(self) -> list[Account]:
         if not CREDENTIALS_PATH.exists():
             return []
@@ -65,6 +81,7 @@ class AuthManager:
             logger.exception("加载凭证文件失败")
             return []
 
+    @_locked
     def save_accounts(self, accounts: list[Account]):
         CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = {"accounts": {}}
@@ -81,20 +98,29 @@ class AuthManager:
                 # Preserved verbatim so e.g. a note edit never wipes secrets.
                 "extra": acc.extra,
             }
-        with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        fd, temp = tempfile.mkstemp(dir=CREDENTIALS_PATH.parent, prefix=".accounts-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(temp, CREDENTIALS_PATH)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
 
+    @_locked
     def _add_and_save(self, new_account: Account):
         accounts = self.load_accounts()
         accounts = [a for a in accounts if a.bot_id != new_account.bot_id]
         accounts.append(new_account)
         self.save_accounts(accounts)
 
+    @_locked
     def remove_account(self, bot_id: str):
         accounts = self.load_accounts()
         accounts = [a for a in accounts if a.bot_id != bot_id]
         self.save_accounts(accounts)
 
+    @_locked
     def update_account(self, account: Account):
         """Persist updated fields (e.g. get_updates_buf) for an existing account."""
         accounts = self.load_accounts()
@@ -103,5 +129,5 @@ class AuthManager:
                 accounts[i] = account
                 break
         else:
-            accounts.append(account)
+            return  # A stale connection must never resurrect a deleted account.
         self.save_accounts(accounts)

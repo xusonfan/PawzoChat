@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -125,6 +125,10 @@ def create_app(app_instance: App) -> Flask:
     )
     flask_app.secret_key = os.urandom(32)
     flask_app.config["PAWZOCHAT_APP"] = app_instance
+    # Re-read templates from disk when they change — a long-running panel must
+    # not keep serving a stale compiled page after the files under it were
+    # replaced (dev edits, in-place file swaps).
+    flask_app.config["TEMPLATES_AUTO_RELOAD"] = True
     flask_app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB (supports multi-image Moments uploads)
     flask_app.permanent_session_lifetime = timedelta(hours=24)
     flask_app.config["SESSION_COOKIE_NAME"] = "pawzochat_session"
@@ -771,56 +775,70 @@ def create_app(app_instance: App) -> Flask:
         updater = app_instance.updater
         if updater is None:
             return {"error": "dev_mode"}, 400
-        if updater.downloading:
-            return {"error": "already_downloading"}, 409
 
         result = updater.result
         if not result or not result.get("download_available"):
             return {"error": "no_download_available"}, 400
 
-        from pawzochat.web.sse import broadcast
+        # Nothing to fetch when a staged bundle already awaits apply — without
+        # this a stale frontend state would silently restart the download.
+        if updater.download_status.get("ready"):
+            return {"ok": True, "message": "already_ready"}
 
-        def _download():
-            import time as _time
+        # Atomic check-and-set: a second rapid request gets a clean 409
+        # instead of spawning a doomed duplicate download thread.
+        if not updater.try_begin_download():
+            return {"error": "already_downloading"}, 409
 
-            try:
-                _last_broadcast = [0.0]
+        try:
+            from pawzochat.web.sse import broadcast
 
-                def on_progress(pct: float):
-                    now = _time.monotonic()
-                    # Throttle: send at most once every 0.3s, to avoid flooding the SSE queue and dropping later critical events
-                    if pct < 1.0 and now - _last_broadcast[0] < 0.3:
-                        return
-                    _last_broadcast[0] = now
+            def _download():
+                import time as _time
+
+                try:
+                    _last_broadcast = [0.0]
+
+                    def on_progress(pct: float):
+                        now = _time.monotonic()
+                        # Throttle: send at most once every 0.3s, to avoid flooding the SSE queue and dropping later critical events
+                        if pct < 1.0 and now - _last_broadcast[0] < 0.3:
+                            return
+                        _last_broadcast[0] = now
+                        broadcast(
+                            "update_progress",
+                            progress=round(pct * 100, 1),
+                            stage="downloading",
+                        )
+
+                    def on_status(status: str):
+                        broadcast(
+                            "update_progress",
+                            progress=100,
+                            stage=status,
+                            status=status,
+                        )
+
+                    updater.download(progress_cb=on_progress, status_cb=on_status, reserved=True)
+                    _apply_downloaded_update(broadcast_fn=broadcast)
+                except Exception as exc:
+                    logger.exception("下载更新失败")
+                    error_state = updater.download_status
                     broadcast(
                         "update_progress",
-                        progress=round(pct * 100, 1),
-                        stage="downloading",
+                        progress=error_state.get("progress", 0),
+                        stage=error_state.get("stage", "error"),
+                        ready=error_state.get("ready", False),
+                        error=error_state.get("error") or str(exc),
                     )
 
-                def on_status(status: str):
-                    broadcast(
-                        "update_progress",
-                        progress=100,
-                        stage=status,
-                        status=status,
-                    )
-
-                updater.download(progress_cb=on_progress, status_cb=on_status)
-                _apply_downloaded_update(broadcast_fn=broadcast)
-            except Exception as exc:
-                logger.exception("下载更新失败")
-                error_state = updater.download_status
-                broadcast(
-                    "update_progress",
-                    progress=error_state.get("progress", 0),
-                    stage=error_state.get("stage", "error"),
-                    ready=error_state.get("ready", False),
-                    error=error_state.get("error") or str(exc),
-                )
-
-        import threading
-        threading.Thread(target=_download, name="update-download", daemon=True).start()
+            import threading
+            threading.Thread(target=_download, name="update-download", daemon=True).start()
+        except Exception:
+            # The worker never started — release the reserved slot, otherwise
+            # every later download request would get 409 until restart.
+            updater.release_download()
+            raise
         return {"ok": True, "message": "download_started"}
 
     @flask_app.route("/api/update/apply", methods=["POST"])
@@ -880,7 +898,11 @@ def create_app(app_instance: App) -> Flask:
 
     @flask_app.route("/")
     def index():
-        return render_template("index.html")
+        # no-cache: the HTML wires up the static assets, so it must revalidate
+        # on every load — same policy as the /static handler.
+        resp = flask_app.make_response(render_template("index.html"))
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     @flask_app.context_processor
     def inject_globals():

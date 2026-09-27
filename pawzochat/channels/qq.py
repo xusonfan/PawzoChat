@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -20,8 +20,8 @@ C2C (private) only. Inbound images / videos / files arrive as time-limited
 attachment URLs and are downloaded eagerly; inbound voice yields text when QQ
 includes ``asr_refer_text`` in the attachment. Outbound supports text, images,
 and files (base64 rich-media upload). Replies use the inbound ``msg_id`` while
-the platform's passive-reply quota is available; PawzoChat's proactive push
-service remains disabled for QQ.
+the platform's passive-reply quota is available; active messages share automatic
+pacing and recovery with PawzoChat's proactive push service.
 """
 
 from __future__ import annotations
@@ -39,11 +39,14 @@ from typing import TYPE_CHECKING
 import requests
 
 from pawzochat.channels.base import Channel
+from pawzochat.store.quotes import media_blocks
 from pawzochat.channels.wechat import _MIME_TO_EXT, _detect_mime
 from pawzochat.paths import CHATS_DIR
 from pawzochat.transport.models import Account
+from pawzochat.transport.sender import MessageSender
 from pawzochat.transport.qq.client import QQClient, QQClientError
 from pawzochat.transport.qq.gateway import QQGateway
+from pawzochat.transport.qq.dedup import EventDeduplicator
 from pawzochat.transport.qq.models import (
     FILE_TYPE_AUDIO,
     FILE_TYPE_FILE,
@@ -116,6 +119,7 @@ class QQChannel(Channel):
 
     def __init__(self, app: App):
         super().__init__(app)
+        self._dedup = EventDeduplicator()
         self._clients: dict[str, QQClient] = {}
         self._gateways: dict[str, QQGateway] = {}
         # {(account_id, msg_id): (passive_count, first_used_at, warned)}.
@@ -141,10 +145,13 @@ class QQChannel(Channel):
         sandbox = bool(extra.get("sandbox", False))
         client = QQClient(app_id, app_secret, sandbox=sandbox)
         self._clients[account.bot_id] = client
+        client.push_policy.is_online = lambda: (
+            self._clients.get(account.bot_id) is client and self.is_online(account.bot_id)
+        )
 
         gateway = QQGateway(
             client,
-            lambda msg, aid=account.bot_id: self.handle_incoming(aid, msg),
+            lambda msg, aid=account.bot_id: self.handle_incoming(aid, msg, client=client),
             label=account.bot_id[:8],
         )
         self._gateways[account.bot_id] = gateway
@@ -152,21 +159,19 @@ class QQChannel(Channel):
         logger.info("QQ 账号已启动: %s", account.bot_id)
 
     def stop_account(self, account_id: str) -> None:
-        gateway = self._gateways.pop(account_id, None)
-        if gateway:
-            gateway.stop()
         client = self._clients.pop(account_id, None)
         if client:
             client.close()
+        gateway = self._gateways.pop(account_id, None)
+        if gateway:
+            gateway.stop()
         with self._reply_lock:
             for key in [k for k in self._reply_usage if k[0] == account_id]:
                 self._reply_usage.pop(key, None)
 
     def shutdown(self) -> None:
-        for gateway in self._gateways.values():
-            gateway.stop()
-        for client in self._clients.values():
-            client.close()
+        for account_id in set(self._clients) | set(self._gateways):
+            self.stop_account(account_id)
         self._inbound_pool.shutdown(wait=False)
 
     def is_online(self, account_id: str) -> bool:
@@ -222,28 +227,97 @@ class QQChannel(Channel):
         last_user_at: float,
         messages: list[dict],
     ) -> bool:
-        # Keep scheduled/general proactive delivery disabled for QQ.
-        return False
+        if (channel_link.get("chat_type") or "single") != "single":
+            return False
+        return self.get_push_defer_reason(self.reply_ctx_from_link(channel_link)) is None
+
+    def reply_ctx_from_link(self, channel_link: dict) -> dict:
+        client = self._clients.get(channel_link.get("account_id", ""))
+        return {
+            **super().reply_ctx_from_link(channel_link),
+            "reply_target": "",
+            "msg_scope": "c2c",
+            "generation": client.generation if client else "",
+        }
+
+    def is_reply_context_active(self, reply_ctx: dict) -> bool:
+        client = self._clients.get(reply_ctx.get("account_id", ""))
+        if not client or client._closed.is_set():
+            return False
+        if reply_ctx.get("generation") != client.generation:
+            return False
+        return self.get_push_defer_reason(reply_ctx) is None
+
+    def get_push_defer_reason(self, reply_ctx: dict) -> str | None:
+        if reply_ctx.get("_qq_defer_reason"):
+            return reply_ctx["_qq_defer_reason"]
+        account_id = reply_ctx.get("account_id", "")
+        client = self._clients.get(account_id)
+        if not client or client._closed.is_set():
+            return "QQ 账号已停止"
+        if reply_ctx.get("generation", client.generation) != client.generation:
+            return "QQ 账号连接已更换"
+        if not self.is_online(account_id):
+            return "QQ 账号离线"
+        peer = reply_ctx.get("user_id", "")
+        if not peer:
+            return "QQ 绑定缺少接收人"
+        return client.push_policy.defer_reason(peer)
+
+    def _reply_is_active(self, reply_key):
+        if not reply_key[1]:
+            return True
+        with self._reply_lock:
+            count, started, _ = self._reply_usage.get(reply_key, (0, time.monotonic(), False))
+            return (
+                count >= _PASSIVE_REPLY_LIMIT
+                or time.monotonic() - started >= _PASSIVE_REPLY_TTL_SECONDS
+            )
+
+    @staticmethod
+    def _check_active_upload(client, openid, active):
+        client.check_open()
+        if active:
+            reason = client.push_policy.defer_reason(openid)
+            if reason:
+                raise QQClientError(reason, push_defer_reason=reason)
 
     # ---- Inbound ----
 
-    def handle_incoming(self, account_id: str, message: QQInboundMessage) -> None:
-        # Invoked on the gateway's single WS reader thread — return immediately
-        # and do the (potentially slow) image download + queue handoff on the
-        # inbound pool so control frames / other users aren't blocked.
-        self._inbound_pool.submit(
-            self._handle_incoming_blocking, account_id, message,
-        )
-
-    def _handle_incoming_blocking(
-        self, account_id: str, message: QQInboundMessage,
-    ) -> None:
+    def handle_incoming(self, account_id: str, message: QQInboundMessage, *, client=None) -> None:
+        client = client or self._clients.get(account_id)
+        if not client or self._clients.get(account_id) is not client:
+            return
+        ticket = self._dedup.reserve(account_id, message.msg_id)
+        if ticket is None:
+            return
+        if not message.msg_id:
+            logger.debug("[QQ] 消息缺少事件 ID，跳过去重")
         try:
-            self._process_inbound(account_id, message)
+            self._inbound_pool.submit(self._handle_incoming_blocking, account_id, message, ticket, client)
+        except Exception:
+            self._dedup.finish(account_id, message.msg_id, ticket, False)
+            raise
+
+    def remove_account_state(self, account_id):
+        self._dedup.remove_account(account_id)
+
+    def _handle_incoming_blocking(self, account_id, message, ticket, client):
+        success = False
+        message._queue_accepted = False
+        try:
+            self._process_inbound(account_id, message, client=client)
+            success = True
         except Exception:
             logger.exception("[QQ] 处理入站消息失败")
+        finally:
+            self._dedup.finish(account_id, message.msg_id, ticket, success or message._queue_accepted)
 
-    def _process_inbound(self, account_id: str, message: QQInboundMessage) -> None:
+    def _process_inbound(self, account_id: str, message: QQInboundMessage, *, client=None) -> None:
+        client = client or self._clients.get(account_id)
+        if not client or self._clients.get(account_id) is not client:
+            return
+        client.check_open()
         text = (message.content or "").strip()
         image_atts = message.image_attachments
         media_atts = message.video_attachments + message.file_attachments
@@ -266,10 +340,16 @@ class QQChannel(Channel):
 
         conversation = self._app.conversation_store.find_by_account(account_id)
         if not conversation:
-            self._reply_no_binding(account_id, message)
+            self._reply_no_binding(account_id, message, client=client)
             return
 
         persona_id = conversation["persona_id"]
+        quote_data = {"quote": message.quote}
+        if message.ref_msg_idx:
+            quote_data = self._app.conversation_store.quotes.resolve(
+                "qq", account_id, message.openid, message.ref_msg_idx, persona_id,
+                inline=message.quote_text, inline_media=message.quote_media,
+            )
 
         images = self._download_images(image_atts, persona_id) if image_atts else None
         files = self._download_files(media_atts, persona_id) if media_atts else None
@@ -279,7 +359,7 @@ class QQChannel(Channel):
             text = f"{text}\n{fallback}" if text else fallback
 
         if not text and not images and not files and not voices:
-            return
+            raise QQClientError("QQ 入站媒体下载失败，等待事件重投")
 
         reply_ctx = {
             "channel": "qq",
@@ -287,6 +367,7 @@ class QQChannel(Channel):
             "user_id": message.openid,
             "reply_target": message.msg_id,
             "msg_scope": "c2c",
+            "generation": client.generation,
         }
         accepted = self._app.message_queue.accept_message(
             persona_id,
@@ -300,17 +381,30 @@ class QQChannel(Channel):
             account_id=account_id,
             user_id=message.openid,
             timestamp=_normalize_ts(message.timestamp),
-            quote=message.quote,
+            admission=client.admit,
+            **quote_data,
         )
-        if accepted:
-            actual_persona_id, _msg = accepted
-            self._app.conversation_store.update_channel_peer(
-                actual_persona_id, message.openid, chat_type="single",
-            )
-            if message.msg_id:
-                self._app.conversation_store.update_reply_target(
-                    actual_persona_id, message.msg_id,
+        message._queue_accepted = bool(accepted)
+        with client._state_lock:
+            if client._closed.is_set():
+                return
+            if accepted:
+                client.push_policy.on_inbound(message.openid)
+                message._queue_accepted = True
+                actual_persona_id, _msg = accepted
+                for platform_id in {message.msg_idx, message.msg_id} - {""}:
+                    self._app.conversation_store.quotes.remember(
+                        "qq", account_id, message.openid, platform_id, actual_persona_id,
+                        _msg["local_id"], "\n".join(filter(None, [message.content] + [a.asr_refer_text for a in voice_atts])),
+                        media_blocks(images, files, voices),
+                    )
+                self._app.conversation_store.update_channel_peer(
+                    actual_persona_id, message.openid, chat_type="single",
                 )
+                if message.msg_id:
+                    self._app.conversation_store.update_reply_target(
+                        actual_persona_id, message.msg_id,
+                    )
 
     def _download_voices(
         self,
@@ -447,8 +541,8 @@ class QQChannel(Channel):
                     raise ValueError("媒体超过大小限制")
             return bytes(chunks)
 
-    def _reply_no_binding(self, account_id: str, message: QQInboundMessage) -> None:
-        client = self._clients.get(account_id)
+    def _reply_no_binding(self, account_id: str, message: QQInboundMessage, *, client=None) -> None:
+        client = client or self._clients.get(account_id)
         if not client or not message.openid:
             return
         try:
@@ -481,77 +575,136 @@ class QQChannel(Channel):
         client = self._clients.get(account_id)
         if not client or not openid:
             return False
+        # Pin legacy direct callers too; generated and inbound contexts already
+        # carry their generation before any model work begins.
+        reply_ctx.setdefault("generation", client.generation)
+        if reply_ctx["generation"] != client.generation or client._closed.is_set():
+            return False
+        if reply_ctx.get("_qq_send_failed"):
+            return False
 
         reply_key = (account_id, msg_id)
+        if self._reply_is_active(reply_key):
+            reason = self.get_push_defer_reason(reply_ctx)
+            if reason:
+                reply_ctx["_qq_defer_reason"] = reason
+                return False
+
+        if not is_first:
+            reply_cfg = self._app.config.get("reply", default={})
+            delay = MessageSender.estimate_message_delay(message, reply_cfg)
+            if delay and client._closed.wait(delay):
+                return False
+
+        def failed():
+            if self._reply_is_active(reply_key):
+                reply_ctx["_qq_send_failed"] = True
+                reason = self.get_push_defer_reason(reply_ctx)
+                if reason:
+                    reply_ctx["_qq_defer_reason"] = reason
+            return False
+
+        def on_error(error):
+            if error.push_defer_reason:
+                reply_ctx["_qq_defer_reason"] = error.push_defer_reason
+
+        def on_sent(response, body="", blocks=()):
+            with client._state_lock:
+                if client._closed.is_set() or self._clients.get(account_id) is not client:
+                    return
+                self._app.conversation_store.quotes.remember(
+                    "qq", account_id, openid, (response.get("ext_info") or {}).get("ref_idx"),
+                    persona_id, message.get("local_id", ""), body, blocks,
+                )
 
         content_blocks = message.get("content", []) or []
         delivered = True
         for block in content_blocks:
             btype = block.get("type")
             path = block.get("path", "")
+            block_delivered = True
             if btype in {"emoji", "image"} and path:
-                delivered = self._send_media(
-                    client, openid, reply_key, path, FILE_TYPE_IMAGE,
-                ) and delivered
+                block_delivered = self._send_media(
+                    client, openid, reply_key, path, FILE_TYPE_IMAGE, on_sent=on_sent, on_error=on_error,
+                    block={**block, "type": "image"},
+                )
             elif btype == "file" and path:
-                delivered = self._send_media(
-                    client, openid, reply_key, path, FILE_TYPE_FILE,
-                ) and delivered
+                block_delivered = self._send_media(
+                    client, openid, reply_key, path, FILE_TYPE_FILE, on_sent=on_sent, on_error=on_error, block=block,
+                )
             elif btype == "voice" and path:
-                delivered = self._send_voice(
-                    client, openid, reply_key, path,
-                ) and delivered
+                block_delivered = self._send_voice(
+                    client, openid, reply_key, path, on_sent=on_sent, on_error=on_error, block=block,
+                )
+            if not block_delivered:
+                delivered = False
+                if self._reply_is_active(reply_key):
+                    return failed()
 
         text = "".join(
             block.get("text", "")
             for block in content_blocks
             if block.get("type") == "text"
         )
-        if text.strip():
-            delivered = self._send_text(
-                client, openid, reply_key, text,
-            ) and delivered
+        if text.strip() and not self._send_text(
+            client, openid, reply_key, text, on_sent=on_sent, on_error=on_error,
+        ):
+            return failed()
         return delivered
 
-    def _send_text(self, client, openid, reply_key, text) -> bool:
+    def _send_text(self, client, openid, reply_key, text, *, on_sent=None, on_error=None) -> bool:
         for chunk in _split_qq_text(text):
             reply_msg_id, msg_seq = self._next_reply_params(reply_key)
             try:
-                client.send_c2c_message(
+                response = client.send_c2c_message(
                     openid,
                     content=chunk,
                     msg_type=MSG_TYPE_TEXT,
                     msg_id=reply_msg_id,
                     msg_seq=msg_seq,
                 )
-            except QQClientError:
+                if on_sent:
+                    on_sent(response, chunk)
+            except QQClientError as exc:
+                if on_error:
+                    on_error(exc)
                 logger.exception("[QQ] 文本消息发送失败")
                 return False
         return True
 
-    def _send_media(self, client, openid, reply_key, path, file_type) -> bool:
+    @staticmethod
+    def _upload_progress(account_id, path):
+        from pawzochat.web.sse import broadcast
+        def progress(done, total):
+            broadcast("channel_upload", account_id=account_id, name=Path(path).name,
+                      uploaded=done, total=total)
+        return progress
+
+    @staticmethod
+    def _upload_error(account_id, path, error):
+        from pawzochat.web.sse import broadcast
+        broadcast("channel_upload", account_id=account_id, name=Path(path).name, error=str(error))
+
+    def _send_media(self, client, openid, reply_key, path, file_type, *, on_sent=None, on_error=None, block=None) -> bool:
         """Upload a local file as C2C rich media (image / file / video / audio,
         per *file_type*) then send it. Returns False on any failure — including
         a QQClientError, which covers QQ rejecting an unsupported file type or
         extension, so the caller logs rather than silently swallowing it."""
+        active = self._reply_is_active(reply_key)
         try:
-            data = Path(path).read_bytes()
-        except OSError:
-            logger.warning("[QQ] 媒体文件不可读: %s", path)
-            return False
-        try:
-            uploaded = client.upload_c2c_media(
-                openid,
-                data,
-                file_type=file_type,
+            self._check_active_upload(client, openid, active)
+            uploaded = client.upload_c2c_media_path(
+                openid, path, file_type=file_type,
                 file_name=Path(path).name if file_type == FILE_TYPE_FILE else "",
+                on_progress=self._upload_progress(reply_key[0], path),
             )
             file_info = uploaded.get("file_info", "")
             if not file_info:
                 logger.warning("[QQ] 上传未返回 file_info: %s", uploaded)
                 return False
             reply_msg_id, msg_seq = self._next_reply_params(reply_key)
-            client.send_c2c_message(
+            active = not reply_msg_id
+            response = client.send_c2c_message(
                 openid,
                 content="",
                 msg_type=MSG_TYPE_MEDIA,
@@ -559,22 +712,36 @@ class QQChannel(Channel):
                 msg_seq=msg_seq,
                 media={"file_info": file_info},
             )
+            if on_sent:
+                on_sent(response, "", [block] if block else [])
             return True
-        except QQClientError:
+        except QQClientError as exc:
+            if active:
+                client.push_policy.record_failure(openid, exc)
+            if on_error:
+                on_error(exc)
+            self._upload_error(reply_key[0], path, exc)
             logger.exception("[QQ] 媒体消息发送失败 (file_type=%s): %s", file_type, path)
             return False
 
-    def _send_voice(self, client, openid, reply_key, path) -> bool:
+    def _send_voice(self, client, openid, reply_key, path, *, on_sent=None, on_error=None, block=None) -> bool:
         """Transcode TTS audio to SILK and send it as a real voice bubble via file_type=3 (audio).
 
         QQ's official API requires audio in SILK format; when the transcode
         dependency is missing or fails, this falls back to sending the plain
         MP3 as a file so the content still gets through.
         """
+        active = self._reply_is_active(reply_key)
         try:
+            self._check_active_upload(client, openid, active)
+            if Path(path).stat().st_size > 20 * 1024 * 1024:
+                self._upload_error(reply_key[0], path, "语音文件超过 20 MiB")
+                return False
             audio_bytes = Path(path).read_bytes()
-        except OSError:
-            logger.warning("[QQ] 语音文件不可读: %s", path)
+        except (OSError, QQClientError) as exc:
+            if isinstance(exc, QQClientError) and on_error:
+                on_error(exc)
+            logger.warning("[QQ] 语音文件不可读或通道暂不可发送: %s", path)
             return False
 
         try:
@@ -586,19 +753,22 @@ class QQChannel(Channel):
                 "[QQ] MP3→SILK 转码失败，降级为文件发送: %s", path, exc_info=True,
             )
             return self._send_media(
-                client, openid, reply_key, path, FILE_TYPE_FILE,
+                client, openid, reply_key, path, FILE_TYPE_FILE, on_sent=on_sent, on_error=on_error,
+                block={**(block or {}), "type": "file"},
             )
 
         try:
             uploaded = client.upload_c2c_media(
                 openid, silk_bytes, file_type=FILE_TYPE_AUDIO,
+                on_progress=self._upload_progress(reply_key[0], path),
             )
             file_info = uploaded.get("file_info", "")
             if not file_info:
                 logger.warning("[QQ] 语音上传未返回 file_info: %s", uploaded)
                 return False
             reply_msg_id, msg_seq = self._next_reply_params(reply_key)
-            client.send_c2c_message(
+            active = not reply_msg_id
+            response = client.send_c2c_message(
                 openid,
                 content="",
                 msg_type=MSG_TYPE_MEDIA,
@@ -606,8 +776,15 @@ class QQChannel(Channel):
                 msg_seq=msg_seq,
                 media={"file_info": file_info},
             )
+            if on_sent:
+                on_sent(response, "", [block] if block else [])
             return True
-        except QQClientError:
+        except QQClientError as exc:
+            if active:
+                client.push_policy.record_failure(openid, exc)
+            if on_error:
+                on_error(exc)
+            self._upload_error(reply_key[0], path, exc)
             logger.exception("[QQ] 语音消息发送失败: %s", path)
             return False
 

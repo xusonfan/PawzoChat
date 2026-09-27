@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 
 from pawzochat.paths import CHATS_DIR
 from pawzochat.voice.transcode import probe_mp3_duration_ms
+from pawzochat.voice.request import synthesize_with_settings
+from pawzochat.voice.settings import clean_fallback_text
 
 if TYPE_CHECKING:
     from pawzochat.voice.manager import VoiceManager
@@ -57,35 +59,8 @@ def synthesize_voice_clip(
     aligned with the voice draft block); returns ``None`` on failure and
     never raises.
     """
-    provider = voice_manager.get_provider_for_model(
-        settings["provider"], settings["model"],
-    )
-    if provider is None:
-        logger.warning(
-            "找不到可用的语音服务商/模型，该语音段将降级为文字 "
-            "persona=%s provider=%s model=%s",
-            persona_id, settings["provider"], settings["model"],
-        )
-        return None
-
-    voice = settings["voice"] or voice_manager.get_model_voice(
-        settings["provider"], settings["model"],
-    )
-
-    # The MiniMax native provider consumes emotion via voice_setting; the
-    # OpenAI-compatible provider forwards it through the metadata extension
-    # (MiniMax relays like PawAPI consume it, other endpoints get one retry
-    # without it).
-    kwargs: dict = {"emotion": emotion} if emotion else {}
-
     try:
-        response = provider.synthesize(
-            text,
-            model=settings["model"],
-            voice=voice,
-            speed=settings["speed"],
-            **kwargs,
-        )
+        response = synthesize_with_settings(voice_manager, settings, text, emotion)
     except Exception:
         logger.warning(
             "语音合成失败，该语音段将降级为文字 persona=%s provider=%s model=%s",
@@ -112,11 +87,11 @@ def synthesize_voice_clip(
     logger.info(
         "已合成语音 persona=%s provider=%s model=%s voice=%s duration=%dms bytes=%d",
         persona_id, settings["provider"], settings["model"],
-        voice or "(默认)", duration_ms, len(audio_bytes),
+        settings["voice"] or "(默认)", duration_ms, len(audio_bytes),
     )
     return {
         "path": str(out_path),
         "mime": response.mime_type or "audio/mpeg",
         "duration_ms": duration_ms,
-        "text": text,
+        "text": clean_fallback_text(text),
     }

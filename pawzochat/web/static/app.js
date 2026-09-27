@@ -353,6 +353,11 @@ function initSSE() {
   source.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+      if (data.type === "channel_upload") {
+        if (data.error) toast(`${data.name || "附件"}：${data.error}`, "error");
+        else if (data.total) toast(`${data.name || "附件"} 上传 ${Math.round(data.uploaded * 100 / data.total)}%`);
+        return;
+      }
       const errorNotice = errorNoticeFromEvent(data);
       if (data.type === "operation_error") {
         state.processingPersonas.delete(data.persona_id);

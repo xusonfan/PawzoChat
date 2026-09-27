@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -46,6 +46,7 @@ from pawzochat.transport.models import (
     PROACTIVE_DEFAULTS,
     Persona,
     normalize_image_generation,
+    normalize_voice_generation,
 )
 from pawzochat.image.reference import CUSTOM_REFERENCE_FILENAME, normalize_reference_image_png
 
@@ -75,6 +76,7 @@ class PersonaImportResult:
     proactive: dict = field(default_factory=dict)
     tool_policy: dict = field(default_factory=dict)
     image_generation: dict = field(default_factory=dict)
+    voice_generation: dict = field(default_factory=dict)
     reference_image_png: bytes | None = None
     warnings: list[str] = field(default_factory=list)
     embedded_book: dict | None = None
@@ -497,6 +499,7 @@ def card_to_persona(card: dict) -> PersonaImportResult:
         proactive=_normalize_proactive(pawzo_ext.get("proactive")),
         tool_policy=_normalize_tool_policy(pawzo_ext.get("tool_policy")),
         image_generation=image_generation,
+        voice_generation=normalize_voice_generation(pawzo_ext.get("voice_generation")),
         reference_image_png=reference_image_png,
         warnings=warnings,
     )
@@ -516,7 +519,7 @@ def _normalize_memory(raw: Any) -> dict:
         "include_in_prompt": bool(raw.get("include_in_prompt", True)),
         "trigger_rounds": int(raw.get("trigger_rounds", 10)),
         "trigger_mode": trigger_mode
-        if trigger_mode in ("remind", "summarize") else "remind",
+        if trigger_mode in ("remind", "summarize", "summarize_only") else "remind",
     }
 
 
@@ -624,6 +627,7 @@ def persona_to_card(
         "proactive": persona.proactive,
         "tool_policy": persona.tool_policy,
         "image_generation": image_generation,
+        "voice_generation": normalize_voice_generation(persona.voice_generation),
     }
 
     data: dict[str, Any] = {

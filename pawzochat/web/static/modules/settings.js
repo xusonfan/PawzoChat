@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 import { avatarHtml, profileAvatarUrl, formatTime, esc, escAttr, jsArg, iconHtml, voiceOptionsHtml, voiceCatalogFor } from "./utils.js";
 import { api, downloadFile } from "./api.js";
 import { state, $, content, sidebar } from "./state.js";
-import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading } from "./ui.js";
+import { toast, confirm, showSheet, closeOverlay, showLoading, hideLoading, setOverlayDismissible } from "./ui.js";
 import {
   setTopBar, pushPage, goBack,
   registerTabRenderer, registerPageRenderer,
@@ -38,6 +38,7 @@ import {
   webPushState,
 } from "./push_notifications.js";
 import { clearLocalCache, getLocalStorageSummary } from "./pwa.js";
+import { voiceControlHtml, readVoiceControls, bindVoiceControls, voiceTestEmotionHtml } from "./voice_controls.js";
 
 const _CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>`;
 
@@ -57,7 +58,7 @@ async function renderSettings() {
 
   let updateDot = "";
   try {
-    const u = await api.get("/api/update/check");
+    const u = await api.get("/api/update/check", { bypassCache: true });
     state._updateInfo = u;
     if (u.download_state) state._updateState = u.download_state;
     if (u.has_update) updateDot = `<span class="update-dot"></span>`;
@@ -248,7 +249,9 @@ async function renderSettingsAccounts() {
     }
 
     const html = accounts.map((a, idx) => {
-      const status = a.online
+      const status = a.connection_state === "cooldown"
+        ? `<span style="color:var(--text-3)">凭据冷却中</span>`
+        : a.online
         ? `<span style="color:var(--success)">● 在线</span>`
         : `<span style="color:var(--text-3)">● 离线</span>`;
       const displayName = a.note || `Bot: ${a.bot_id.substring(0, 16)}…`;
@@ -429,6 +432,18 @@ async function pollQrStatus(qrcode) {
       _qrVerifyCode = "";
     }
     const res = await api.get(url, { bypassCache: true });
+    if (!_qrPolling || $("qr-poll-status") !== el) return;
+    if (res.status === "binded_redirect") {
+      _qrPolling = false;
+      _qrPollBaseUrl = "";
+      _qrVerifyCode = "";
+      clearVerifyInput(el);
+      if (el) el.textContent = "该微信已连接，无需重复添加";
+      setTimeout(() => {
+        if ($("qr-poll-status") === el) { closeOverlay(); renderSettingsAccounts(); }
+      }, 800);
+      return;
+    }
     if (res.status === "confirmed") {
       _qrPolling = false;
       if (el) el.textContent = "登录成功！";
@@ -471,7 +486,7 @@ async function pollQrStatus(qrcode) {
       return;
     }
   } catch (e) { /* silent */ }
-  setTimeout(() => pollQrStatus(qrcode), 2000);
+  setTimeout(() => { if ($("qr-poll-status") === el) pollQrStatus(qrcode); }, 2000);
 }
 
 function showNoteSheet() {
@@ -524,7 +539,7 @@ function renderAccountDetail(data) {
     <div class="card">
       <div class="form-group"><div class="form-row"><label>备注名</label><input id="acct-note" value="${esc(data.note || "")}" placeholder="为账号设置一个备注"></div></div>
       <div class="form-group"><div class="form-row"><label>Bot ID</label><span style="${vs};font-size:12px;word-break:break-all">${esc(data.bot_id)}</span></div></div>
-      <div class="form-group"><div class="form-row"><label>状态</label><span style="${vs}">${data.online ? '<span style="color:var(--success)">● 在线</span>' : '<span style="color:var(--text-3)">● 离线</span>'}</span></div></div>
+      <div class="form-group"><div class="form-row"><label>状态</label><span style="${vs}">${data.connection_state === "cooldown" ? '<span style="color:var(--text-3)">凭据冷却中</span>' : data.online ? '<span style="color:var(--success)">● 在线</span>' : '<span style="color:var(--text-3)">● 离线</span>'}</span></div></div>
       <div class="form-group"><div class="form-row"><label>链接角色</label><span style="${vs}">${esc(personaName)}</span></div></div>
       <div class="form-group"><div class="form-row"><label>创建时间</label><span style="${vs}">${data.created_at ? formatTime(data.created_at) : "未知"}</span></div></div>
     </div>
@@ -2039,7 +2054,7 @@ export async function deleteVoiceProvider(name) {
 
 /* ============ Voice Test Page ============ */
 
-const _voiceTestState = { provider: "", model: "", voice: "", text: "", providers: [], voices: [] };
+const _voiceTestState = { provider: "", model: "", voice: "", voices: new Map(), text: "", providers: [], settings: {}, controls: {}, emotion: "", revision: 0 };
 const _VOICE_TEST_DEFAULT_TEXT = "你好，这是一个语音合成测试。欢迎使用 PawzoChat 的语音服务。";
 
 export async function openVoiceTest() {
@@ -2055,11 +2070,18 @@ export async function openVoiceTest() {
 }
 
 async function renderVoiceTest() {
+  _voiceTestState.revision++;
   setTopBar("语音测试", true, "");
   content().innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
+  const loading = content().firstElementChild;
   try {
     const res = await api.get("/api/voice-providers");
+    if (content().firstElementChild !== loading) return;
     _voiceTestState.providers = (res.providers || []).filter(p => (p.models || []).length > 0);
+    const defaults = res.voice_defaults || {};
+    _voiceTestState.settings = { ...defaults, ..._voiceTestState.settings,
+      minimax: { ...defaults.minimax, ..._voiceTestState.settings.minimax },
+      mimo: { ...defaults.mimo, ..._voiceTestState.settings.mimo } };
     _voiceProviderPresets = res.presets || _voiceProviderPresets;
     _voicePresetModels = res.preset_models || _voicePresetModels;
     _voiceModelTypeOptions = res.model_type_options || _voiceModelTypeOptions;
@@ -2078,6 +2100,7 @@ async function renderVoiceTest() {
   if (!_voiceTestState.providers.find(p => p.name === _voiceTestState.provider)) {
     _voiceTestState.provider = _voiceTestState.providers[0].name;
     _voiceTestState.model = "";
+    _voiceTestState.voice = _voiceTestState.voices.get(_voiceTestState.provider) || "";
   }
   const currentProvider = _voiceTestState.providers.find(p => p.name === _voiceTestState.provider);
   const models = currentProvider?.models || [];
@@ -2096,7 +2119,7 @@ async function renderVoiceTest() {
   // Build voice preset list from the current model's vendor catalog (not its
   // transport type — PawAPI speaks openai_tts but serves MiniMax voices).
   const currentModel = models.find(m => m.id === _voiceTestState.model);
-  const currentVoice = _voiceTestState.voice || currentModel?.voice || "";
+  const currentVoice = _voiceTestState.voice;
   const voiceOpts = voiceOptionsHtml(voiceCatalogFor(_voicePresetVoices, currentModel, models));
 
   content().innerHTML = `<div class="page">
@@ -2111,20 +2134,29 @@ async function renderVoiceTest() {
         <input id="vt-voice" list="vt-voice-list" oninput="PawzoChat.onVoiceTestVoiceChange()" value="${esc(currentVoice)}" placeholder="留空则使用模型默认音色" style="flex:1;border:1px solid var(--divider);border-radius:8px;padding:10px 12px;font-size:14px;font-family:var(--font);outline:none;background:var(--bg);color:var(--text-1)">
       </div></div>
       <datalist id="vt-voice-list">${voiceOpts}</datalist>
+      <div class="form-hint">以下参数仅用于试听，不修改人设或服务商配置。</div>
+      <div id="vt-controls"></div>
+      <div id="vt-emotion-control"></div>
       <div class="form-group"><div class="form-row" style="flex-direction:column;align-items:flex-start;gap:6px;padding:12px 16px">
         <label style="font-size:13px;color:var(--text-2)">合成文本</label>
         <textarea id="vt-text" rows="3" oninput="PawzoChat.onVoiceTestTextInput()" style="width:100%;box-sizing:border-box;border:1px solid var(--divider);border-radius:8px;padding:10px 12px;font-size:14px;font-family:var(--font);outline:none;background:var(--bg);color:var(--text-1);resize:vertical">${esc(_voiceTestState.text)}</textarea>
       </div></div>
     </div>
     <div class="persona-actions mt-16">
-      <button class="btn-primary" style="width:100%" onclick="PawzoChat.runVoiceTest()">生成语音</button>
+      <button id="vt-generate" class="btn-primary" style="width:100%" onclick="PawzoChat.runVoiceTest()">生成语音</button>
     </div>
     <div id="vt-result" style="margin:16px"></div>
   </div>`;
+  _refreshVoiceDropdown();
+  _renderVoiceTestControls();
 }
 
 export function onVoiceTestProviderChange() {
+  _captureVoiceTestControls();
+  _voiceTestState.voices.set(_voiceTestState.provider, $("vt-voice")?.value || "");
   _voiceTestState.provider = $("vt-provider")?.value || "";
+  _voiceTestState.voice = _voiceTestState.voices.get(_voiceTestState.provider) || "";
+  if ($("vt-voice")) $("vt-voice").value = _voiceTestState.voice;
   const currentProvider = _voiceTestState.providers.find(p => p.name === _voiceTestState.provider);
   const models = currentProvider?.models || [];
   _voiceTestState.model = models[0]?.id || "";
@@ -2136,14 +2168,17 @@ export function onVoiceTestProviderChange() {
     ).join("");
   }
   _refreshVoiceDropdown();
+  _renderVoiceTestControls();
 }
 
 export function onVoiceTestModelChange() {
+  _captureVoiceTestControls();
   _voiceTestState.model = $("vt-model")?.value || "";
   const currentProvider = _voiceTestState.providers.find(p => p.name === _voiceTestState.provider);
   const currentModel = currentProvider?.models?.find(m => m.id === _voiceTestState.model);
   _voiceTestState.voice = currentModel?.voice || "";
   _refreshVoiceDropdown();
+  _renderVoiceTestControls();
 }
 
 export function onVoiceTestVoiceChange() {
@@ -2160,6 +2195,7 @@ function _refreshVoiceDropdown() {
   const currentModel = currentProvider?.models?.find(m => m.id === modelId);
   const voices = voiceCatalogFor(_voicePresetVoices, currentModel, currentProvider?.models);
   const currentVoice = _voiceTestState.voice || currentModel?.voice || "";
+
   const voiceList = $("vt-voice-list");
   if (voiceList) {
     voiceList.innerHTML = voiceOptionsHtml(voices);
@@ -2167,7 +2203,32 @@ function _refreshVoiceDropdown() {
   const voiceInput = $("vt-voice");
   if (voiceInput) {
     voiceInput.value = currentVoice;
+    voiceInput.placeholder = currentModel?.voice ? `留空则使用 ${currentModel.voice}` : "留空则使用模型默认音色";
   }
+}
+
+function _captureVoiceTestControls() {
+  _voiceTestState.settings = readVoiceControls(_voiceTestState.settings, _voiceTestState.controls.family, "vt");
+  if ($("vt-emotion")) _voiceTestState.emotion = $("vt-emotion").value;
+}
+
+function _renderVoiceTestControls() {
+  _voiceTestState.revision++;
+  const provider = _voiceTestState.providers.find(p => p.name === _voiceTestState.provider);
+  const model = provider?.models?.find(m => m.id === _voiceTestState.model);
+  const controls = model?.tts_controls || { family: "openai" };
+  _voiceTestState.controls = controls;
+  const host = $("vt-controls");
+  host.innerHTML = voiceControlHtml(_voiceTestState.settings, controls, "vt");
+  $("vt-emotion-control").innerHTML = voiceTestEmotionHtml(controls, _voiceTestState.emotion, _voiceTestState.settings.emotion_enabled);
+  bindVoiceControls(host, "vt", enabled => {
+    if ($("vt-emotion-fields")) $("vt-emotion-fields").hidden = !enabled;
+  });
+  host.addEventListener("input", _captureVoiceTestControls);
+  host.onchange = _captureVoiceTestControls;
+  if ($("vt-emotion")) $("vt-emotion").onchange = _captureVoiceTestControls;
+  $("vt-result").replaceChildren();
+  $("vt-generate").disabled = !model;
 }
 
 export async function runVoiceTest() {
@@ -2179,25 +2240,31 @@ export async function runVoiceTest() {
   if (!model) { toast("请选择模型", "error"); return; }
   if (!text) { toast("请输入合成文本", "error"); return; }
 
-  const resultEl = $("vt-result");
+  _captureVoiceTestControls();
+  const revision = ++_voiceTestState.revision;
+  const resultEl = $("vt-result"), button = $("vt-generate");
+  button.disabled = true;
+  const isCurrent = () => revision === _voiceTestState.revision && $("vt-result") === resultEl;
   if (resultEl) {
-    resultEl.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px"><div class="spinner"></div><div style="color:var(--text-3);font-size:13px">合成中（最长 60 秒）…</div></div>`;
+    resultEl.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px"><div class="spinner"></div><div style="color:var(--text-3);font-size:13px">合成中…</div></div>`;
   }
 
-  const body = { model, text };
-  if (voice) body.voice = voice;
+  const settings = { ..._voiceTestState.settings, provider, model, voice: voice.trim() };
+  const body = { text, voice_generation: settings,
+    emotion: settings.emotion_enabled && _voiceTestState.controls.emotions ? _voiceTestState.emotion : "" };
   try {
     const res = await api.post(
       `/api/voice-providers/${encodeURIComponent(provider)}/_test`,
       body,
     );
+    if (!isCurrent()) return;
     if (res.status >= 400) {
       if (resultEl) {
         resultEl.innerHTML = `<div style="color:var(--danger);font-size:13px;padding:12px;border:1px solid var(--danger);border-radius:8px;word-break:break-all">${esc(res.data?.error || "调用失败")}</div>`;
       }
       return;
     }
-    const { audio_b64, mime_type, format } = res.data;
+    const { audio_b64, mime_type } = res.data;
     if (resultEl) {
       const audio = document.createElement("audio");
       audio.src = `data:${mime_type || "audio/mpeg"};base64,${audio_b64 || ""}`;
@@ -2207,9 +2274,11 @@ export async function runVoiceTest() {
       resultEl.replaceChildren(audio);
     }
   } catch (e) {
-    if (resultEl) {
+    if (isCurrent() && resultEl) {
       resultEl.innerHTML = `<div style="color:var(--danger);font-size:13px;padding:12px;border:1px solid var(--danger);border-radius:8px;word-break:break-all">网络错误</div>`;
     }
+  } finally {
+    if (isCurrent()) button.disabled = false;
   }
 }
 
@@ -3263,7 +3332,7 @@ async function renderSettingsAbout() {
   const u = state._updateInfo || {};
   let updateState = u.download_state || state._updateState || null;
   try {
-    updateState = _applyUpdateState(await api.get("/api/update/state"));
+    updateState = _applyUpdateState(await api.get("/api/update/state", { bypassCache: true }));
   } catch (_) {
     updateState = _applyUpdateState(updateState);
   }
@@ -3501,7 +3570,9 @@ async function _pollUpdateState(timeoutMs = 180000) {
 
   while (state._updatePollToken === token && Date.now() < deadline) {
     try {
-      const updateState = _applyUpdateState(await api.get("/api/update/state"));
+      // Bypass the SWR cache: a hit would return last cycle's payload and
+      // yank the progress bar backwards against the live SSE updates.
+      const updateState = _applyUpdateState(await api.get("/api/update/state", { bypassCache: true }));
       onUpdateProgress(updateState);
       if (updateState.ready || updateState.error) return updateState;
     } catch (_) { /* silent */ }
@@ -3517,7 +3588,7 @@ export async function checkForUpdate() {
   }
   toast("正在检查更新…", "info");
   try {
-    const u = await api.get("/api/update/check");
+    const u = await api.get("/api/update/check", { bypassCache: true });
     state._updateInfo = u;
     _applyUpdateState(u.download_state);
     if (u.reason === "dev_mode") {
@@ -3539,6 +3610,11 @@ export async function checkForUpdate() {
 export async function startUpdateDownload() {
   const u = state._updateInfo;
   if (!u || !u.download_available) return;
+  // Guard against rapid double-clicks triggering duplicate download requests
+  if (state._updateListening || state._updateState?.stage === "downloading") {
+    toast("下载已在进行中", "info");
+    return;
+  }
 
   showSheet(`<div style="padding:24px">
     <div class="sheet-title">下载更新</div>
@@ -3553,7 +3629,7 @@ export async function startUpdateDownload() {
       <button onclick="PawzoChat.applyUpdate()" style="width:100%;padding:10px;border:none;border-radius:var(--radius-btn);background:var(--primary);color:#fff;font-size:15px;cursor:pointer;font-family:var(--font)">立即重启更新</button>
     </div>
     <button id="update-cancel-btn" class="btn-text" onclick="PawzoChat.closeOverlay()" style="margin-top:12px;width:100%">取消</button>
-  </div>`);
+  </div>`, undefined, { dismissOverlay: false });
 
   state._updateListening = true;
   _applyUpdateState({ stage: "downloading", progress: 0, ready: false, error: "" });
@@ -3596,6 +3672,7 @@ export function onUpdateProgress(data) {
       cancel.textContent = "关闭";
       cancel.style.display = "";
     }
+    setOverlayDismissible(true);
     state._updateListening = false;
     state._updatePollToken = null;
     toast("更新失败: " + updateState.error, "error");
@@ -3614,7 +3691,10 @@ export function onUpdateProgress(data) {
   } else if (updateState.ready) {
     if (text) text.textContent = "下载完成";
     if (done) done.style.display = "";
-    if (cancel) cancel.style.display = "none";
+    if (cancel) {
+      cancel.textContent = "稍后再说";
+      cancel.style.display = "";
+    }
     state._updateListening = false;
     state._updatePollToken = null;
   } else {

@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -51,6 +51,7 @@ def list_accounts():
             "online": channel.is_online(acc.bot_id) if channel else False,
             "linked_persona": link_map.get(acc.bot_id),
             "note": acc.note,
+            **(channel.connection_status(acc.bot_id) if channel and hasattr(channel, "connection_status") else {}),
         })
     return jsonify({"accounts": result})
 
@@ -118,7 +119,9 @@ def create_account():
 @api_accounts_bp.route("/qr/start", methods=["POST"])
 def qr_start():
     try:
-        qr_data = ILinkClient.get_qrcode(DEFAULT_BASE_URL)
+        accounts = sorted(get_app().accounts, key=lambda a: a.created_at, reverse=True)
+        tokens = [a.bot_token for a in accounts if a.channel_type == "wechat" and a.bot_token]
+        qr_data = ILinkClient.get_qrcode(DEFAULT_BASE_URL, tokens)
         qrcode_str = qr_data.get("qrcode", "")
         qr_img_content = qr_data.get("qrcode_img_content", "")
         if not qrcode_str:
@@ -147,58 +150,71 @@ def qr_status():
         redirect_host = status_data.get("redirect_host", "")
         return jsonify({"status": "scaned_but_redirect", "redirect_host": redirect_host})
 
-    if status == "confirmed":
+    if status == "binded_redirect":
         bot_id = str(status_data.get("ilink_bot_id", "") or "").strip()
-        if not bot_id:
-            logger.error("扫码已确认，但响应缺少 ilink_bot_id")
-            return jsonify({"error": "登录失败：服务器未返回账号 ID"}), 502
-        confirmed_token = str(status_data.get("bot_token", "") or "")
-        confirmed_user_id = str(status_data.get("ilink_user_id", "") or "")
-        confirmed_base_url = str(
-            status_data.get("baseurl", "") or base_url or DEFAULT_BASE_URL
-        ).rstrip("/")
-        existing = next((a for a in app.accounts if a.bot_id == bot_id), None)
-        if existing:
-            if existing.channel_type != "wechat":
-                return jsonify({"error": "该账号 ID 已被其他通道使用"}), 409
-            new_token = confirmed_token or existing.bot_token
-            new_user_id = confirmed_user_id or existing.ilink_user_id
-            if not new_token:
-                logger.error("扫码已确认，但账号缺少 bot_token (bot_id=%s)", bot_id)
-                return jsonify({"error": "登录失败：服务器未返回登录凭据"}), 502
-            new_extra = {**(existing.extra or {}), "base_url": confirmed_base_url}
-            credentials_changed = (
-                existing.bot_token != new_token
-                or existing.ilink_user_id != new_user_id
-                or existing.extra != new_extra
-            )
-            if credentials_changed:
-                with app._accounts_lock:
-                    existing.bot_token = new_token
-                    existing.ilink_user_id = new_user_id
-                    existing.extra = new_extra
-                    app._auth_manager.update_account(existing)
-            channel = app.channel_registry.get("wechat", default=None)
-            if channel and (
-                credentials_changed or not channel.is_online(bot_id)
-            ):
-                channel.stop_account(bot_id)
-                channel.start_account(existing)
-            return jsonify({"status": "confirmed", "bot_id": bot_id})
+        known = next((a for a in app.accounts if a.channel_type == "wechat" and a.bot_id == bot_id), None)
+        return jsonify({"status": status, "already_connected": True,
+                        "bot_id": known.bot_id if known else ""})
 
-        if not confirmed_token:
-            logger.error("扫码已确认，但响应缺少 bot_token (bot_id=%s)", bot_id)
-            return jsonify({"error": "登录失败：服务器未返回登录凭据"}), 502
-        account = Account(
-            bot_id=bot_id,
-            bot_token=confirmed_token,
-            ilink_user_id=confirmed_user_id,
-            created_at=datetime.now(timezone.utc).isoformat(),
-            extra={"base_url": confirmed_base_url},
-        )
-        app._auth_manager._add_and_save(account)
-        app._start_account(account)
-        return jsonify({"status": "confirmed", "bot_id": account.bot_id})
+    if status == "confirmed":
+        with app._accounts_lock:
+            bot_id = str(status_data.get("ilink_bot_id", "") or "").strip()
+            if not bot_id:
+                logger.error("扫码已确认，但响应缺少 ilink_bot_id")
+                return jsonify({"error": "登录失败：服务器未返回账号 ID"}), 502
+            confirmed_token = str(status_data.get("bot_token", "") or "")
+            confirmed_user_id = str(status_data.get("ilink_user_id", "") or "")
+            confirmed_base_url = str(
+                status_data.get("baseurl", "") or base_url or DEFAULT_BASE_URL
+            ).rstrip("/")
+            existing = next((a for a in app.accounts if a.bot_id == bot_id), None)
+            if existing:
+                if existing.channel_type != "wechat":
+                    return jsonify({"error": "该账号 ID 已被其他通道使用"}), 409
+                new_token = confirmed_token or existing.bot_token
+                new_user_id = confirmed_user_id or existing.ilink_user_id
+                if not new_token:
+                    logger.error("扫码已确认，但账号缺少 bot_token (bot_id=%s)", bot_id)
+                    return jsonify({"error": "登录失败：服务器未返回登录凭据"}), 502
+                new_extra = {**(existing.extra or {}), "base_url": confirmed_base_url}
+                if confirmed_token and confirmed_token != existing.bot_token:
+                    new_extra.pop("cooldown_until", None)
+                credentials_changed = (
+                    existing.bot_token != new_token
+                    or existing.ilink_user_id != new_user_id
+                    or existing.extra != new_extra
+                )
+                channel = app.channel_registry.get("wechat", default=None)
+                if credentials_changed and channel:
+                    channel.stop_account(bot_id)
+                if credentials_changed:
+                    with app._accounts_lock:
+                        existing.bot_token = new_token
+                        existing.ilink_user_id = new_user_id
+                        existing.extra = new_extra
+                        app._auth_manager.update_account(existing)
+                channel = app.channel_registry.get("wechat", default=None)
+                if channel and (
+                    credentials_changed or not channel.is_online(bot_id)
+                ):
+                    if not credentials_changed:
+                        channel.stop_account(bot_id)
+                    channel.start_account(existing)
+                return jsonify({"status": "confirmed", "bot_id": bot_id})
+
+            if not confirmed_token:
+                logger.error("扫码已确认，但响应缺少 bot_token (bot_id=%s)", bot_id)
+                return jsonify({"error": "登录失败：服务器未返回登录凭据"}), 502
+            account = Account(
+                bot_id=bot_id,
+                bot_token=confirmed_token,
+                ilink_user_id=confirmed_user_id,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                extra={"base_url": confirmed_base_url},
+            )
+            app._auth_manager._add_and_save(account)
+            app._start_account(account)
+            return jsonify({"status": "confirmed", "bot_id": account.bot_id})
 
     return jsonify({"status": status})
 
@@ -222,20 +238,24 @@ def update_account(bot_id: str):
 def delete_account(bot_id: str):
     app = get_app()
 
-    acc = next((a for a in app.accounts if a.bot_id == bot_id), None)
-    channel = (
-        app.channel_registry.get(acc.channel_type, default=None) if acc else None
-    )
-    if channel:
-        # Stops the receive loop + best-effort offline notify (fire-and-forget).
-        channel.stop_account(bot_id)
-
-    # Atomic with create/QR-confirm appends so a concurrent op can't resurrect
-    # a just-deleted account or drop a just-added one.
     with app._accounts_lock:
-        app.accounts = [a for a in app.accounts if a.bot_id != bot_id]
-        app._auth_manager.remove_account(bot_id)
-    app.conversation_store.remove_links_for_account(bot_id)
+        acc = next((a for a in app.accounts if a.bot_id == bot_id), None)
+        channel = (
+            app.channel_registry.get(acc.channel_type, default=None) if acc else None
+        )
+        if channel:
+            # Stops the receive loop + best-effort offline notify (fire-and-forget).
+            channel.stop_account(bot_id)
+
+        # Atomic with create/QR-confirm appends so a concurrent op can't resurrect
+        # a just-deleted account or drop a just-added one.
+        with app._accounts_lock:
+            app.accounts = [a for a in app.accounts if a.bot_id != bot_id]
+            app._auth_manager.remove_account(bot_id)
+        app.conversation_store.quotes.purge(account=bot_id)
+        if channel and hasattr(channel, "remove_account_state"):
+            channel.remove_account_state(bot_id)
+        app.conversation_store.remove_links_for_account(bot_id)
 
     return jsonify({"ok": True})
 

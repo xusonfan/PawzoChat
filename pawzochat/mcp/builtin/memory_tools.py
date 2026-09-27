@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -38,6 +38,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from pawzochat.llm.base import ContentBlock
+from pawzochat.services.memory import DuplicateMemoryError, MemoryConflictError
 
 if TYPE_CHECKING:
     from pawzochat.app import App
@@ -56,6 +57,7 @@ RECORD_TOOL_DESCRIPTION = (
     "（如『他告诉我……』『我答应过他/她……』『那天我们聊到……』），"
     "不要写成『用户说了A，我回复了B』式的第三人称摘要。"
     "无关紧要的寒暄和闲聊不要记录；[历史记忆]中已有的内容不要重复记录。"
+    "同一件事的新进展优先使用 update_memory；更新冲突后不要改为新增。"
 )
 
 RECORD_TOOL_PARAMETERS: dict = {
@@ -158,7 +160,35 @@ def make_handlers(app: App) -> tuple[
             return "", _err("当前角色未启用记忆功能。")
         if app.memory_service is None:
             return "", _err("记忆服务尚未就绪。")
+        # Also read the current settings: the user may have switched modes
+        # while the model was generating a tool call with an older persona.
+        settings = app.memory_service.get_memory_settings(persona_id)
+        if not settings["enabled"]:
+            return "", _err("当前角色未启用记忆功能。")
+        if (
+            persona.memory.get("trigger_mode") == "summarize_only"
+            or settings["trigger_mode"] == "summarize_only"
+        ):
+            return "", _err("当前角色仅按轮数总结，不允许 AI 自主新增或改写记忆。")
+        memory_context = context.get("memory_context")
+        if (
+            not isinstance(memory_context, dict)
+            or not isinstance(memory_context.get("fingerprints"), dict)
+        ):
+            return "", _err("缺少本轮记忆快照，无法写入记忆，请正常回复。")
+        if memory_context.get("blocked"):
+            return "", _err("本轮记忆写入已停止。不要重试或改为新增，请正常回复，下一轮再判断。")
         return persona_id, None
+
+    def _conflict(
+        context: dict, persona_id: str, operation: str, exc: ValueError,
+    ) -> list[ContentBlock]:
+        context["memory_context"]["blocked"] = True
+        logger.info(
+            "记忆写入冲突，停止本轮写入 persona=%s operation=%s reason=%s",
+            persona_id, operation, type(exc).__name__,
+        )
+        return _err("记忆已变化或与其他条目重复，本轮记忆写入已停止。不要改为新增或重试，请正常回复，下一轮再判断。")
 
     def record_handler(arguments: dict, context: dict) -> list[ContentBlock]:
         persona_id, error = _check_context(context)
@@ -169,17 +199,20 @@ def make_handlers(app: App) -> tuple[
         if error:
             return error
 
-        entry, index = app.memory_service.add_memory(
-            persona_id, summary, arguments.get("importance", 3),
-        )
-        # Consolidation is NOT triggered here: it shifts storage indices and
-        # would confound a same-round update_memory's #N reference.
-        # MessageQueue calls maybe_consolidate after each round instead.
+        try:
+            entry, index = app.memory_service.add_memory(
+                persona_id, summary, arguments.get("importance", 3),
+                tool_context=context["memory_context"],
+            )
+        except DuplicateMemoryError:
+            logger.info("跳过重复工具记忆 persona=%s", persona_id)
+            return _err("已有相同内容的记忆，无需重复记录。请继续正常回复。")
+        except MemoryConflictError as exc:
+            return _conflict(context, persona_id, "record", exc)
         logger.info(
             "工具记录记忆 persona=%s index=%d importance=%d",
             persona_id, index, entry["importance"],
         )
-        app.memory_service.on_memory_recorded(persona_id)
         return [ContentBlock(
             type="text",
             text=(
@@ -210,18 +243,18 @@ def make_handlers(app: App) -> tuple[
         if arguments.get("importance") is not None:
             updates["importance"] = arguments["importance"]
 
-        ok = app.memory_service.update_memory(persona_id, index, updates)
-        if not ok:
-            total = len(
-                app.memory_service.load_memories(persona_id).get("memories", [])
+        memory_context = context["memory_context"]
+        try:
+            changed = app.memory_service.update_memory(
+                persona_id, index, updates,
+                expected_fingerprint=memory_context["fingerprints"].get(index, ""),
+                tool_context=memory_context,
             )
-            return _err(
-                f"记忆 #{index} 不存在（当前共有 {total} 条，编号从 0 开始），"
-                "可能刚被整理或删除。不要重试这个编号；"
-                "如需保存新内容，请改用 record_memory 记录为新记忆。"
-            )
+        except (MemoryConflictError, DuplicateMemoryError) as exc:
+            return _conflict(context, persona_id, "update", exc)
+        if not changed:
+            return _err(f"记忆 #{index} 未变化，无需重复更新。请继续正常回复。")
         logger.info("工具更新记忆 persona=%s index=%d", persona_id, index)
-        app.memory_service.on_memory_recorded(persona_id)
         return [ContentBlock(
             type="text",
             text=f"已更新记忆 #{index}。请继续自然地回复用户，不要在回复中提及记忆操作。",

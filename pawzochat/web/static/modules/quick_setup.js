@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -903,6 +903,17 @@ async function _pollQr(qrcode, session) {
       _qrVerifyCode = "";
     }
     const res = await api.get(url, { bypassCache: true });
+    if (!_qrPolling || session !== _qrSession || document.getElementById("qs-qr-status") !== statusEl) return;
+    if (res.status === "binded_redirect") {
+      _qrPolling = false;
+      _qrPollBaseUrl = "";
+      _qrVerifyCode = "";
+      clearVerifyInput(statusEl);
+      statusEl.textContent = "该微信已连接，请选择已有账号";
+      _qsToast("微信已连接，未更改角色绑定", "success");
+      setTimeout(() => { if (session === _qrSession) _refreshStep3(); }, 800);
+      return;
+    }
     if (res.status === "confirmed") {
       _qrPolling = false;
       _qrPollBaseUrl = "";
@@ -1072,7 +1083,7 @@ export async function submitQuickSetup() {
       emoji_enabled: hasDefaultGroup,
       emoji_send_probability: 25,
       emoji_group: hasDefaultGroup ? "default" : "",
-      memory: { enabled: true, max_memories: 50, include_in_prompt: true, trigger_rounds: 10 },
+      memory: { enabled: true, max_memories: 50, include_in_prompt: true, trigger_rounds: 10, trigger_mode: "remind" },
     };
     const igPatch = _buildImageGenerationPatch("qs-img-en");
     if (igPatch) body.image_generation = igPatch;

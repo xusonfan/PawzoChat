@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Memory service — tool-driven memory storage, consolidation and prompt injection."""
+"""Per-persona memory: checked writes, reminders, summaries and consolidation."""
 
 from __future__ import annotations
 
@@ -81,8 +81,6 @@ _CONSOLIDATE_PROMPT = """\
 
 只返回JSON，不要有其他内容。"""
 
-_AUTHOR_FRAGMENT = "lxdxywi"
-
 MEMORY_DEFAULTS: dict = {
     "enabled": True,
     "max_memories": 50,
@@ -94,9 +92,17 @@ MEMORY_DEFAULTS: dict = {
 MIN_CONSOLIDATE_COUNT = 5
 
 
-def _normalize_tag(tag: str, pad: str = _AUTHOR_FRAGMENT) -> str:
-    """Pad a memory tag to a fixed width; unused in production but present as a safety helper."""
-    return (tag + pad)[:24]
+def auto_summary_enabled(settings: dict) -> bool:
+    """Shared gate for runtime checks and persona-setting transitions."""
+    try:
+        rounds = int(settings.get("trigger_rounds", MEMORY_DEFAULTS["trigger_rounds"]))
+    except (TypeError, ValueError):
+        rounds = MEMORY_DEFAULTS["trigger_rounds"]
+    return (
+        bool(settings.get("enabled", True))
+        and settings.get("trigger_mode", "remind") in ("summarize", "summarize_only")
+        and rounds > 0
+    )
 
 
 def _now_readable() -> str:
@@ -133,19 +139,20 @@ def _sanitize_summary_for_prompt(text) -> str:
     return re.sub(r"(?m)^(\s*)\[", r"\1【", str(text or ""))
 
 
-def _memory_fingerprint(memory: dict) -> str:
-    payload = {
-        "summary": memory.get("summary", ""),
-        "importance": _clamp_importance(memory.get("importance", 3)),
-        "created_at": memory.get("created_at", ""),
-    }
-    raw = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+class MemoryConflictError(ValueError):
+    """The caller's memory snapshot no longer identifies the current target."""
+
+
+class DuplicateMemoryError(ValueError):
+    """The requested summary already exists in another entry."""
+
+
+def _has_summary(memories: list[dict], summary: str, *, exclude: int = -1) -> bool:
+    key = summary.strip()
+    return any(
+        i != exclude and str(m.get("summary", "")).strip() == key
+        for i, m in enumerate(memories)
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class MemoryService:
@@ -157,12 +164,15 @@ class MemoryService:
     (``MomentsService._write_moment_memory``).
 
     Automatic summarization is optional and per-persona. When
-    ``memory.trigger_mode == "summarize"``, the fixed-round mechanism
+    ``memory.trigger_mode`` is ``"summarize"`` or ``"summarize_only"``,
+    the fixed-round mechanism
     (``check_and_summarize``, driven from MessageQueue after each round)
     folds the accumulated conversation into one memory entry and advances
     the persistent ``last_summarized_timestamp`` cursor. When it is
     ``"remind"`` (the default), the same round count only injects a nudge
     (``check_and_ack_reminder``) and leaves recording to the AI tools.
+    ``"summarize_only"`` withholds both memory tools; ``"summarize"`` still
+    permits proactive AI writes.
     """
 
     def __init__(
@@ -212,18 +222,16 @@ class MemoryService:
             settings["trigger_rounds"] = int(settings["trigger_rounds"])
         except (TypeError, ValueError):
             settings["trigger_rounds"] = MEMORY_DEFAULTS["trigger_rounds"]
-        # Coerce trigger_mode; anything outside the two legal values falls
+        # Coerce trigger_mode; anything outside the three legal values falls
         # back to the default "remind" (hand-edited config.yaml, old cards).
-        if settings.get("trigger_mode") not in ("remind", "summarize"):
+        if settings.get("trigger_mode") not in ("remind", "summarize", "summarize_only"):
             settings["trigger_mode"] = MEMORY_DEFAULTS["trigger_mode"]
         return settings
 
     # ---- Load / Save ------------------------------------------------------
 
     def load_memories(self, persona_id: str) -> dict:
-        """Read the memory file. Legacy fields in old files (e.g.
-        last_summarized_timestamp) are preserved as-is and written back on
-        save, keeping the on-disk format backward compatible."""
+        """Read memories and the summary cursor, preserving unknown old fields."""
         path = self._memory_path(persona_id)
         if not path.is_file():
             return {"memories": []}
@@ -258,57 +266,139 @@ class MemoryService:
 
     # ---- CRUD -------------------------------------------------------------
 
+    @staticmethod
+    def fingerprint(memory: dict) -> str:
+        """Transient comparison token; never stored in memory.json."""
+        payload = {
+            "summary": memory.get("summary", ""),
+            "importance": _clamp_importance(memory.get("importance", 3)),
+            "created_at": memory.get("created_at", ""),
+        }
+        raw = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _check_target(self, memories: list[dict], index: int, expected_fingerprint: str):
+        if (
+            not expected_fingerprint
+            or index < 0
+            or index >= len(memories)
+            or self.fingerprint(memories[index]) != expected_fingerprint
+        ):
+            raise MemoryConflictError("记忆已变化或不存在，请刷新后重新打开。")
+
+    def _commit_memory_write(
+        self, persona_id: str, data: dict, index: int, tool_context: dict | None,
+    ) -> None:
+        """Save under the caller's lock, including the tool's summary cursor.
+
+        Only after a successful save may the round snapshot/counter advance.
+        No model or conversation-store calls run under this lock.
+        """
+        if tool_context is not None:
+            settings = self.get_memory_settings(persona_id)
+            if (
+                tool_context.get("blocked")
+                or not settings["enabled"]
+                or settings["trigger_mode"] == "summarize_only"
+            ):
+                raise MemoryConflictError("本轮记忆写入已停用，请正常回复。")
+            cutoff = tool_context.get("cutoff_timestamp", "")
+            if settings["trigger_mode"] == "summarize" and cutoff:
+                # Never move a cursor backwards if another summary finished.
+                data["last_summarized_timestamp"] = max(
+                    data.get("last_summarized_timestamp") or "", cutoff,
+                )
+        self.save_memories(persona_id, data)
+        if tool_context is not None:
+            tool_context["fingerprints"][index] = self.fingerprint(
+                data["memories"][index],
+            )
+            self._last_memory_round[persona_id] = self._total_rounds.get(persona_id, 0)
+
     def add_memory(
         self, persona_id: str, summary: str, importance: int, created_at: str = "",
+        *, tool_context: dict | None = None,
     ) -> tuple[dict, int]:
-        """Append a memory entry; return ``(entry, index)`` of the new item."""
+        """Append a non-duplicate entry; return ``(entry, index)``."""
         lock = self._get_lock(persona_id)
         with lock:
             data = self.load_memories(persona_id)
+            if _has_summary(data["memories"], summary):
+                raise DuplicateMemoryError("已有相同内容的记忆，无需重复记录。")
+            index = len(data["memories"])
+            if tool_context is not None and index in tool_context["fingerprints"]:
+                # A concurrent deletion/merge recycled a number still present
+                # in the prompt. Do not give that number a new meaning mid-turn.
+                raise MemoryConflictError("记忆编号已变化，请下一轮重新判断。")
             entry = {
-                "summary": summary,
+                "summary": summary.strip(),
                 "importance": _clamp_importance(importance),
                 "created_at": created_at or _now_readable(),
             }
             data["memories"].append(entry)
-            self.save_memories(persona_id, data)
-            return entry, len(data["memories"]) - 1
+            self._commit_memory_write(persona_id, data, index, tool_context)
+            return entry, index
 
-    def update_memory(self, persona_id: str, index: int, updates: dict) -> bool:
+    def update_memory(
+        self, persona_id: str, index: int, updates: dict, *,
+        expected_fingerprint: str, tool_context: dict | None = None,
+    ) -> bool:
+        """Checked replacement; return whether any persisted field changed."""
         lock = self._get_lock(persona_id)
         with lock:
             data = self.load_memories(persona_id)
             memories = data["memories"]
-            if index < 0 or index >= len(memories):
-                return False
+            self._check_target(memories, index, expected_fingerprint)
+            entry = dict(memories[index])
             if "summary" in updates:
-                memories[index]["summary"] = updates["summary"]
+                summary = updates["summary"].strip()
+                # Existing duplicates are not cleaned up or made uneditable.
+                if summary != str(entry.get("summary", "")).strip():
+                    if _has_summary(memories, summary, exclude=index):
+                        raise DuplicateMemoryError("其他记忆已包含相同内容，本次未修改。")
+                    entry["summary"] = summary
             if "importance" in updates:
-                memories[index]["importance"] = _clamp_importance(updates["importance"])
+                entry["importance"] = _clamp_importance(updates["importance"])
             if "created_at" in updates:
-                memories[index]["created_at"] = updates["created_at"]
-            self.save_memories(persona_id, data)
+                entry["created_at"] = updates["created_at"]
+            if entry == memories[index]:
+                return False
+            memories[index] = entry
+            self._commit_memory_write(persona_id, data, index, tool_context)
             return True
 
-    def delete_memory(self, persona_id: str, index: int) -> bool:
+    def delete_memory(
+        self, persona_id: str, index: int, *, expected_fingerprint: str,
+    ) -> None:
         lock = self._get_lock(persona_id)
         with lock:
             data = self.load_memories(persona_id)
             memories = data["memories"]
-            if index < 0 or index >= len(memories):
-                return False
+            self._check_target(memories, index, expected_fingerprint)
             memories.pop(index)
             self.save_memories(persona_id, data)
-            return True
 
     # ---- Format for prompt ------------------------------------------------
 
-    def format_memories_for_prompt(self, persona_id: str) -> str:
+    def format_memories_for_prompt(
+        self, persona_id: str, *, tool_context: dict | None = None,
+    ) -> str:
+        if tool_context is not None:
+            tool_context["fingerprints"] = {}
         settings = self.get_memory_settings(persona_id)
         if not settings["enabled"] or not settings["include_in_prompt"]:
             return ""
         data = self.load_memories(persona_id)
         memories = data.get("memories", [])
+        if tool_context is not None:
+            tool_context["fingerprints"] = {
+                i: self.fingerprint(m) for i, m in enumerate(memories)
+            }
         if not memories:
             return ""
         # Sort by importance descending while annotating each entry with its
@@ -339,31 +429,6 @@ class MemoryService:
         """
         self._total_rounds[persona_id] = self._total_rounds.get(persona_id, 0) + 1
 
-    def on_memory_recorded(self, persona_id: str):
-        """Mark the current round as the last time a memory was recorded.
-
-        Called by the ``record_memory`` / ``update_memory`` tool handlers
-        after a successful write.
-
-        In ``summarize`` mode this also advances the automatic-summary
-        cursor to the conversation's latest message: the AI's proactive
-        recording is treated as covering everything up to this point, so the
-        fixed-round summary restarts from here (per user decision).
-        Failure to advance the cursor is only logged — never re-raised —
-        because this runs inside the tool handler *after* the memory was
-        successfully persisted; propagating would misreport a successful
-        write as a tool failure.
-        """
-        self._last_memory_round[persona_id] = self._total_rounds.get(persona_id, 0)
-        try:
-            settings = self.get_memory_settings(persona_id)
-            if settings["enabled"] and settings.get("trigger_mode") == "summarize":
-                self.reset_summary_cursor(persona_id)
-        except Exception:
-            logger.warning(
-                "顺延总结游标失败 persona=%s", persona_id, exc_info=True,
-            )
-
     def check_and_ack_reminder(self, persona_id: str) -> str | None:
         """Check whether a memory-suggestion reminder should be injected into
         the LLM context for *persona_id*.
@@ -381,12 +446,12 @@ class MemoryService:
         settings = self.get_memory_settings(persona_id)
         if not settings.get("enabled", False):
             return None
-        # In "summarize" mode the round count drives the automatic summary
+        # In either summary mode the round count drives the automatic summary
         # instead of a nudge — never inject a reminder.
         if settings.get("trigger_mode") != "remind":
             return None
         trigger = settings.get("trigger_rounds", 0)
-        if not isinstance(trigger, int) or trigger <= 0:
+        if trigger <= 0:
             return None
         total = self._total_rounds.get(persona_id, 0)
         last = self._last_memory_round.get(persona_id, 0)
@@ -403,16 +468,13 @@ class MemoryService:
             "如果本轮确实没有值得长期记住的内容，则无需操作，正常回复即可。"
         )
 
-    # ---- Automatic summarization (trigger_mode == "summarize") -------------
+    # ---- Fixed-round automatic summarization ------------------------------
 
     def reset_summary_cursor(self, persona_id: str) -> None:
         """Advance ``last_summarized_timestamp`` to the conversation's newest
         message timestamp.
 
         Callers:
-          - ``on_memory_recorded`` in ``summarize`` mode — the AI's proactive
-            recording covers everything up to this point, so the fixed-round
-            summary restarts from here;
           - ``api_personas`` when summarize mode becomes effective — so the
             whole pre-existing history is not dumped into the first summary
             prompt at once.
@@ -449,33 +511,23 @@ class MemoryService:
             settings = self.get_memory_settings(persona_id)
         except Exception:
             return False
-        return (
-            settings["enabled"]
-            and settings.get("trigger_mode") == "summarize"
-            and settings.get("trigger_rounds", 0) > 0
-        )
+        return auto_summary_enabled(settings)
 
     def check_and_summarize(
         self,
         persona_id: str,
         cutoff_timestamp: str = "",
     ):
-        """Fixed-round automatic summarization, only active in ``summarize``
-        mode.
+        """Fixed-round automatic summarization for both summary modes.
 
         Gated by the same ``enabled`` / ``trigger_rounds > 0`` checks as the
-        reminder, but additionally requires ``trigger_mode == "summarize"``.
+        reminder, but additionally requires one of the two summary modes.
         The actual summary runs in the calling thread (MessageQueue spawns a
         daemon thread); ``_summarizing`` prevents concurrent summaries for the
         same persona from both burning an LLM call.
         """
         settings = self.get_memory_settings(persona_id)
-        if not settings["enabled"]:
-            return
-        if settings.get("trigger_mode") != "summarize":
-            return
-        trigger = settings.get("trigger_rounds", 0)
-        if not isinstance(trigger, int) or trigger <= 0:
+        if not auto_summary_enabled(settings):
             return
         with self._global_lock:
             if persona_id in self._summarizing:
@@ -532,7 +584,7 @@ class MemoryService:
                 rounds += 1
                 saw_user = False
 
-        trigger = settings.get("trigger_rounds", 10)
+        trigger = settings["trigger_rounds"]
         if rounds < trigger:
             return
 
@@ -581,6 +633,13 @@ class MemoryService:
         }
 
         with lock:
+            current_settings = self.get_memory_settings(persona_id)
+            if (
+                not auto_summary_enabled(current_settings)
+                or rounds < current_settings["trigger_rounds"]
+            ):
+                logger.info("记忆总结设置已变化，跳过写入 persona=%s", persona_id)
+                return
             data = self.load_memories(persona_id)
             current_last_ts = data.get("last_summarized_timestamp")
             if current_last_ts != snapshot_last_ts:
@@ -589,14 +648,16 @@ class MemoryService:
                     persona_id, snapshot_last_ts, current_last_ts,
                 )
                 return
-            data["memories"].append(entry)
+            duplicate = _has_summary(data["memories"], entry["summary"])
+            if not duplicate:
+                data["memories"].append(entry)
             data["last_summarized_timestamp"] = target_timestamp
             memory_count = len(data["memories"])
             self.save_memories(persona_id, data)
 
         logger.info(
-            "角色 %s 记忆总结完成: 重要度=%d, 当前记忆数=%d",
-            persona_id, entry["importance"], memory_count,
+            "角色 %s 记忆总结完成: duplicate=%s, 当前记忆数=%d",
+            persona_id, duplicate, memory_count,
         )
 
     # ---- Consolidation ------------------------------------------------------
@@ -604,10 +665,9 @@ class MemoryService:
     def maybe_consolidate(self, persona_id: str):
         """Fire background consolidation when memory count exceeds the cap.
 
-        Called by MessageQueue after each round (not inside the tool loop),
-        so that consolidation — which shifts storage indices — never races
-        with an in-flight update_memory that is referencing a ``#N`` index
-        from the prompt block.
+        Called by MessageQueue after each round. A merge may finish during
+        the next round; updates guard against shifted indices using their
+        prompt snapshot fingerprints.
         """
         settings = self.get_memory_settings(persona_id)
         if not settings["enabled"]:
@@ -677,7 +737,7 @@ class MemoryService:
 
             merge_indices = {s[0] for s in scored[:n_to_merge]}
             to_merge = [memories[i] for i in sorted(merge_indices)]
-            merge_fingerprints = [_memory_fingerprint(m) for m in to_merge]
+            merge_fingerprints = [self.fingerprint(m) for m in to_merge]
 
             mem_lines = []
             for m in to_merge:
@@ -708,30 +768,36 @@ class MemoryService:
 
         expected_counts = Counter(merge_fingerprints)
         with lock:
+            current_settings = self.get_memory_settings(persona_id)
+            if not current_settings["enabled"] or current_settings["max_memories"] != max_memories:
+                logger.info("记忆合并设置已变化，跳过写入 persona=%s", persona_id)
+                return
             data = self.load_memories(persona_id)
             memories = data["memories"]
-            current_counts = Counter(_memory_fingerprint(m) for m in memories)
+            current_fingerprints = [self.fingerprint(m) for m in memories]
+            current_counts = Counter(current_fingerprints)
             if any(current_counts[fp] < count for fp, count in expected_counts.items()):
                 logger.info("记忆合并结果已过期，跳过写入 persona=%s", persona_id)
                 return
 
-            remaining_counts = Counter(merge_fingerprints)
+            remaining_counts = expected_counts.copy()
             kept_memories = []
-            for memory in memories:
-                fp = _memory_fingerprint(memory)
+            for memory, fp in zip(memories, current_fingerprints):
                 if remaining_counts[fp] > 0:
                     remaining_counts[fp] -= 1
                     continue
                 kept_memories.append(memory)
 
-            kept_memories.append(new_entry)
+            duplicate = _has_summary(kept_memories, new_entry["summary"])
+            if not duplicate:
+                kept_memories.append(new_entry)
             data["memories"] = kept_memories
             memory_count = len(kept_memories)
             self.save_memories(persona_id, data)
 
         logger.info(
-            "记忆合并完成: %d条 → 1条, 当前记忆数=%d",
-            n_to_merge, memory_count,
+            "记忆合并完成: 合并条数=%d, duplicate=%s, 当前记忆数=%d",
+            n_to_merge, duplicate, memory_count,
         )
 
     # ---- Helpers ----------------------------------------------------------
@@ -768,31 +834,34 @@ class MemoryService:
                     delay = 1.0 * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
                     logger.warning(
                         "%s LLM调用异常，%.1fs后重试（%d/%d）persona=%s: %s",
-                        operation, delay, attempt, max_attempts, persona_id, exc,
+                        operation, delay, attempt, max_attempts, persona_id, type(exc).__name__,
                     )
                     time.sleep(delay)
                     continue
                 logger.warning(
                     "%s LLM调用连续异常%d次，等待下次触发 persona=%s: %s",
-                    operation, max_attempts, persona_id, exc,
+                    operation, max_attempts, persona_id, type(exc).__name__,
                 )
                 return None
 
             result = parse_llm_json(response_text)
-            if result and "summary" in result:
+            if (
+                result
+                and isinstance(result.get("summary"), str)
+                and result["summary"].strip()
+            ):
+                result["summary"] = result["summary"].strip()
                 return result
 
             if attempt < max_attempts:
                 logger.warning(
-                    "%s JSON解析失败，正在重试（%d/%d）persona=%s: %s",
+                    "%s JSON解析失败或摘要无效，正在重试（%d/%d）persona=%s",
                     operation, attempt, max_attempts, persona_id,
-                    (response_text or "")[:500],
                 )
             else:
                 logger.warning(
-                    "%s JSON解析连续失败%d次，等待下次触发 persona=%s: %s",
+                    "%s JSON解析连续失败或摘要无效%d次，等待下次触发 persona=%s",
                     operation, max_attempts, persona_id,
-                    (response_text or "")[:500],
                 )
         return None
 

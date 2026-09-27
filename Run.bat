@@ -1,4 +1,4 @@
-REM PawzoChat - Multi-platform LLM-powered chatbot
+REM PawzoChat - Human-like, versatile, extensible AI companion engine
 REM Copyright (C) 2026  iwyxdxl
 REM
 REM This program is free software: you can redistribute it and/or modify

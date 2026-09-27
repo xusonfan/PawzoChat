@@ -1,6 +1,6 @@
 [project]
 name = "PawzoChat"
-version = "0.2.0"
+version = "0.2.2"
 description = "智能AI聊天机器人"
 authors = [{name = "iwyxdxl"}]
 requires-python = ">=3.10"

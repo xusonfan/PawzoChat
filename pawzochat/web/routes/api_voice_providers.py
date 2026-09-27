@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -25,6 +25,11 @@ import re
 from flask import Blueprint, jsonify, request
 
 from pawzochat.voice.base import VoiceGenerationError
+from pawzochat.voice.settings import (
+    VOICE_GENERATION_DEFAULTS, control_family, control_description,
+    normalize_voice_generation, validate_voice_generation,
+)
+from pawzochat.voice.request import synthesize_with_settings
 from pawzochat.voice.manager import (
     MODEL_TYPE_OPTIONS,
     VALID_MODEL_TYPES,
@@ -80,7 +85,8 @@ def _provider_summary(name: str, cfg: dict) -> dict:
     # voice_catalog is derived per request, never persisted: it would go stale
     # the moment the provider's preset changed.
     models = [
-        {**m, "voice_catalog": resolve_voice_catalog(cfg, m)}
+        {**m, "voice_catalog": resolve_voice_catalog(cfg, m),
+         "tts_controls": control_description(control_family(cfg, m))}
         for m in ensure_voice_models_list(cfg)
     ]
 
@@ -112,6 +118,7 @@ def list_voice_providers():
     return jsonify({
         "providers": result,
         "presets": presets_out,
+        "voice_defaults": VOICE_GENERATION_DEFAULTS,
         "preset_models": VOICE_PRESET_MODELS,
         "model_type_options": MODEL_TYPE_OPTIONS,
         "preset_voices": VOICE_CATALOGS,
@@ -329,9 +336,22 @@ def test_voice_provider(name: str):
     """Invoke the TTS provider with sample text and return audio inline."""
     app = get_app()
     data = request.get_json(force=True)
-    model = (data.get("model") or "").strip()
-    text = (data.get("text") or "").strip()
-    voice = (data.get("voice") or "").strip()
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求必须为对象"}), 400
+    raw_settings = data.get("voice_generation", {"model": data.get("model", ""), "voice": data.get("voice", "")})
+    error = validate_voice_generation(raw_settings)
+    if error:
+        return jsonify({"error": error}), 400
+    settings = normalize_voice_generation(raw_settings)
+    settings["provider"] = name
+    model = settings["model"]
+    text = data.get("text", "")
+    if not isinstance(text, str):
+        return jsonify({"error": "text 必须为文本"}), 400
+    text = text.strip()
+    emotion = data.get("emotion", "")
+    if not isinstance(emotion, str):
+        return jsonify({"error": "emotion 必须为文本"}), 400
 
     if not model:
         return jsonify({"error": "请选择模型"}), 400
@@ -341,14 +361,10 @@ def test_voice_provider(name: str):
     if name not in app.config._data.get("voice_providers", {}):
         return jsonify({"error": "语音服务商未找到"}), 404
 
-    provider = app.voice_manager.get_provider_for_model(name, model)
-    if provider is None:
-        return jsonify({
-            "error": "服务商或模型未就绪（请检查 API Key 和模型是否已配置）",
-        }), 400
-
     try:
-        resp = provider.synthesize(text=text, model=model, voice=voice)
+        resp = synthesize_with_settings(app.voice_manager, settings, text, emotion)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except VoiceGenerationError as e:
         status = e.status_code or 502
         if status < 400 or status >= 600:

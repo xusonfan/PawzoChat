@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -69,6 +69,18 @@ PROVIDER_PRESETS: dict[str, dict] = {
 
 PRESET_MODELS: dict[str, list[dict]] = {
     "openai": [
+        # Official chat model IDs and limits verified 2026-09-25:
+        # https://developers.openai.com/api/docs/models
+        {"id": "gpt-6-astra", "name": "GPT-6 Astra",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1050000, "max_output": 128000},
+        # Sol/Luna tool calling on Chat Completions requires reasoning_effort=none.
+        {"id": "gpt-6-sol", "name": "GPT-6 Sol",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1050000, "max_output": 128000},
+        {"id": "gpt-6-luna", "name": "GPT-6 Luna",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1050000, "max_output": 128000},
         # GPT-5.6 family. The gpt-5.6 alias points to gpt-5.6-sol, so only
         # the canonical model ID is listed here.
         {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol",
@@ -130,8 +142,15 @@ PRESET_MODELS: dict[str, list[dict]] = {
          "context_window": 128000, "max_output": 16384},
     ],
     "anthropic": [
-        # Current Claude lineup. Haiku uses its canonical dated snapshot
-        # instead of the claude-haiku-4-5 convenience alias.
+        # Official model IDs and limits verified 2026-09-25:
+        # https://platform.claude.com/docs/en/models/overview
+        # Keep still-active older models; Haiku uses its canonical snapshot.
+        {"id": "claude-fable-5-1", "name": "Claude Fable 5.1",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1000000, "max_output": 128000},
+        {"id": "claude-opus-5-5", "name": "Claude Opus 5.5",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1000000, "max_output": 128000},
         {"id": "claude-fable-5", "name": "Claude Fable 5",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1000000, "max_output": 128000},
@@ -158,6 +177,14 @@ PRESET_MODELS: dict[str, list[dict]] = {
          "context_window": 200000, "max_output": 64000},
     ],
     "google": [
+        # Official generateContent chat models verified 2026-09-25:
+        # https://ai.google.dev/gemini-api/docs/models
+        {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1048576, "max_output": 65536},
+        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1048576, "max_output": 65536},
         {"id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1048576, "max_output": 65536},
@@ -173,6 +200,7 @@ PRESET_MODELS: dict[str, list[dict]] = {
         {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1048576, "max_output": 65536},
+        # Gemini 2.5 remains available only to users with prior model usage.
         {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1048576, "max_output": 65536},
@@ -184,10 +212,13 @@ PRESET_MODELS: dict[str, list[dict]] = {
          "context_window": 1048576, "max_output": 65536},
     ],
     "deepseek": [
-        {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash",
-         "capabilities": ["tool_use"],
+        # Official model IDs, capabilities and limits verified 2026-09-25:
+        # https://api-docs.deepseek.com/quick_start/pricing/
+        # The old deepseek-v4-flash ID now redirects to deepseek-flash.
+        {"id": "deepseek-flash", "name": "DeepSeek V4.1 Flash",
+         "capabilities": ["vision", "tool_use"],
          "context_window": 1000000, "max_output": 384000},
-        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro",
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro 0813",
          "capabilities": ["tool_use"],
          "context_window": 1000000, "max_output": 384000},
     ],
@@ -268,6 +299,11 @@ PRESET_MODELS: dict[str, list[dict]] = {
          "context_window": 262144, "max_output": None},
     ],
     "pawapi": [
+        # PawAPI /v1/models and Chat Completions checked 2026-09-25.
+        # https://api-docs.deepseek.com/quick_start/pricing/
+        {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1000000, "max_output": 384000},
         # PawAPI DeepSeek V3/V3.2: 128K context; tool-calling support follows what PawAPI provides
         {"id": "deepseek-v3", "name": "DeepSeek V3",
          "capabilities": ["tool_use"],
@@ -275,7 +311,13 @@ PRESET_MODELS: dict[str, list[dict]] = {
         {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro",
          "capabilities": ["tool_use"],
          "context_window": 1000000, "max_output": 384000},
-        # PawAPI /v1/models; metadata follows Google docs.
+        # https://ai.google.dev/gemini-api/docs/models
+        {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1048576, "max_output": 65536},
+        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1048576, "max_output": 65536},
         {"id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1048576, "max_output": 65536},
@@ -301,7 +343,10 @@ PRESET_MODELS: dict[str, list[dict]] = {
         {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1048576, "max_output": 65536},
-        # PawAPI /v1/models; metadata follows Anthropic docs.
+        # https://platform.claude.com/docs/en/models/overview
+        {"id": "claude-opus-5-5", "name": "Claude Opus 5.5",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1000000, "max_output": 128000},
         {"id": "claude-fable-5", "name": "Claude Fable 5",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1000000, "max_output": 128000},
@@ -323,7 +368,14 @@ PRESET_MODELS: dict[str, list[dict]] = {
         {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1000000, "max_output": 64000},
-        # PawAPI /v1/models; metadata follows OpenAI docs.
+        # PawAPI exposes Haiku's alias, not the official dated snapshot ID.
+        {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 200000, "max_output": 64000},
+        # https://developers.openai.com/api/docs/models
+        {"id": "gpt-6-astra", "name": "GPT-6 Astra",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1050000, "max_output": 128000},
         {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1050000, "max_output": 128000},
@@ -336,10 +388,34 @@ PRESET_MODELS: dict[str, list[dict]] = {
         {"id": "gpt-5.5", "name": "GPT 5.5",
          "capabilities": ["vision", "tool_use"],
          "context_window": 1050000, "max_output": 128000},
+        {"id": "gpt-5.4", "name": "GPT-5.4",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1050000, "max_output": 128000},
+        {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 400000, "max_output": 128000},
+        {"id": "gpt-5.2", "name": "GPT-5.2",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 400000, "max_output": 128000},
         {"id": "chatgpt-5.2", "name": "ChatGPT 5.2",
          "capabilities": ["vision", "tool_use"],
          "context_window": 128000, "max_output": 16384},
+        {"id": "gpt-5", "name": "GPT-5",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 400000, "max_output": 128000},
+        {"id": "gpt-5-mini", "name": "GPT-5 Mini",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 400000, "max_output": 128000},
+        {"id": "gpt-4.1", "name": "GPT-4.1",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1047576, "max_output": 32768},
+        {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 1047576, "max_output": 32768},
         {"id": "gpt-4o", "name": "GPT-4o",
+         "capabilities": ["vision", "tool_use"],
+         "context_window": 128000, "max_output": 16384},
+        {"id": "gpt-4o-mini", "name": "GPT-4o Mini",
          "capabilities": ["vision", "tool_use"],
          "context_window": 128000, "max_output": 16384},
         # Doubao Seed 2.0 Pro: Volcano Ark flagship multimodal/tools; 256K context / 128K max output

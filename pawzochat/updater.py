@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -228,27 +228,51 @@ class _PlatformHelper:
 
     @staticmethod
     def copy_tree(src: Path, dst: Path) -> None:
-        if sys.platform == "win32":
-            _PlatformHelper._copy_tree_retry(src, dst)
-        else:
-            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+        _PlatformHelper._copy_tree_retry(src, dst)
 
     @staticmethod
     def _copy_tree_retry(src: Path, dst: Path, retries: int = 5, delay: float = 2.0) -> None:
-        """copytree with retry for Windows file-lock issues."""
+        """copytree over dst, retrying files held by transient locks.
+
+        shutil.copytree does not abort on a locked file: it records the
+        per-file OSError, copies everything else, and only then raises an
+        aggregated shutil.Error — so catching PermissionError here would
+        never retry, and the target would be left half-updated (e.g. new
+        version file but old payload). Catch shutil.Error instead and
+        retry just the failed entries, which rides out short-lived locks
+        (AV scan-on-close, lingering child processes).
+        """
+        failed: list[tuple[str, str]] = []
+        last_error: Exception | None = None
         for attempt in range(retries):
             try:
-                shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
-                return
-            except PermissionError:
-                if attempt < retries - 1:
-                    logger.warning(
-                        "文件复制受阻 (尝试 %d/%d)，%g 秒后重试…",
-                        attempt + 1, retries, delay,
-                    )
-                    time.sleep(delay)
+                if failed:
+                    # Retry only the entries that failed on the last pass.
+                    # An entry may be a directory (a failed makedirs/copystat
+                    # is recorded with the dir path) — copy2 on a dir raises
+                    # IsADirectoryError and turns a transient failure permanent.
+                    for srcname, dstname in failed:
+                        if os.path.isdir(srcname):
+                            shutil.copytree(srcname, dstname, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(srcname, dstname)
                 else:
-                    raise
+                    shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+                return
+            except shutil.Error as err:
+                # args[0] is a flat list of (srcname, dstname, reason) triples.
+                failed = [(s, d) for s, d, _ in err.args[0]]
+                last_error = err
+            except OSError as exc:
+                last_error = exc
+            if attempt < retries - 1:
+                logger.warning(
+                    "文件复制受阻 (尝试 %d/%d)，%g 秒后重试…",
+                    attempt + 1, retries, delay,
+                )
+                time.sleep(delay)
+        assert last_error is not None
+        raise last_error
 
     # -- private helpers --
 
@@ -623,16 +647,6 @@ class UpdateChecker:
         return self._result
 
     @property
-    def downloading(self) -> bool:
-        with self._lock:
-            return self._downloading
-
-    @property
-    def download_progress(self) -> float:
-        with self._lock:
-            return self._download_progress
-
-    @property
     def download_status(self) -> dict[str, Any]:
         with self._lock:
             stage = self._download_stage
@@ -729,18 +743,38 @@ class UpdateChecker:
         logger.info("发现新版本 %s (当前 %s, 来源 %s)", tag, __version__, source)
         return self._result
 
-    def download(
-        self,
-        progress_cb: Callable[[float], None] | None = None,
-        status_cb: Callable[[str], None] | None = None,
-    ) -> Path:
+    def try_begin_download(self) -> bool:
+        """Atomically reserve the download slot; False if one is already running."""
         with self._lock:
             if self._downloading:
-                raise RuntimeError("已有下载任务进行中")
+                return False
             self._downloading = True
             self._download_progress = 0.0
             self._download_stage = "downloading"
             self._download_error = ""
+            return True
+
+    def release_download(self) -> None:
+        """Release a try_begin_download reservation when the download never started.
+
+        Pairs with try_begin_download for the window between reserving the slot
+        and entering download() (whose finally clause releases it) — e.g. the
+        worker thread fails to spawn. Without this the slot would stay reserved
+        and every later download attempt would be rejected.
+        """
+        with self._lock:
+            self._downloading = False
+            self._download_stage = "idle"
+
+    def download(
+        self,
+        progress_cb: Callable[[float], None] | None = None,
+        status_cb: Callable[[str], None] | None = None,
+        *,
+        reserved: bool = False,
+    ) -> Path:
+        if not reserved and not self.try_begin_download():
+            raise RuntimeError("已有下载任务进行中")
 
         try:
             return self._do_download(progress_cb, status_cb)
@@ -898,9 +932,9 @@ def apply_update(argv: list[str]) -> None:
             # Wait for Windows to release file locks (AV scanning, DLL unloading, etc.)
             time.sleep(2)
 
-        logger.info("复制文件到 %s …", target)
-        _PlatformHelper.copy_tree(staging, target)
-        logger.info("文件复制完成")
+        logger.info("安装新版本到 %s …", target)
+        _install_from_staging(staging, target)
+        logger.info("文件安装完成")
 
         new_exe = target / _PlatformHelper.executable_name()
         logger.info("启动新版本: %s", new_exe)
@@ -926,12 +960,189 @@ def apply_update(argv: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _install_from_staging — atomic swap install used by apply_update
+# ---------------------------------------------------------------------------
+
+_STAGE_NEW_SUFFIX = ".pawzonew"
+_STAGE_OLD_SUFFIX = ".pawzoold"
+
+# The release zip ships a top-level `data/` folder (default emoji/theme/
+# mcp_servers, synced by the build script). It must be merged into the live
+# data directory, never renamed away: that directory holds the updater's own
+# staging tree and open update.log handle (so the rename can never succeed
+# on Windows) and the user's entire state (so a wholesale swap would delete
+# it on any platform).
+_MERGED_TOP_LEVEL = "data"
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _remove_swap_leftovers(target: Path) -> None:
+    """Drop `<name>.pawzonew` / `<name>.pawzoold` entries from an interrupted install."""
+    try:
+        entries = list(target.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.endswith((_STAGE_NEW_SUFFIX, _STAGE_OLD_SUFFIX)):
+            logger.info("清理更新残留: %s", entry)
+            _remove_path(entry)
+
+
+def _rename_with_retry(src: Path, dst: Path, retries: int = 5, delay: float = 2.0) -> None:
+    """os.rename with retry — transient locks (AV scans) block renames on Windows too."""
+    for attempt in range(retries):
+        try:
+            os.rename(src, dst)
+            return
+        except OSError:
+            if attempt < retries - 1:
+                logger.warning(
+                    "文件重命名受阻 (尝试 %d/%d)，%g 秒后重试…",
+                    attempt + 1, retries, delay,
+                )
+                time.sleep(delay)
+            else:
+                raise
+
+
+def _verify_staged_payload(staging: Path, target: Path) -> None:
+    """Every staging file must exist under its `<name>.pawzonew` twin with equal size.
+
+    The staging tree came from a signature- and SHA-256-verified zip, so it is
+    the ground truth; this walk catches files quietly quarantined by AV between
+    copy and swap. Size equality is enough here — copy2 either wrote the file
+    or raised. Top-level dot entries and the merged `data/` folder are skipped
+    because _install_from_staging stages neither as `.pawzonew` twins — junk
+    like `.DS_Store` would otherwise abort every install here.
+    """
+    for dirpath, _dirnames, filenames in os.walk(staging):
+        for filename in filenames:
+            src_file = Path(dirpath) / filename
+            rel = src_file.relative_to(staging)
+            if rel.parts[0].startswith(".") or rel.parts[0] == _MERGED_TOP_LEVEL:
+                continue
+            staged = target / (rel.parts[0] + _STAGE_NEW_SUFFIX) / Path(*rel.parts[1:])
+            if not staged.is_file():
+                raise FileNotFoundError(f"staged copy missing: {staged}")
+            if staged.stat().st_size != src_file.stat().st_size:
+                raise ValueError(f"staged copy size mismatch: {staged}")
+
+
+def _install_from_staging(staging: Path, target: Path) -> None:
+    """Land the staged bundle next to `target`, then swap it in with rollback.
+
+    The shipped `data/` folder is merged into the live data directory first —
+    see _MERGED_TOP_LEVEL. Everything else is app payload: copied to fresh
+    `<name>.pawzonew` entries that never touch locked files, so the copy
+    either completes fully or raises — no half-overwritten payload. The swap
+    is two rename phases; a failure anywhere rolls back, leaving either the
+    complete old version or the complete new one. A hard kill mid-swap (no
+    exception raised) is rolled back by _recover_interrupted_swap on the
+    next startup.
+    """
+    names = sorted(
+        entry.name for entry in staging.iterdir() if not entry.name.startswith(".")
+    )
+    if not names:
+        raise ValueError(f"staging 目录为空: {staging}")
+
+    swap_names = [name for name in names if name != _MERGED_TOP_LEVEL]
+
+    _recover_interrupted_swap(target)
+    _remove_swap_leftovers(target)
+
+    merge_src = staging / _MERGED_TOP_LEVEL
+    if merge_src.is_dir():
+        # The merge is the only step that writes over existing (possibly
+        # locked) files, so run it before any rename: if it fails the old
+        # version is still fully intact and the update can be retried.
+        logger.info("合并资源目录 %s …", target / _MERGED_TOP_LEVEL)
+        _PlatformHelper.copy_tree(merge_src, target / _MERGED_TOP_LEVEL)
+        logger.info("资源目录合并完成")
+
+    rotated: list[str] = []  # entries rotated out to .pawzoold
+    swapped: list[str] = []  # entries swapped in from .pawzonew
+    try:
+        for name in swap_names:
+            src = staging / name
+            if src.is_dir():
+                _PlatformHelper.copy_tree(src, target / (name + _STAGE_NEW_SUFFIX))
+            else:
+                shutil.copy2(str(src), str(target / (name + _STAGE_NEW_SUFFIX)))
+
+        _verify_staged_payload(staging, target)
+
+        for name in swap_names:
+            cur = target / name
+            if cur.exists() or cur.is_symlink():
+                _rename_with_retry(cur, target / (name + _STAGE_OLD_SUFFIX))
+                rotated.append(name)
+        for name in swap_names:
+            _rename_with_retry(target / (name + _STAGE_NEW_SUFFIX), target / name)
+            swapped.append(name)
+    except Exception:
+        logger.exception("安装新版本失败，正在回滚到旧版本")
+        for name in swapped:
+            _remove_path(target / name)
+        for name in rotated:
+            old = target / (name + _STAGE_OLD_SUFFIX)
+            try:
+                os.rename(old, target / name)
+            except OSError:
+                logger.exception("回滚失败: %s", old)
+        for name in swap_names:
+            _remove_path(target / (name + _STAGE_NEW_SUFFIX))
+        raise
+
+    # Drop the previous version. Anything left behind is cleaned on next startup.
+    _remove_swap_leftovers(target)
+
+# ---------------------------------------------------------------------------
 # cleanup_staging — called on normal startup
 # ---------------------------------------------------------------------------
 
-def cleanup_staging() -> None:
-    """Remove leftover staging directory from a previous update."""
+def _recover_interrupted_swap(target: Path) -> None:
+    """Roll back a swap install interrupted by a hard kill or power loss.
+
+    _install_from_staging rolls back on Python exceptions, but a crash between
+    its two rename phases leaves `<name>.pawzoold` entries whose primary
+    `<name>` is missing. Those leftovers are the old version's only copy —
+    deleting them would brick the install, so rename them back first. When
+    every primary exists the swap had completed and the leftovers are residue.
+    Called both on startup and before a fresh install (via cleanup_staging and
+    _install_from_staging respectively).
+    """
     try:
+        entries = list(target.iterdir())
+    except OSError:
+        return
+    rotated = [e for e in entries if e.name.endswith(_STAGE_OLD_SUFFIX)]
+    if not rotated:
+        return
+    present = {e.name for e in entries}
+    if all(e.name[: -len(_STAGE_OLD_SUFFIX)] in present for e in rotated):
+        return
+    logger.warning("检测到中断的更新安装，正在回滚到旧版本")
+    for old in rotated:
+        primary = target / old.name[: -len(_STAGE_OLD_SUFFIX)]
+        _remove_path(primary)
+        try:
+            os.rename(old, primary)
+        except OSError:
+            logger.exception("回滚失败: %s", old)
+
+
+def cleanup_staging() -> None:
+    """Remove leftover staging directory and swap residue from a previous update."""
+    try:
+        _recover_interrupted_swap(APP_HOME)
+        _remove_swap_leftovers(APP_HOME)
         if STAGING_DIR.exists():
             shutil.rmtree(STAGING_DIR, ignore_errors=True)
             logger.debug("已清理 update_staging 目录")

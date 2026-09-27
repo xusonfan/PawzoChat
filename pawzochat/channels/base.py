@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -132,7 +132,11 @@ class Channel(ABC):
         ``last_user_at`` is the epoch seconds of the most recent inbound user
         message; ``messages`` is the persona's stored conversation history.
         Default: allow (suits the web preview). WeChat overrides with its 23h
-        openclaw window plus the 10-replies-per-context quota; QQ disables the
-        proactive service.
+        openclaw window plus the 10-replies-per-context quota; QQ checks its
+        connection and active-send recovery state.
         """
         return True
+
+    def get_push_defer_reason(self, reply_ctx: dict) -> str | None:
+        """Why a failed push should be deferred without counting a hard failure."""
+        return None

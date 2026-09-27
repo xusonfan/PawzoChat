@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import queue
 import logging
 import secrets
 import threading
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pawzochat.channels.base import Channel
+from pawzochat.store.quotes import media_blocks
 from pawzochat.paths import CHATS_DIR
 from pawzochat.transport.client import (
     DEFAULT_BASE_URL,
@@ -35,6 +37,7 @@ from pawzochat.transport.client import (
 )
 from pawzochat.transport.models import Account, Message, MessageItemType
 from pawzochat.transport.poller import MessagePoller
+from pawzochat.transport.lifecycle import WeChatConnection, ConnectionInactive
 from pawzochat.transport.sender import MessageSender
 from pawzochat.utils.message_text import (
     build_wechat_inbound_text,
@@ -166,6 +169,9 @@ class WeChatChannel(Channel):
 
     def __init__(self, app: App):
         super().__init__(app)
+        self._lifecycle_lock = threading.RLock()
+        self._connections = {}
+        self._notifications = {}
         self._clients: dict[str, ILinkClient] = {}
         self._senders: dict[str, MessageSender] = {}
         self._pollers: dict[str, MessagePoller] = {}
@@ -173,6 +179,10 @@ class WeChatChannel(Channel):
     # ---- Per-account lifecycle ----
 
     def start_account(self, account: Account) -> None:
+        with self._lifecycle_lock:
+            self._start_account(account)
+
+    def _start_account(self, account: Account) -> None:
         # Idempotent: tear down any stale transport for this bot_id first so a
         # double-start can't leak an orphaned poller thread / client.
         if account.bot_id in self._pollers or account.bot_id in self._clients:
@@ -180,7 +190,9 @@ class WeChatChannel(Channel):
         base_url = str(
             (account.extra or {}).get("base_url", "") or DEFAULT_BASE_URL
         )
-        client = ILinkClient(account.bot_token, base_url)
+        connection = WeChatConnection(account, self._app._auth_manager)
+        self._connections[account.bot_id] = connection
+        client = ILinkClient(account.bot_token, base_url, connection=connection)
         self._clients[account.bot_id] = client
 
         reply_cfg = self._app.config.get("reply", default={})
@@ -191,45 +203,80 @@ class WeChatChannel(Channel):
             account,
             client,
             self._app._auth_manager,
-            self.handle_incoming,
+            lambda aid, msg: self.handle_incoming(aid, msg, connection=connection),
             DEFAULT_LONG_POLL_TIMEOUT,
         )
         self._pollers[account.bot_id] = poller
         poller.start()
 
-        # Best-effort online notify; fire-and-forget so startup restore of N
-        # accounts isn't serialized behind N HTTP round-trips.
-        threading.Thread(
-            target=client.notify_start,
-            name=f"notify-start-{account.bot_id[:8]}",
-            daemon=True,
-        ).start()
-
+        self._notify(account.bot_id, client.notify_start)
         logger.info("账号已上线: %s", account.bot_id)
 
+    def _notify(self, account_id, fn):
+        # One ordered daemon per account, shared by successive connections.
+        with self._lifecycle_lock:
+            tasks = self._notifications.get(account_id)
+            if tasks is None:
+                tasks = queue.Queue()
+                self._notifications[account_id] = tasks
+                def worker():
+                    while True:
+                        action = tasks.get()
+                        try:
+                            action()
+                        except Exception:
+                            logger.warning("微信状态通知失败", exc_info=True)
+                        finally:
+                            tasks.task_done()
+                threading.Thread(target=worker, daemon=True, name="wechat-notify").start()
+            tasks.put(fn)
+
     def stop_account(self, account_id: str) -> None:
-        poller = self._pollers.pop(account_id, None)
-        if poller:
-            poller.stop()
-        # Best-effort offline notify before discarding the client.
-        client = self._clients.pop(account_id, None)
-        if client:
-            threading.Thread(target=client.notify_stop, daemon=True).start()
-        self._senders.pop(account_id, None)
+        with self._lifecycle_lock:
+            connection = self._connections.pop(account_id, None)
+            if connection:
+                connection.stop()
+            poller = self._pollers.pop(account_id, None)
+            if poller:
+                poller.stop()
+            client = self._clients.pop(account_id, None)
+            if client:
+                def offline():
+                    try:
+                        client.notify_stop()
+                    finally:
+                        client.close()
+                self._notify(account_id, offline)
+            self._senders.pop(account_id, None)
 
     def notify_offline(self) -> None:
-        # Fire all offline notifies concurrently (no join) so they get maximum
-        # wall-clock before exit without serializing N×timeout.
-        for client in self._clients.values():
-            threading.Thread(target=client.notify_stop, daemon=True).start()
+        for account_id in list(self._connections):
+            self.stop_account(account_id)
 
     def shutdown(self) -> None:
-        for poller in self._pollers.values():
-            poller.stop()
+        self.notify_offline()
+
+    def is_reply_context_active(self, reply_ctx):
+        connection = self._connections.get(reply_ctx.get("account_id", ""))
+        if not connection or reply_ctx.get("generation") != connection.generation:
+            return False
+        try:
+            connection.check()
+            return True
+        except ConnectionInactive:
+            return False
+
+    def connection_status(self, account_id):
+        connection = self._connections.get(account_id)
+        if not connection:
+            return {"connection_state": "offline", "cooldown_until": None}
+        until = connection.cooldown_until
+        return {"connection_state": "cooldown" if until > time.time() else "online",
+                "cooldown_until": until if until > time.time() else None}
 
     def is_online(self, account_id: str) -> bool:
         poller = self._pollers.get(account_id)
-        return bool(poller and poller.running)
+        return bool(poller and poller.running and self.connection_status(account_id)["connection_state"] == "online")
 
     # ---- Account creation metadata ----
 
@@ -238,8 +285,10 @@ class WeChatChannel(Channel):
 
     def reply_ctx_from_link(self, channel_link: dict) -> dict:
         # WeChat's deliver_message reads ``context_token``, not ``reply_target``.
+        connection = self._connections.get(channel_link.get("account_id", ""))
         return {
             "channel": "wechat",
+            "generation": connection.generation if connection else "",
             "account_id": channel_link.get("account_id", ""),
             "user_id": channel_link.get("peer_id", ""),
             "context_token": channel_link.get("reply_target", ""),
@@ -251,6 +300,8 @@ class WeChatChannel(Channel):
         last_user_at: float,
         messages: list[dict],
     ) -> bool:
+        if not self.is_online(channel_link.get("account_id", "")):
+            return False
         # WeChat group chats can't be proactively messaged; the iLink
         # context_token expires after the openclaw 23h window and accepts at
         # most 10 bot messages. Both reset only on an inbound WeChat message,
@@ -267,7 +318,14 @@ class WeChatChannel(Channel):
 
     # ---- Inbound ----
 
-    def handle_incoming(self, account_id: str, message: Message) -> None:
+    def handle_incoming(self, account_id: str, message: Message, *, connection=None) -> None:
+        connection = connection or self._connections.get(account_id)
+        if not connection:
+            return
+        try:
+            connection.check()
+        except ConnectionInactive:
+            return
         images = self._extract_images(account_id, message)
         files = self._extract_files(account_id, message)
         voice_metas = self._extract_voices(account_id, message)
@@ -280,10 +338,30 @@ class WeChatChannel(Channel):
 
         conversation = self._app.conversation_store.find_by_account(account_id)
         if not conversation:
-            self._reply_no_binding(account_id, message)
+            self._reply_no_binding(account_id, message, connection=connection)
             return
 
         persona_id = conversation["persona_id"]
+        quote_data = {"quote": quote}
+        ref = next((item.ref_msg for item in message.items if item.ref_msg), None)
+        if ref:
+            ref_id = ref.svr_id or (ref.message_item.msg_id if ref.message_item else "")
+            inline, inline_media = "", []
+            item = ref.message_item
+            if item:
+                if item.type == MessageItemType.TEXT:
+                    inline = item.text
+                elif item.type == MessageItemType.VOICE:
+                    inline = item.voice.text if item.voice else ""
+                    inline_media = [{"type": "voice", "text": inline}]
+                elif item.type == MessageItemType.IMAGE:
+                    inline_media = [{"type": "image"}]
+                elif item.type in {MessageItemType.FILE, MessageItemType.VIDEO}:
+                    inline_media = [{"type": "file", "name": item.file.file_name if item.file else ""}]
+            quote_data = self._app.conversation_store.quotes.resolve(
+                "wechat", account_id, message.from_user_id, ref_id, persona_id,
+                inline=inline, inline_media=inline_media, partial=ref.partial_text,
+            )
 
         if images:
             images = self._download_and_save_images(images, persona_id)
@@ -309,37 +387,50 @@ class WeChatChannel(Channel):
 
         reply_ctx = {
             "channel": "wechat",
+            "generation": connection.generation,
             "account_id": account_id,
             "user_id": message.from_user_id,
             "context_token": message.context_token,
         }
-        accepted = self._app.message_queue.accept_message(
-            persona_id,
-            text or "",
-            source="wechat",
-            reply_ctx=reply_ctx,
-            images=images or None,
-            files=files or None,
-            voices=voices or None,
-            raw_message=message,
-            account_id=account_id,
-            user_id=message.from_user_id,
-            context_token=message.context_token,
-            timestamp=source_ts,
-            quote=quote,
-        )
-        if accepted:
-            actual_persona_id, _msg = accepted
-            if message.context_token:
-                self._app.conversation_store.update_reply_target(
-                    actual_persona_id, message.context_token,
-                )
-            # Lazy-backfill peer_id / chat_type so proactive messages can
-            # build a reply_ctx without an inbound trigger.
-            chat_type = "group" if message.group_id else "single"
-            self._app.conversation_store.update_channel_peer(
-                actual_persona_id, message.from_user_id, chat_type=chat_type,
+        try:
+            accepted = self._app.message_queue.accept_message(
+                persona_id,
+                text or "",
+                source="wechat",
+                reply_ctx=reply_ctx,
+                images=images or None,
+                files=files or None,
+                voices=voices or None,
+                raw_message=message,
+                account_id=account_id,
+                user_id=message.from_user_id,
+                context_token=message.context_token,
+                timestamp=source_ts,
+                admission=connection.admit,
+                **quote_data,
             )
+        except ConnectionInactive:
+            return
+        with connection.lock:
+            if not connection.active:
+                return
+            if accepted:
+                actual_persona_id, _msg = accepted
+                self._app.conversation_store.quotes.remember(
+                    "wechat", account_id, message.from_user_id, message.message_id,
+                    actual_persona_id, _msg["local_id"], message.text_content,
+                    media_blocks(images, files, voices),
+                )
+                if message.context_token:
+                    self._app.conversation_store.update_reply_target(
+                        actual_persona_id, message.context_token,
+                    )
+                # Lazy-backfill peer_id / chat_type so proactive messages can
+                # build a reply_ctx without an inbound trigger.
+                chat_type = "group" if message.group_id else "single"
+                self._app.conversation_store.update_channel_peer(
+                    actual_persona_id, message.from_user_id, chat_type=chat_type,
+                )
 
     # ---- Voice extraction --------------------------------------------------
 
@@ -641,9 +732,27 @@ class WeChatChannel(Channel):
         if not account_id or not user_id:
             return False
 
-        sender = self._senders.get(account_id)
-        if not sender:
+        connection = self._connections.get(account_id)
+        if not connection or reply_ctx.get("generation") != connection.generation:
             return False
+        try:
+            connection.check()
+        except ConnectionInactive:
+            return False
+        sender = self._senders.get(account_id)
+        if not sender or sender.client.connection is not connection:
+            return False
+
+        def receipt(body="", blocks=()):
+            def save(response):
+                with connection.lock:
+                    if not connection.active:
+                        return
+                    self._app.conversation_store.quotes.remember(
+                        "wechat", account_id, user_id, response.get("message_id"),
+                        persona_id, message.get("local_id", ""), body, blocks,
+                    )
+            return save
 
         ilink_user_id = self._resolve_ilink_user_id(account_id)
         content_blocks = message.get("content", [])
@@ -659,6 +768,7 @@ class WeChatChannel(Channel):
             if image_path:
                 delivered = sender.send_image(
                     user_id, image_path, context_token,
+                    on_sent=receipt("", [{**block, "type": "image"}]),
                 ) and delivered
 
         file_blocks = [
@@ -674,6 +784,7 @@ class WeChatChannel(Channel):
                     file_path,
                     context_token,
                     block.get("name", ""),
+                    on_sent=receipt("", [block]),
                 ) and delivered
 
         voice_blocks = [
@@ -697,6 +808,7 @@ class WeChatChannel(Channel):
                     voice_path,
                     context_token,
                     f"语音消息{ext}",
+                    on_sent=receipt("", [{**block, "type": "file", "name": f"语音消息{ext}"}]),
                 ) and delivered
 
         text = "".join(
@@ -711,6 +823,8 @@ class WeChatChannel(Channel):
                 context_token,
                 ilink_user_id,
                 is_first=is_first,
+                reply_config=self._app.config.get("reply", default={}),
+                on_sent=receipt(text),
             ) and delivered
 
         if is_last and delivered:
@@ -724,14 +838,16 @@ class WeChatChannel(Channel):
                 return account.ilink_user_id
         return ""
 
-    def _reply_no_binding(self, account_id: str, message: Message) -> None:
+    def _reply_no_binding(self, account_id: str, message: Message, *, connection=None) -> None:
         sender = self._senders.get(account_id)
-        if not sender:
+        if not sender or (connection and sender.client.connection is not connection):
             return
         ilink_user_id = self._resolve_ilink_user_id(account_id)
-        sender.send_reply(
+        sender.send_one_reply(
             message.from_user_id,
             "当前尚未绑定任何角色",
             message.context_token,
             ilink_user_id,
+            is_first=True,
+            reply_config=self._app.config.get("reply", default={}),
         )

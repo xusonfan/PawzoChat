@@ -1,4 +1,4 @@
-# PawzoChat - Multi-platform LLM-powered chatbot
+# PawzoChat - Human-like, versatile, extensible AI companion engine
 # Copyright (C) 2026  iwyxdxl
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,15 +18,32 @@
 
 from __future__ import annotations
 
+import logging
+import re
+
 from flask import Blueprint, jsonify, request
 
+from pawzochat.services.memory import DuplicateMemoryError, MemoryConflictError
 from pawzochat.web.routes import get_app
 
 api_memory_bp = Blueprint("api_memory", __name__)
+logger = logging.getLogger(__name__)
 
 # Match the built-in tool's order of magnitude; manual entry is a bit more
 # generous.
 _SUMMARY_MAX_CHARS = 2000
+
+
+def _valid_fingerprint(value) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _write_conflict(persona_id: str, operation: str, exc: ValueError):
+    logger.info(
+        "网页记忆操作冲突 persona=%s operation=%s reason=%s",
+        persona_id, operation, type(exc).__name__,
+    )
+    return jsonify({"error": str(exc)}), 409
 
 
 def _validate_summary(value) -> tuple[str, str]:
@@ -59,6 +76,7 @@ def list_memories(persona_id: str):
     for idx, m in memories_sorted:
         result.append({
             "index": idx,
+            "fingerprint": app.memory_service.fingerprint(m),
             "summary": m.get("summary", ""),
             "importance": m.get("importance", 3),
             "created_at": m.get("created_at", ""),
@@ -74,6 +92,8 @@ def add_memory(persona_id: str):
         return jsonify({"error": "Persona not found"}), 404
 
     data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "请求内容必须是 JSON 对象"}), 400
     summary, err = _validate_summary(data.get("summary", ""))
     if err:
         return jsonify({"error": err}), 400
@@ -86,9 +106,12 @@ def add_memory(persona_id: str):
     if not isinstance(created_at, str):
         return jsonify({"error": "created_at 必须是字符串"}), 400
 
-    entry, _ = app.memory_service.add_memory(
-        persona_id, summary, importance, created_at,
-    )
+    try:
+        entry, _ = app.memory_service.add_memory(
+            persona_id, summary, importance, created_at,
+        )
+    except DuplicateMemoryError as exc:
+        return _write_conflict(persona_id, "add", exc)
     return jsonify({"ok": True, "memory": entry}), 201
 
 
@@ -100,6 +123,9 @@ def update_memory(persona_id: str, index: int):
         return jsonify({"error": "Persona not found"}), 404
 
     data = request.get_json(force=True)
+    fingerprint = data.get("fingerprint") if isinstance(data, dict) else None
+    if not _valid_fingerprint(fingerprint):
+        return jsonify({"error": "缺少或无效的记忆校验值，请刷新后重新打开。"}), 400
     updates = {}
     if "summary" in data:
         s, err = _validate_summary(data["summary"])
@@ -119,9 +145,12 @@ def update_memory(persona_id: str, index: int):
     if not updates:
         return jsonify({"error": "没有需要更新的字段"}), 400
 
-    ok = app.memory_service.update_memory(persona_id, index, updates)
-    if not ok:
-        return jsonify({"error": "记忆条目不存在"}), 404
+    try:
+        app.memory_service.update_memory(
+            persona_id, index, updates, expected_fingerprint=fingerprint,
+        )
+    except (MemoryConflictError, DuplicateMemoryError) as exc:
+        return _write_conflict(persona_id, "update", exc)
     return jsonify({"ok": True})
 
 
@@ -132,7 +161,11 @@ def delete_memory(persona_id: str, index: int):
     if persona_id not in personas_cfg:
         return jsonify({"error": "Persona not found"}), 404
 
-    ok = app.memory_service.delete_memory(persona_id, index)
-    if not ok:
-        return jsonify({"error": "记忆条目不存在"}), 404
+    fingerprint = request.args.get("fingerprint")
+    if not _valid_fingerprint(fingerprint):
+        return jsonify({"error": "缺少或无效的记忆校验值，请刷新后重新打开。"}), 400
+    try:
+        app.memory_service.delete_memory(persona_id, index, expected_fingerprint=fingerprint)
+    except MemoryConflictError as exc:
+        return _write_conflict(persona_id, "delete", exc)
     return jsonify({"ok": True})

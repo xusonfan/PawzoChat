@@ -1,5 +1,5 @@
 /*!
- * PawzoChat - Multi-platform LLM-powered chatbot
+ * PawzoChat - Human-like, versatile, extensible AI companion engine
  * Copyright (C) 2026  iwyxdxl
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,6 +19,7 @@ import { esc, escAttr, formatMsgTime, iconHtml } from "./utils.js";
 import { renderTextMedia } from "./message_content.js";
 import { imageLayoutAttributes } from "./image_layout_cache.js";
 import { api } from "./api.js";
+import { renderQuoteBox } from "./quote.js";
 import { $, content } from "./state.js";
 import { toast, confirm, showLoading, hideLoading } from "./ui.js";
 import { setTopBar, registerPageRenderer } from "./navigation.js";
@@ -245,7 +246,7 @@ function _renderList() {
           <button class="he-btn he-btn-del" ${delAttrs}>${iconHtml("ri-delete-bin-line")}</button>
         </span>
       </div>
-      <div class="he-body">${_renderContent(m.content, m.role === "assistant")}${m.quote ? `<div class="he-quote">${esc(m.quote)}</div>` : ""}</div>
+      <div class="he-body">${_renderContent(m.content)}${renderQuoteBox(m.quote, m.quote_media || [], m.local_id, _personaId)}</div>
     </div>`;
     })
     .join("");
@@ -392,11 +393,11 @@ export async function saveHistoryMsg(globalIndex) {
   const m = _messages.find(m => m.index === globalIndex);
   if (!m) return;
 
-  // Only send ``quote`` when this message had one being edited; omitting it
-  // leaves the stored quote untouched (backend treats absent as "no change").
+  // Sending quote explicitly clears its media association on the backend.
+  // A body-only edit must leave the original quote metadata untouched.
   const qta = document.getElementById(`he-quote-ta-${globalIndex}`);
   const payload = { text: newText, fingerprint: m.fingerprint };
-  if (qta) payload.quote = qta.value;
+  if (qta && qta.value !== (m.quote || "")) payload.quote = qta.value;
 
   showLoading("保存中…");
   try {
